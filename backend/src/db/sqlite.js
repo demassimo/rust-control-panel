@@ -18,6 +18,7 @@ function createApi(dbh, dialect) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
         created_at TEXT DEFAULT (datetime('now'))
       );
       CREATE TABLE IF NOT EXISTS servers(
@@ -50,11 +51,24 @@ function createApi(dbh, dialect) {
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE SET NULL
       );
       `);
+      const cols = await dbh.all("PRAGMA table_info('users')");
+      if (!cols.some((c) => c.name === 'role')) {
+        await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+      }
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
-    async createUser(u, hash){ await dbh.run('INSERT INTO users(username,password_hash) VALUES(?,?)',[u,hash]); },
+    async createUser(u){
+      const { username, password_hash, role = 'user' } = u;
+      const r = await dbh.run('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,role]);
+      return r.lastID;
+    },
+    async getUser(id){ return await dbh.get('SELECT * FROM users WHERE id=?',[id]); },
     async getUserByUsername(u){ return await dbh.get('SELECT * FROM users WHERE username=?',[u]); },
+    async listUsers(){ return await dbh.all('SELECT id,username,role,created_at FROM users ORDER BY id ASC'); },
+    async countAdmins(){ const r = await dbh.get("SELECT COUNT(*) c FROM users WHERE role='admin'"); return r.c; },
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
+    async updateUserRole(id, role){ await dbh.run('UPDATE users SET role=? WHERE id=?',[role,id]); },
+    async deleteUser(id){ const r = await dbh.run('DELETE FROM users WHERE id=?',[id]); return r.changes; },
     async listServers(){ return await dbh.all('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
     async getServer(id){ return await dbh.get('SELECT * FROM servers WHERE id=?',[id]); },
     async createServer(s){ const r = await dbh.run('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.lastID; },

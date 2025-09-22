@@ -8,26 +8,43 @@
 </head>
 <body>
   <div class="wrap">
-    <header>
+    <header class="topbar">
       <h1>Rust Admin Online — Open Source</h1>
       <div id="userBox" class="muted"></div>
     </header>
 
-    <section id="loginPanel" class="card">
-      <h2>Login</h2>
-      <label>API Base (e.g. http://localhost:8787)<input id="apiBase" value="http://localhost:8787"></label>
-      <div class="grid2">
-        <label>Username<input id="username" value="admin"></label>
-        <label>Password<input id="password" type="password" value="admin123"></label>
+    <section id="loginPanel" class="auth-grid">
+      <div class="auth-card">
+        <h2>Welcome back</h2>
+        <p class="muted">Sign in to orchestrate your Rust worlds and keep every server in check.</p>
+        <label>API Base URL<input id="apiBase" value="http://localhost:8787" placeholder="http://localhost:8787"></label>
+        <label>Username<input id="username" value="admin" autocomplete="username"></label>
+        <label>Password<input id="password" type="password" value="admin123" autocomplete="current-password"></label>
+        <button id="btnLogin" class="accent">Sign in</button>
+        <p id="loginError" class="notice hidden"></p>
+        <p class="muted small">Default credentials are for first boot only — change them in Settings once you are inside.</p>
       </div>
-      <button id="btnLogin">Sign in</button>
-      <p class="muted small">Default creds are for first boot only — change them in Settings.</p>
+      <div class="auth-card" id="registerCard">
+        <h2>Create an account</h2>
+        <p id="registerInfo" class="muted">Registration is disabled by the administrator.</p>
+        <div id="registerForm" class="hidden">
+          <label>Username<input id="regUsername" autocomplete="username" placeholder="yourname"></label>
+          <label>Password<input id="regPassword" type="password" autocomplete="new-password" placeholder="Minimum 8 characters"></label>
+          <label>Confirm password<input id="regConfirm" type="password" autocomplete="new-password"></label>
+          <button id="btnRegister" class="ghost">Register</button>
+          <p id="registerError" class="notice hidden"></p>
+          <p id="registerSuccess" class="notice success hidden"></p>
+        </div>
+      </div>
     </section>
 
     <section id="appPanel" class="hidden">
-      <div class="grid3">
-        <div class="card">
-          <h3>Servers</h3>
+      <div class="grid3" id="mainGrid">
+        <div class="card" id="serversCard">
+          <div class="card-header">
+            <h3>Servers</h3>
+            <button id="btnRefreshServers" class="icon" title="Refresh">⟳</button>
+          </div>
           <ul id="servers"></ul>
           <details>
             <summary>Add server</summary>
@@ -37,30 +54,61 @@
               <input id="svPort" type="number" placeholder="RCON Port" value="28017">
               <input id="svPass" placeholder="Password">
             </div>
-            <label><input type="checkbox" id="svTLS"> TLS (wss)</label>
-            <button id="btnAddServer">Add</button>
+            <label class="inline"><input type="checkbox" id="svTLS"> Use TLS (wss)</label>
+            <button id="btnAddServer" class="ghost">Add server</button>
           </details>
         </div>
 
         <div class="card">
-          <h3>Console</h3>
+          <div class="card-header">
+            <h3>Console</h3>
+            <button id="btnClearConsole" class="icon" title="Clear console">✕</button>
+          </div>
           <pre id="console"></pre>
           <div class="row">
             <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
-            <button id="btnSend">Send</button>
+            <button id="btnSend" class="accent">Send</button>
           </div>
-          <div class="row">
-            <button data-quick="status">status</button>
-            <button data-quick="serverinfo">serverinfo</button>
-            <button data-quick='say "Hello from panel"'>say</button>
-            <button data-quick="playerlist">playerlist</button>
+          <div class="row quick-row">
+            <button data-quick="status" class="ghost">status</button>
+            <button data-quick="serverinfo" class="ghost">serverinfo</button>
+            <button data-quick='say "Hello from panel"' class="ghost">say</button>
+            <button data-quick="playerlist" class="ghost">playerlist</button>
           </div>
         </div>
 
         <div class="card">
-          <h3>Players</h3>
+          <div class="card-header">
+            <h3>Players</h3>
+            <button id="btnSyncPlayers" class="ghost small">Sync from Steam</button>
+          </div>
           <ul id="players"></ul>
         </div>
+      </div>
+
+      <div id="userCard" class="card hidden">
+        <div class="card-header">
+          <h3>Team access</h3>
+        </div>
+        <div class="user-create">
+          <h4>Invite a teammate</h4>
+          <div class="grid2 stack-sm">
+            <input id="newUserName" placeholder="Username">
+            <input id="newUserPassword" type="password" placeholder="Temporary password">
+          </div>
+          <label>Role
+            <select id="newUserRole">
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <div class="row">
+            <button id="btnCreateUser" class="accent">Create user</button>
+          </div>
+          <p id="userFeedback" class="notice hidden"></p>
+        </div>
+        <h4>Existing users</h4>
+        <ul id="userList" class="users"></ul>
       </div>
     </section>
   </div>
