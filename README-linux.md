@@ -11,8 +11,7 @@ This bundle is ready for **Debian/Ubuntu** with **systemd**. It includes:
 ## Quick Install
 ```bash
 sudo bash scripts/install-linux.sh
-# then edit /opt/rustadmin/backend/.env and restart if needed:
-# sudo systemctl restart rustadmin-backend
+# follow the prompts to configure the backend environment
 ```
 
 ## Uninstall
