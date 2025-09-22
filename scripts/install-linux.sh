@@ -2,51 +2,286 @@
 set -euo pipefail
 
 USER_NAME=rustadmin
+GROUP_NAME=rustadmin
 INSTALL_DIR=/opt/rustadmin
-SERVICE_FILE=/etc/systemd/system/rustadmin-backend.service
+SERVICE_NAME=rustadmin-backend
+SERVICE_FILE=/etc/systemd/system/${SERVICE_NAME}.service
 NGINX_SITE=/etc/nginx/sites-available/rustadmin.conf
 NGINX_LINK=/etc/nginx/sites-enabled/rustadmin.conf
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR=""
 
-echo "[*] Installing prerequisites (Node.js 20 + nginx)"
-if ! command -v node >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y curl ca-certificates gnupg
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt-get install -y nodejs
-fi
-if ! command -v nginx >/dev/null 2>&1; then
-  apt-get update && apt-get install -y nginx
-fi
+log() {
+  echo "[*] $*"
+}
 
-echo "[*] Creating user and directories"
-id -u $USER_NAME &>/dev/null || useradd -r -m -d $INSTALL_DIR -s /usr/sbin/nologin $USER_NAME
-mkdir -p $INSTALL_DIR
-# Expect the tar.gz to have been extracted already if running from repo root; otherwise try to detect.
-if [ -f "docker-compose.yml" ] && [ -d "backend" ]; then
-  SRC_DIR="$(pwd)"
-else
-  # If running from compressed artifact, assume it's in current dir name rustadmin-open-linux/
-  SRC_DIR="$(pwd)"
-fi
+require_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    echo "[!] This installer must be run as root (try: sudo bash scripts/install-linux.sh)" >&2
+    exit 1
+  fi
+}
 
-echo "[*] Copying files to $INSTALL_DIR"
-rsync -a --delete "$SRC_DIR/" "$INSTALL_DIR/"
-chown -R $USER_NAME:$USER_NAME "$INSTALL_DIR"
+ensure_packages() {
+  local packages=("$@")
+  local missing=()
+  for pkg in "${packages[@]}"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  if ((${#missing[@]})); then
+    log "Installing packages: ${missing[*]}"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+  fi
+}
 
-echo "[*] Backend dependencies"
-cd "$INSTALL_DIR/backend"
-cp -n .env.example .env || true
-npm install --omit=dev
+ensure_command() {
+  local cmd="$1"
+  local pkg="$2"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    ensure_packages "$pkg"
+  fi
+}
 
-echo "[*] Installing systemd service"
-cp "$INSTALL_DIR/deploy/systemd/rustadmin-backend.service" "$SERVICE_FILE"
-systemctl daemon-reload
-systemctl enable rustadmin-backend
-systemctl restart rustadmin-backend
+install_node() {
+  if ! command -v node >/dev/null 2>&1; then
+    log "Installing Node.js 20 (NodeSource)"
+    ensure_packages curl ca-certificates gnupg lsb-release
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+  fi
+}
 
-echo "[*] Configuring nginx (serving frontend)"
-cp "$INSTALL_DIR/deploy/nginx/rustadmin.conf" "$NGINX_SITE"
-ln -sf "$NGINX_SITE" "$NGINX_LINK"
-nginx -t && systemctl reload nginx
+install_nginx() {
+  if ! command -v nginx >/dev/null 2>&1; then
+    log "Installing nginx"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nginx
+    systemctl enable --now nginx
+  else
+    systemctl enable --now nginx >/dev/null 2>&1 || true
+  fi
+}
 
-echo "[*] Done. API on :8787, UI on :80"
+prompt_with_default() {
+  local prompt="$1"
+  local default="$2"
+  local response=""
+  if [ -t 0 ]; then
+    read -rp "$prompt [$default]: " response || true
+  fi
+  if [ -z "${response}" ]; then
+    echo "$default"
+  else
+    echo "$response"
+  fi
+}
+
+prompt_confirm() {
+  local prompt="$1"
+  local default="$2"
+  local response=""
+  local default_lower="${default,,}"
+  local default_hint="y/N"
+  if [[ "$default_lower" == "y" ]]; then
+    default_hint="Y/n"
+  fi
+  if [ -t 0 ]; then
+    read -rp "$prompt [$default_hint]: " response || true
+  fi
+  response="${response:-$default}"
+  case "${response,,}" in
+    y|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+generate_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+    return
+  fi
+  tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64
+}
+
+detect_source() {
+  local candidate
+
+  candidate="$(cd "$SCRIPT_DIR/.." && pwd)"
+  if [ -f "$candidate/docker-compose.yml" ] && [ -d "$candidate/backend" ] && \
+     [ -f "$candidate/backend/package.json" ] && [ -d "$candidate/frontend" ]; then
+    SRC_DIR="$candidate"
+    return
+  fi
+
+  candidate="$(pwd)"
+  if [ -f "$candidate/docker-compose.yml" ] && [ -d "$candidate/backend" ] && \
+     [ -f "$candidate/backend/package.json" ] && [ -d "$candidate/frontend" ]; then
+    SRC_DIR="$candidate"
+    return
+  fi
+
+  echo "[!] Unable to locate project root. Run this script from the extracted rust-control-panel directory." >&2
+  exit 1
+}
+
+prepare_user() {
+  mkdir -p "$INSTALL_DIR"
+  if ! getent group "$GROUP_NAME" >/dev/null 2>&1; then
+    log "Creating service group $GROUP_NAME"
+    groupadd -r "$GROUP_NAME"
+  fi
+  if ! id -u "$USER_NAME" >/dev/null 2>&1; then
+    log "Creating service user $USER_NAME"
+    useradd -r -m -d "$INSTALL_DIR" -s /usr/sbin/nologin -g "$GROUP_NAME" "$USER_NAME"
+  else
+    usermod -d "$INSTALL_DIR" -s /usr/sbin/nologin -g "$GROUP_NAME" "$USER_NAME"
+  fi
+}
+
+copy_sources() {
+  log "Copying application files to $INSTALL_DIR"
+  ensure_command rsync rsync
+  rsync -a --delete \
+    --exclude '.git/' \
+    --exclude 'scripts/' \
+    --exclude 'README-linux.md' \
+    --exclude 'backend/.env' \
+    --exclude 'backend/data/' \
+    --exclude 'backend/node_modules/' \
+    "$SRC_DIR/" "$INSTALL_DIR/"
+}
+
+setup_backend() {
+  log "Preparing backend"
+  cd "$INSTALL_DIR/backend"
+  npm install --omit=dev --no-audit --no-fund --progress=false
+  mkdir -p data
+}
+
+configure_backend_env() {
+  log "Configuring backend environment"
+  local env_file="$INSTALL_DIR/backend/.env"
+  if [ -f "$env_file" ]; then
+    if ! prompt_confirm "A backend .env already exists. Overwrite?" "n"; then
+      log "Keeping existing .env"
+      return
+    fi
+  fi
+
+  local db_client
+  while true; do
+    db_client="$(prompt_with_default "Database client (sqlite/mysql)" "sqlite")"
+    db_client="${db_client,,}"
+    if [[ "$db_client" == "sqlite" || "$db_client" == "mysql" ]]; then
+      break
+    fi
+    echo "Please enter either 'sqlite' or 'mysql'."
+  done
+
+  local sqlite_file="./data/panel.sqlite"
+  local mysql_host="127.0.0.1"
+  local mysql_port="3306"
+  local mysql_user="rustadmin"
+  local mysql_password=""
+  local mysql_database="rustadmin"
+
+  if [[ "$db_client" == "sqlite" ]]; then
+    sqlite_file="$(prompt_with_default "SQLite file path" "$sqlite_file")"
+  else
+    mysql_host="$(prompt_with_default "MySQL host" "$mysql_host")"
+    mysql_port="$(prompt_with_default "MySQL port" "$mysql_port")"
+    mysql_user="$(prompt_with_default "MySQL user" "$mysql_user")"
+    mysql_password="$(prompt_with_default "MySQL password" "$mysql_password")"
+    mysql_database="$(prompt_with_default "MySQL database" "$mysql_database")"
+  fi
+
+  local bind_addr
+  bind_addr="$(prompt_with_default "API bind address" "0.0.0.0")"
+  local api_port
+  api_port="$(prompt_with_default "API port" "8787")"
+  local cors_origin
+  cors_origin="$(prompt_with_default "Allowed frontend origins (comma separated, * for any)" "*")"
+
+  local default_secret
+  default_secret="$(generate_secret)"
+  local jwt_secret
+  jwt_secret="$(prompt_with_default "JWT secret" "$default_secret")"
+
+  local steam_api_key
+  steam_api_key="$(prompt_with_default "Steam API key (leave blank to disable sync)" "")"
+
+  {
+    printf 'DB_CLIENT=%s\n' "$db_client"
+    if [[ "$db_client" == "sqlite" ]]; then
+      printf 'SQLITE_FILE=%s\n' "$sqlite_file"
+    else
+      printf 'MYSQL_HOST=%s\n' "$mysql_host"
+      printf 'MYSQL_PORT=%s\n' "$mysql_port"
+      printf 'MYSQL_USER=%s\n' "$mysql_user"
+      printf 'MYSQL_PASSWORD=%s\n' "$mysql_password"
+      printf 'MYSQL_DATABASE=%s\n' "$mysql_database"
+    fi
+    printf 'BIND=%s\n' "$bind_addr"
+    printf 'PORT=%s\n' "$api_port"
+    if [[ -n "$cors_origin" ]]; then
+      printf 'CORS_ORIGIN=%s\n' "$cors_origin"
+    fi
+    printf 'JWT_SECRET=%s\n' "$jwt_secret"
+    if [[ -n "$steam_api_key" ]]; then
+      printf 'STEAM_API_KEY=%s\n' "$steam_api_key"
+    fi
+  } >"$env_file"
+}
+
+install_service() {
+  log "Installing systemd service"
+  systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  install -m 644 "$INSTALL_DIR/deploy/systemd/${SERVICE_NAME}.service" "$SERVICE_FILE"
+  systemctl daemon-reload
+  systemctl enable --now "$SERVICE_NAME"
+}
+
+configure_nginx() {
+  log "Configuring nginx"
+  mkdir -p "$(dirname "$NGINX_SITE")" "$(dirname "$NGINX_LINK")"
+  install -m 644 "$INSTALL_DIR/deploy/nginx/rustadmin.conf" "$NGINX_SITE"
+  ln -sf "$NGINX_SITE" "$NGINX_LINK"
+  nginx -t
+  systemctl reload nginx
+}
+
+finalize_permissions() {
+  log "Setting permissions"
+  chown -R "$USER_NAME":"$GROUP_NAME" "$INSTALL_DIR"
+  if [ -f "$INSTALL_DIR/backend/.env" ]; then
+    chmod 640 "$INSTALL_DIR/backend/.env"
+  fi
+}
+
+main() {
+  require_root
+  detect_source
+  ensure_packages ca-certificates gnupg openssl
+  install_node
+  install_nginx
+  prepare_user
+  copy_sources
+  setup_backend
+  configure_backend_env
+  finalize_permissions
+  install_service
+  configure_nginx
+  log "Installation complete. API on :8787, UI on :80"
+}
+
+main "$@"
