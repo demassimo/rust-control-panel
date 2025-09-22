@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rust Admin Online — Open Source</title>
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Rust Admin Online — Open Source</h1>
+      <div id="userBox" class="muted"></div>
+    </header>
+
+    <section id="loginPanel" class="card">
+      <h2>Login</h2>
+      <label>API Base (e.g. http://localhost:8787)<input id="apiBase" value="http://localhost:8787"></label>
+      <div class="grid2">
+        <label>Username<input id="username" value="admin"></label>
+        <label>Password<input id="password" type="password" value="admin123"></label>
+      </div>
+      <button id="btnLogin">Sign in</button>
+      <p class="muted small">Default creds are for first boot only — change them in Settings.</p>
+    </section>
+
+    <section id="appPanel" class="hidden">
+      <div class="grid3">
+        <div class="card">
+          <h3>Servers</h3>
+          <ul id="servers"></ul>
+          <details>
+            <summary>Add server</summary>
+            <div class="grid2">
+              <input id="svName" placeholder="Name">
+              <input id="svHost" placeholder="Host/IP">
+              <input id="svPort" type="number" placeholder="RCON Port" value="28017">
+              <input id="svPass" placeholder="Password">
+            </div>
+            <label><input type="checkbox" id="svTLS"> TLS (wss)</label>
+            <button id="btnAddServer">Add</button>
+          </details>
+        </div>
+
+        <div class="card">
+          <h3>Console</h3>
+          <pre id="console"></pre>
+          <div class="row">
+            <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
+            <button id="btnSend">Send</button>
+          </div>
+          <div class="row">
+            <button data-quick="status">status</button>
+            <button data-quick="serverinfo">serverinfo</button>
+            <button data-quick='say "Hello from panel"'>say</button>
+            <button data-quick="playerlist">playerlist</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Players</h3>
+          <ul id="players"></ul>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+[Unit]
+Description=Rust Admin Online Backend
+After=network.target
+
+[Service]
+Type=simple
+User=rustadmin
+Group=rustadmin
+WorkingDirectory=/opt/rustadmin/backend
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+AmbientCapabilities=
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
