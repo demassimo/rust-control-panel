@@ -44,3 +44,16 @@ MYSQL_DATABASE=rustadmin
 ```
 
 Set `STEAM_API_KEY=...` for Steam enrichment.
+
+## Access control
+
+- On first boot the panel seeds an `admin / admin123` account; sign in and change it immediately.
+- Admins can invite teammates from the **Team access** card in the UI — accounts can be promoted or removed at any time.
+- To allow public self-registration set `ALLOW_REGISTRATION=true` in the backend environment (defaults to disabled).
+- Set `JWT_SECRET` to a long random value to secure issued session tokens.
+
+## Active server monitoring
+
+- The backend keeps a persistent WebSocket connection for every configured server and polls `status` on an interval.
+- Adjust the cadence with `MONITOR_INTERVAL_MS` (default `60000` ms) to balance responsiveness and RCON load.
+- Real-time health information and player counts are surfaced in the dashboard and streamed over Socket.IO to connected clients.

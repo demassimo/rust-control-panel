@@ -27,7 +27,7 @@ export async function initDb() {
   const count = await db.countUsers();
   if (count === 0) {
     const hash = bcrypt.hashSync('admin123', 10);
-    await db.createUser('admin', hash);
+    await db.createUser({ username: 'admin', password_hash: hash, role: 'admin' });
     console.log('Created default admin: admin / admin123');
   }
 }
