@@ -254,7 +254,27 @@ install_service() {
 configure_nginx() {
   log "Configuring nginx"
   mkdir -p "$(dirname "$NGINX_SITE")" "$(dirname "$NGINX_LINK")"
-  install -m 644 "$INSTALL_DIR/deploy/nginx/rustadmin.conf" "$NGINX_SITE"
+  local default_site_link
+  default_site_link="$(dirname "$NGINX_LINK")/default"
+  if [ -L "$default_site_link" ]; then
+    log "Disabling default nginx site"
+    rm -f "$default_site_link"
+  fi
+  local backend_env backend_port tmp_conf
+  backend_env="$INSTALL_DIR/backend/.env"
+  if [ -f "$backend_env" ]; then
+    backend_port="$(awk -F '=' '/^PORT=/{print $2}' "$backend_env" | tail -n1 | tr -d '[:space:]')"
+  fi
+  if [[ -z "${backend_port:-}" ]]; then
+    backend_port=8787
+  elif ! [[ "$backend_port" =~ ^[0-9]+$ ]]; then
+    log "Warning: Invalid backend port '$backend_port' in $backend_env, falling back to 8787"
+    backend_port=8787
+  fi
+  tmp_conf="$(mktemp)"
+  sed "s/__BACKEND_PORT__/$backend_port/g" "$INSTALL_DIR/deploy/nginx/rustadmin.conf" >"$tmp_conf"
+  install -m 644 "$tmp_conf" "$NGINX_SITE"
+  rm -f "$tmp_conf"
   ln -sf "$NGINX_SITE" "$NGINX_LINK"
   nginx -t
   systemctl reload nginx
