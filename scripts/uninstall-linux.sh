@@ -72,6 +72,12 @@ rm -f "$NGINX_LINK"
 if [ -f "$NGINX_SITE" ]; then
   rm -f "$NGINX_SITE"
 fi
+default_site="$(dirname "$NGINX_LINK")/default"
+default_available="$(dirname "$NGINX_SITE")/default"
+if [ ! -e "$default_site" ] && [ -f "$default_available" ]; then
+  echo "[*] Re-enabling default nginx site"
+  ln -s "$default_available" "$default_site"
+fi
 if command -v nginx >/dev/null 2>&1; then
   if nginx -t >/dev/null 2>&1; then
     if command -v systemctl >/dev/null 2>&1; then
