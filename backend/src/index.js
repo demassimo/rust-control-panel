@@ -81,16 +81,6 @@ const steamProfileCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
 
-
-
-let monitorController = null;
-let monitorRefreshPromise = null;
-
-const PLAYER_CONNECTION_DEDUPE_MS = 5 * 60 * 1000;
-const recentPlayerConnections = new Map();
-const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
-
-
 function recordStatus(id, data) {
   const key = Number(id);
   const payload = { id: key, ...data };
