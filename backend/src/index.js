@@ -41,6 +41,8 @@ const MAP_CACHE_RESET_HOUR = 20;
 const MAP_CACHE_RESET_MINUTE = 0;
 const KNOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
 
+let lastGlobalMapCacheReset = null;
+
 app.use(express.json({ limit: '25mb' }));
 app.use(cors({ origin: (origin, cb) => cb(null, true), credentials: true }));
 
@@ -55,7 +57,6 @@ const statusMap = new Map();
 const serverInfoCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
-let lastGlobalMapCacheReset = null;
 
 function recordStatus(id, data) {
   const key = Number(id);
