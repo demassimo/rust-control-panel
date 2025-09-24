@@ -1,4 +1,4 @@
-// rcon.js — minimal WebRCON client (ESM, Node 18+)
+// rcon.js — WebRCON client with central management (ESM, Node 18+)
 import WebSocket from 'ws';
 import EventEmitter from 'events';
 
@@ -10,15 +10,24 @@ function normalizeEndpoint({ host, port, tls }) {
   let resolvedPort = Number.parseInt(port, 10);
   let useTls = !!tls;
 
-  const ensureScheme = (value, scheme) => (/^[a-z]+:\/\//i.test(value) ? value : `${scheme}//${value}`);
+  const ensureScheme = (value, scheme) =>
+    (/^[a-z]+:\/\//i.test(value) ? value : `${scheme}//${value}`);
   const tryParseUrl = (value) => {
-    try { return new URL(value); }
-    catch { return null; }
+    try {
+      return new URL(value);
+    } catch {
+      return null;
+    }
   };
 
   const scheme = useTls ? 'wss://' : 'ws://';
   let parsed = tryParseUrl(ensureScheme(resolvedHost, scheme));
-  if (!parsed && resolvedHost.includes(':') && !resolvedHost.includes('[') && !resolvedHost.includes('//')) {
+  if (
+    !parsed &&
+    resolvedHost.includes(':') &&
+    !resolvedHost.includes('[') &&
+    !resolvedHost.includes('//')
+  ) {
     parsed = tryParseUrl(`${scheme}[${resolvedHost}]`);
   }
 
@@ -51,12 +60,12 @@ class RustWebRcon extends EventEmitter {
     host,
     port,
     password,
-    tls = false,              // true for wss://, false for ws://
+    tls = false,
     heartbeatIntervalMs = 20000,
     pongTimeoutMs = 12000,
     commandTimeoutMs = 10000,
     maxInFlight = 64,
-    reconnectDelayMs = 3000,  // fixed delay (no backoff)
+    reconnectDelayMs = 3000,
   }) {
     super();
     if (!password) {
@@ -84,13 +93,16 @@ class RustWebRcon extends EventEmitter {
     this.reconnectTimer = null;
 
     this.nextId = 1;
-    this.pending = new Map(); // id -> {resolve,reject,timeout}
+    this.pending = new Map();
   }
 
   get url() {
     const proto = this.tls ? 'wss' : 'ws';
-    const host = (this.host.includes(':') && !this.host.startsWith('[')) ? `[${this.host}]` : this.host; // IPv6-safe
-    return `${proto}://${host}:${this.port}/${encodeURIComponent(this.password)}/`;
+    const host =
+      this.host.includes(':') && !this.host.startsWith('[')
+        ? `[${this.host}]`
+        : this.host;
+    return `${proto}://${host}:${this.port}/${encodeURIComponent(this.password)}`;
   }
 
   async connect() {
@@ -114,7 +126,9 @@ class RustWebRcon extends EventEmitter {
       const onMessage = (data) => {
         const text = data?.toString?.() ?? String(data);
         let obj = null;
-        try { obj = JSON.parse(text); } catch {}
+        try {
+          obj = JSON.parse(text);
+        } catch {}
         if (obj) {
           this.emit('message', obj);
           this._routeTyped(obj);
@@ -131,12 +145,14 @@ class RustWebRcon extends EventEmitter {
       };
 
       const onError = (err) => {
-        this.emit('error', err);
+        this.emit('rcon_error', err); // patched event
         if (!settled) {
           settled = true;
           reject(err);
         }
-        try { this.ws?.close(); } catch {}
+        try {
+          this.ws?.close();
+        } catch {}
       };
 
       const onClose = () => {
@@ -169,10 +185,16 @@ class RustWebRcon extends EventEmitter {
   async command(cmd, { timeoutMs } = {}) {
     await this.ensure();
     if (this.pending.size >= this.maxInFlight) {
-      throw new Error(`Too many in-flight RCON requests (${this.pending.size}/${this.maxInFlight}).`);
+      throw new Error(
+        `Too many in-flight RCON requests (${this.pending.size}/${this.maxInFlight}).`,
+      );
     }
     const id = this.nextId++;
-    const payload = JSON.stringify({ Identifier: id, Message: String(cmd ?? ''), Name: 'WebRcon' });
+    const payload = JSON.stringify({
+      Identifier: id,
+      Message: String(cmd ?? ''),
+      Name: 'WebRcon',
+    });
     const to = Math.max(500, timeoutMs ?? this.commandTimeoutMs);
 
     return new Promise((resolve, reject) => {
@@ -202,7 +224,9 @@ class RustWebRcon extends EventEmitter {
     this.manualClose = true;
     this._clearReconnect();
     this._stopHeartbeat();
-    try { this.ws?.close(); } catch {}
+    try {
+      this.ws?.close();
+    } catch {}
     this.connected = false;
     this._rejectAll(new Error('RCON connection closed'));
     this.ws = null;
@@ -220,13 +244,15 @@ class RustWebRcon extends EventEmitter {
         this.ws.ping();
         this._armPongTimer();
       } catch (e) {
-        this.emit('error', e);
-        try { this.ws.close(); } catch {}
+        this.emit('rcon_error', e);
+        try {
+          this.ws.close();
+        } catch {}
       }
     };
 
     this.heartbeatInterval = setInterval(pingOnce, this.heartbeatIntervalMs);
-    setTimeout(pingOnce, 500); // kick early
+    setTimeout(pingOnce, 500);
   }
 
   _stopHeartbeat() {
@@ -241,8 +267,14 @@ class RustWebRcon extends EventEmitter {
     this._clearPongTimer();
     this.pongTimer = setTimeout(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.emit('error', new Error('Heartbeat missed pong; reconnecting.'));
-        try { this.ws.terminate?.(); } catch { try { this.ws.close(); } catch {} }
+        this.emit('rcon_error', new Error('Heartbeat missed pong; reconnecting.'));
+        try {
+          this.ws.terminate?.();
+        } catch {
+          try {
+            this.ws.close();
+          } catch {}
+        }
       }
     }, this.pongTimeoutMs);
   }
@@ -263,7 +295,7 @@ class RustWebRcon extends EventEmitter {
         await this.connect();
         this.emit('reconnect');
       } catch (e) {
-        this.emit('error', e);
+        this.emit('rcon_error', e);
         this._scheduleReconnect();
       }
     }, this.reconnectDelayMs);
@@ -292,7 +324,8 @@ class RustWebRcon extends EventEmitter {
       return;
     }
     if (t.includes('chat')) this.emit('chat', msg, obj);
-    else if (t.includes('generic') || t.includes('log') || t.includes('console')) this.emit('console', msg, obj);
+    else if (t.includes('generic') || t.includes('log') || t.includes('console'))
+      this.emit('console', msg, obj);
     else this.emit('event', obj);
   }
 }
@@ -319,11 +352,13 @@ function attachClientEvents(key, client) {
   client.on('open', () => emitScoped('open', key));
   client.on('reconnect', () => emitScoped('reconnect', key));
   client.on('message', (message) => emitScoped('message', key, message));
-  client.on('console', (line, payload) => emitScoped('console', key, line, payload));
+  client.on('console', (line, payload) =>
+    emitScoped('console', key, line, payload),
+  );
   client.on('chat', (line, payload) => emitScoped('chat', key, line, payload));
   client.on('event', (payload) => emitScoped('event', key, payload));
   client.on('raw', (text) => emitScoped('raw', key, text));
-  client.on('error', (err) => emitScoped('error', key, err));
+  client.on('rcon_error', (err) => emitScoped('rcon_error', key, err)); // patched
   client.on('close', () => {
     clientMap.delete(key);
     emitScoped('close', key, { manual: !!client.manualClose });
@@ -372,8 +407,8 @@ export function subscribeToRcon(id, handlers = {}) {
     ['chat', handlers.chat],
     ['event', handlers.event],
     ['raw', handlers.raw],
-    ['error', handlers.error],
-    ['close', handlers.close]
+    ['rcon_error', handlers.rcon_error], // patched
+    ['close', handlers.close],
   ];
   const unsubs = [];
   for (const [event, handler] of mapping) {
@@ -385,8 +420,9 @@ export function subscribeToRcon(id, handlers = {}) {
   return () => {
     while (unsubs.length) {
       const fn = unsubs.pop();
-      try { fn(); }
-      catch { /* ignore */ }
+      try {
+        fn();
+      } catch {}
     }
   };
 }
