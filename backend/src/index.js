@@ -818,6 +818,18 @@ rconEventBus.on('monitor_status', (serverId, payload) => {
     latency,
     details
   });
+  if (typeof db.recordServerPlayerCount === 'function' && details?.players?.online != null) {
+    const snapshot = {
+      server_id: id,
+      player_count: details.players.online,
+      max_players: Number.isFinite(details.players.max) ? details.players.max : null,
+      queued: Number.isFinite(details.queued) ? details.queued : null,
+      sleepers: Number.isFinite(details.sleepers) ? details.sleepers : null
+    };
+    db.recordServerPlayerCount(snapshot).catch((err) => {
+      console.warn('Failed to record player count snapshot', err);
+    });
+  }
 });
 
 rconEventBus.on('monitor_error', (serverId, error) => {
