@@ -50,6 +50,10 @@ const MAP_CACHE_TZ_OFFSET_MINUTES = 120; // UTC+2
 const MAP_CACHE_RESET_HOUR = 20;
 const MAP_CACHE_RESET_MINUTE = 0;
 const KNOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
+const STEAM_PROFILE_CACHE_TTL = Math.max(toInt(process.env.STEAM_PROFILE_CACHE_MS || '300000', 300000), 60000);
+const STEAM_PROFILE_REFRESH_INTERVAL = Math.max(toInt(process.env.STEAM_PROFILE_REFRESH_MS || '1800000', 1800000), 300000);
+const STEAM_PLAYTIME_REFRESH_INTERVAL = Math.max(toInt(process.env.STEAM_PLAYTIME_REFRESH_MS || '21600000', 21600000), 3600000);
+const RUST_STEAM_APP_ID = 252490;
 
 let lastGlobalMapCacheReset = null;
 
@@ -65,12 +69,27 @@ const auth = authMiddleware(JWT_SECRET);
 const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
+
 let monitorController = null;
 let monitorRefreshPromise = null;
 
 const PLAYER_CONNECTION_DEDUPE_MS = 5 * 60 * 1000;
 const recentPlayerConnections = new Map();
 const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
+
+const steamProfileCache = new Map();
+let monitoring = false;
+let monitorTimer = null;
+
+
+
+let monitorController = null;
+let monitorRefreshPromise = null;
+
+const PLAYER_CONNECTION_DEDUPE_MS = 5 * 60 * 1000;
+const recentPlayerConnections = new Map();
+const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
+
 
 function recordStatus(id, data) {
   const key = Number(id);
@@ -273,6 +292,194 @@ function parsePlayerListMessage(message) {
     teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
     networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
   }));
+}
+
+function parseDateLike(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return null;
+  return new Date(ts);
+}
+
+function normaliseDbPlayer(row) {
+  if (!row) return null;
+  const toNumber = (val) => {
+    if (val === null || typeof val === 'undefined') return null;
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
+  const toBoolInt = (val) => (val ? 1 : 0);
+  const toIso = (val) => {
+    const date = parseDateLike(val);
+    return date ? date.toISOString() : null;
+  };
+  return {
+    steamid: row.steamid || row.SteamID || '',
+    persona: row.persona || null,
+    avatar: row.avatar || null,
+    country: row.country || null,
+    profileurl: row.profileurl || null,
+    vac_banned: toBoolInt(row.vac_banned),
+    game_bans: toNumber(row.game_bans) ?? 0,
+    last_ban_days: toNumber(row.last_ban_days),
+    visibility: toNumber(row.visibility),
+    rust_playtime_minutes: toNumber(row.rust_playtime_minutes),
+    playtime_updated_at: toIso(row.playtime_updated_at || row.playtimeUpdatedAt),
+    updated_at: toIso(row.updated_at || row.updatedAt)
+  };
+}
+
+function getCachedSteamProfile(steamid) {
+  const key = String(steamid || '').trim();
+  if (!key) return null;
+  const entry = steamProfileCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > STEAM_PROFILE_CACHE_TTL) {
+    steamProfileCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCachedSteamProfile(steamid, data) {
+  const key = String(steamid || '').trim();
+  if (!key || !data) return;
+  steamProfileCache.set(key, { data, timestamp: Date.now() });
+}
+
+function shouldRefreshProfile(profile, now = Date.now()) {
+  const updated = parseDateLike(profile?.updated_at);
+  if (!updated) return true;
+  return now - updated.getTime() > STEAM_PROFILE_REFRESH_INTERVAL;
+}
+
+function shouldRefreshPlaytime(profile, now = Date.now()) {
+  const updated = parseDateLike(profile?.playtime_updated_at);
+  if (!updated) return true;
+  return now - updated.getTime() > STEAM_PLAYTIME_REFRESH_INTERVAL;
+}
+
+function extractEndpoint(address) {
+  if (typeof address !== 'string' || address.length === 0) {
+    return { ip: null, port: null };
+  }
+  const [ipPart, portPart] = address.split(':');
+  const ip = ipPart?.trim() || null;
+  const portNum = parseInt(portPart, 10);
+  return { ip, port: Number.isFinite(portNum) ? portNum : null };
+}
+
+function formatSteamProfilePayload(profile) {
+  if (!profile) return null;
+  const toNumber = (val) => {
+    if (val === null || typeof val === 'undefined') return null;
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
+  const minutes = toNumber(profile.rust_playtime_minutes);
+  return {
+    persona: profile.persona || null,
+    avatar: profile.avatar || null,
+    country: profile.country || null,
+    profileUrl: profile.profileurl || null,
+    vacBanned: !!(Number(profile.vac_banned) || profile.vac_banned === true),
+    gameBans: Number(profile.game_bans) || 0,
+    daysSinceLastBan: toNumber(profile.last_ban_days),
+    visibility: toNumber(profile.visibility),
+    rustPlaytimeMinutes: minutes,
+    updatedAt: profile.updated_at || null,
+    playtimeUpdatedAt: profile.playtime_updated_at || null
+  };
+}
+
+async function fetchRustPlaytimeMinutes(steamid, key) {
+  const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${encodeURIComponent(key)}&steamid=${encodeURIComponent(steamid)}&include_appinfo=0&include_played_free_games=1&appids_filter%5B0%5D=${RUST_STEAM_APP_ID}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    if (res.status === 403 || res.status === 401) return null;
+    throw new Error('steam_playtime_error');
+  }
+  const data = await res.json();
+  const games = data?.response?.games;
+  if (!Array.isArray(games)) return null;
+  const rust = games.find((g) => Number(g.appid) === RUST_STEAM_APP_ID);
+  if (!rust) return 0;
+  const minutes = Number(rust.playtime_forever);
+  return Number.isFinite(minutes) ? minutes : null;
+}
+
+async function resolveSteamProfiles(steamids) {
+  const ids = [...new Set((steamids || []).map((id) => String(id || '').trim()).filter(Boolean))];
+  const profileMap = new Map();
+  if (ids.length === 0) return profileMap;
+  if (typeof db.getPlayersBySteamIds === 'function') {
+    try {
+      const rows = await db.getPlayersBySteamIds(ids);
+      for (const row of rows) {
+        const normalized = normaliseDbPlayer(row);
+        if (normalized?.steamid) profileMap.set(normalized.steamid, normalized);
+      }
+    } catch (err) {
+      console.warn('Failed to load stored player profiles', err);
+    }
+  }
+  const now = Date.now();
+  const toFetch = [];
+  for (const steamid of ids) {
+    const cached = getCachedSteamProfile(steamid);
+    if (cached) {
+      profileMap.set(steamid, cached);
+      continue;
+    }
+    const existing = profileMap.get(steamid);
+    if (!existing || shouldRefreshProfile(existing, now) || shouldRefreshPlaytime(existing, now)) {
+      toFetch.push(steamid);
+    }
+  }
+  if (toFetch.length > 0 && process.env.STEAM_API_KEY) {
+    try {
+      const fetched = await fetchSteamProfiles(toFetch, process.env.STEAM_API_KEY, { includePlaytime: true });
+      const nowIso = new Date().toISOString();
+      await Promise.all(fetched.map(async (profile) => {
+        const normalized = {
+          ...profile,
+          updated_at: nowIso,
+          playtime_updated_at: profile.playtime_updated_at || nowIso
+        };
+        profileMap.set(profile.steamid, normalized);
+        setCachedSteamProfile(profile.steamid, normalized);
+        await db.upsertPlayer({ ...profile, playtime_updated_at: normalized.playtime_updated_at });
+      }));
+    } catch (err) {
+      console.warn('Steam profile enrichment failed', err);
+    }
+  }
+  return profileMap;
+}
+
+async function enrichLivePlayers(players) {
+  if (!Array.isArray(players) || players.length === 0) return [];
+  try {
+    const steamIds = players.map((p) => p?.steamId || '').filter(Boolean);
+    const profiles = await resolveSteamProfiles(steamIds);
+    return players.map((player) => {
+      const endpoint = extractEndpoint(player.address);
+      const profile = profiles.get(player.steamId) || null;
+      return {
+        ...player,
+        ip: endpoint.ip,
+        port: endpoint.port,
+        steamProfile: formatSteamProfilePayload(profile)
+      };
+    });
+  } catch (err) {
+    console.warn('Failed to enrich live players', err);
+    return players.map((player) => {
+      const endpoint = extractEndpoint(player.address);
+      return { ...player, ip: endpoint.ip, port: endpoint.port, steamProfile: null };
+    });
+  }
 }
 
 function getCachedServerInfo(id) {
@@ -587,6 +794,7 @@ rconEventBus.on('monitor_error', (serverId, error) => {
   });
 });
 
+
 async function fetchServersForMonitoring() {
   if (typeof db.listServersWithSecrets === 'function') {
     return await db.listServersWithSecrets();
@@ -594,11 +802,14 @@ async function fetchServersForMonitoring() {
   return await db.listServers();
 }
 
+
 async function refreshMonitoredServers() {
   if (monitorRefreshPromise) return monitorRefreshPromise;
   monitorRefreshPromise = (async () => {
     try {
+
       const list = await fetchServersForMonitoring();
+
       const seen = new Set();
       for (const row of list) {
         const key = Number(row.id);
@@ -895,7 +1106,8 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       console.error('playerlist command failed', err);
       return res.status(502).json({ error: 'playerlist_failed' });
     }
-    const players = parsePlayerListMessage(playerPayload);
+    let players = parsePlayerListMessage(playerPayload);
+    players = await enrichLivePlayers(players);
     const now = new Date();
     let mapRecord = await db.getServerMap(id);
     if (mapRecord && shouldResetMapRecord(mapRecord, now)) {
@@ -1098,22 +1310,71 @@ app.post('/api/players/:steamid/event', auth, async (req, res) => {
   }
 });
 
-async function fetchSteamProfiles(steamids, key) {
-  const ids = steamids.slice(0, 100).join(',');
-  const url = `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${encodeURIComponent(key)}&steamids=${encodeURIComponent(ids)}`;
+async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {}) {
+  const unique = [...new Set((steamids || []).map((id) => String(id || '').trim()).filter(Boolean))];
+  if (unique.length === 0) return [];
+  const ids = unique.slice(0, 100);
+  const joined = ids.join(',');
+  const url = `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${encodeURIComponent(key)}&steamids=${encodeURIComponent(joined)}`;
   const r = await fetch(url);
   if (!r.ok) throw new Error('steam_api_error');
   const j = await r.json();
   const players = j?.response?.players || [];
-  const bansUrl = `https://api.steampowered.com/ISteamUser/GetPlayerBans/v1/?key=${encodeURIComponent(key)}&steamids=${encodeURIComponent(ids)}`;
+  const bansUrl = `https://api.steampowered.com/ISteamUser/GetPlayerBans/v1/?key=${encodeURIComponent(key)}&steamids=${encodeURIComponent(joined)}`;
   const rb = await fetch(bansUrl);
-  let bans = {};
+  const banMap = new Map();
   if (rb.ok) {
     const jb = await rb.json();
-    for (const b of (jb?.players || [])) bans[b.SteamId] = b.VACBanned ? 1 : 0;
+    for (const b of jb?.players || []) {
+      banMap.set(String(b.SteamId), {
+        vac_banned: b.VACBanned ? 1 : 0,
+        game_bans: Number(b.NumberOfGameBans) || 0,
+        last_ban_days: Number.isFinite(Number(b.DaysSinceLastBan)) ? Number(b.DaysSinceLastBan) : null
+      });
+    }
   }
-  for (const p of players) p.vac_banned = bans[p.steamid] || 0;
-  return players;
+  const playtimeMap = new Map();
+  const nowIso = new Date().toISOString();
+  if (includePlaytime) {
+    for (const player of players) {
+      const sid = String(player?.steamid || '');
+      if (!sid) continue;
+      const visibility = Number(player.communityvisibilitystate);
+      if (visibility !== 3) {
+        playtimeMap.set(sid, null);
+        continue;
+      }
+      try {
+        const minutes = await fetchRustPlaytimeMinutes(sid, key);
+        playtimeMap.set(sid, typeof minutes === 'number' ? minutes : null);
+      } catch (err) {
+        console.warn('Steam playtime fetch failed for', sid, err);
+        playtimeMap.set(sid, null);
+      }
+    }
+  }
+  const out = [];
+  for (const player of players) {
+    const sid = String(player?.steamid || '');
+    if (!sid) continue;
+    const ban = banMap.get(sid) || {};
+    const visibility = Number.isFinite(Number(player.communityvisibilitystate)) ? Number(player.communityvisibilitystate) : null;
+    const playtime = playtimeMap.has(sid) ? playtimeMap.get(sid) : null;
+    out.push({
+      steamid: sid,
+      persona: player.personaname || null,
+      avatar: player.avatarfull || null,
+      country: player.loccountrycode || null,
+      profileurl: player.profileurl || null,
+      vac_banned: ban.vac_banned ? 1 : 0,
+      game_bans: Number(ban.game_bans) || 0,
+      last_ban_days: Number.isFinite(Number(ban.last_ban_days)) ? Number(ban.last_ban_days) : null,
+      visibility,
+      rust_playtime_minutes: typeof playtime === 'number' ? playtime : null,
+      playtime_updated_at: includePlaytime ? nowIso : null
+    });
+  }
+  return out;
 }
 
 app.post('/api/steam/sync', auth, async (req, res) => {
@@ -1121,15 +1382,21 @@ app.post('/api/steam/sync', auth, async (req, res) => {
   if (!Array.isArray(steamids) || steamids.length === 0) return res.status(400).json({ error: 'missing_steamids' });
   if (!process.env.STEAM_API_KEY) return res.status(400).json({ error: 'no_steam_api_key' });
   try {
-    const list = await fetchSteamProfiles(steamids, process.env.STEAM_API_KEY);
-    for (const p of list) {
+    const list = await fetchSteamProfiles(steamids, process.env.STEAM_API_KEY, { includePlaytime: true });
+    const nowIso = new Date().toISOString();
+    for (const profile of list) {
       await db.upsertPlayer({
-        steamid: p.steamid,
-        persona: p.personaname,
-        avatar: p.avatarfull,
-        country: p.loccountrycode || null,
-        profileurl: p.profileurl || null,
-        vac_banned: p.vac_banned || 0
+        steamid: profile.steamid,
+        persona: profile.persona,
+        avatar: profile.avatar,
+        country: profile.country,
+        profileurl: profile.profileurl,
+        vac_banned: profile.vac_banned || 0,
+        game_bans: profile.game_bans || 0,
+        last_ban_days: profile.last_ban_days ?? null,
+        visibility: profile.visibility ?? null,
+        rust_playtime_minutes: profile.rust_playtime_minutes ?? null,
+        playtime_updated_at: profile.playtime_updated_at || nowIso
       });
     }
     res.json({ updated: list.length });

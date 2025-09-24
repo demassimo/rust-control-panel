@@ -71,6 +71,8 @@ main.grid{
 }
 .card.map-card{padding:10px}
 .card.list-card{margin-top:16px}
+.players-card{grid-column:1/-1;margin-top:18px}
+.players-card .card-body{padding:0}
 .card-head{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 14px; border-bottom:1px solid var(--border)
@@ -109,6 +111,31 @@ main.grid{
 .map-wrap canvas{display:block; width:100%; height:100%; border-radius:12px}
 
 .players-list{max-height:260px; overflow:auto}
+.live-players-list{display:flex; flex-direction:column}
+.live-player-row{display:flex; gap:16px; padding:18px 22px; border-bottom:1px solid var(--border); transition:background .15s ease, border-color .15s ease; align-items:flex-start}
+.live-player-row:last-child{border-bottom:none}
+.live-player-row:hover{background:rgba(255,255,255,.03); cursor:pointer}
+.live-player-row.active{background:rgba(225,29,72,.12); border-left:4px solid rgba(225,29,72,.55)}
+.live-player-identity{display:flex; gap:16px; align-items:center; flex:1}
+.live-player-avatar{width:52px; height:52px; border-radius:14px; overflow:hidden; background:var(--surface-2); display:grid; place-items:center; font-weight:700; color:var(--muted); text-transform:uppercase}
+.live-player-avatar img{width:100%; height:100%; object-fit:cover}
+.live-player-meta{display:flex; flex-direction:column; gap:4px}
+.live-player-name{font-weight:600; display:flex; gap:8px; align-items:center}
+.live-player-name a{color:inherit; text-decoration:none}
+.live-player-name a:hover{text-decoration:underline}
+.live-player-sub{font-size:12px; color:var(--muted)}
+.live-player-hours{color:var(--muted)}
+.live-player-details{display:flex; flex-direction:column; gap:10px; align-items:flex-end; min-width:220px}
+.live-player-stats{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end}
+.live-player-stats .stat{font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid rgba(148,163,184,.25); background:rgba(15,23,42,.45); color:var(--muted)}
+.live-player-stats .stat.health{color:#a3ffbf; border-color:rgba(34,197,94,.35); background:rgba(34,197,94,.18)}
+.live-player-stats .stat.ping{color:#93c5fd; border-color:rgba(59,130,246,.35); background:rgba(59,130,246,.18)}
+.live-player-stats .stat.violation{color:#fca5a5; border-color:rgba(239,68,68,.4); background:rgba(239,68,68,.18)}
+.live-player-badges{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end}
+.badge.vac{background:rgba(239,68,68,.2); color:#fecaca; border-color:rgba(239,68,68,.45)}
+.badge.gameban{background:rgba(249,115,22,.2); color:#fed7aa; border-color:rgba(249,115,22,.45)}
+.badge.country{background:rgba(59,130,246,.2); color:#bfdbfe; border-color:rgba(59,130,246,.45)}
+.badge.warn{background:rgba(245,158,11,.18); color:#fde68a; border-color:rgba(245,158,11,.4)}
 .player-row{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 14px; border-bottom:1px solid var(--border);
