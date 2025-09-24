@@ -505,10 +505,15 @@
       if (status && typeof status.id !== 'undefined') updateServerStatus(status.id, status);
     });
     socket.on('console', (msg) => {
-      if (msg?.Message) {
-        ui.log(msg.Message.trim());
-        moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
+      const raw = typeof msg === 'string'
+        ? msg
+        : (msg?.Message ?? msg?.message ?? '');
+      const text = typeof raw === 'string' ? raw.trim() : '';
+      if (text) {
+        ui.log(text);
       }
+      const sourceId = msg?.ServerId ?? msg?.serverId ?? msg?.id ?? state.currentServerId;
+      moduleBus.emit('console:message', { serverId: sourceId, message: msg });
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
@@ -970,7 +975,7 @@
     highlightSelectedServer();
     ui.clearConsole();
     const name = entry?.data?.name || `Server #${numericId}`;
-    ui.log(`Connecting to ${name}…`);
+    ui.log(`Connecting to ${name}...`);
     const sock = ensureSocket();
     if (sock && sock.connected) {
       sock.emit('join-server', numericId);
