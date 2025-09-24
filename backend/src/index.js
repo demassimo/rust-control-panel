@@ -10,7 +10,14 @@ import { fileURLToPath } from 'url';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
-import { connectRcon, sendRconCommand, closeRcon as terminateRcon, subscribeToRcon } from './rcon.js';
+import {
+  connectRcon,
+  sendRconCommand,
+  closeRcon as terminateRcon,
+  subscribeToRcon,
+  startAutoMonitor,
+  rconEventBus
+} from './rcon.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,6 +41,7 @@ const toInt = (value, fallback) => {
 };
 
 const MONITOR_INTERVAL = Math.max(toInt(process.env.MONITOR_INTERVAL_MS || '60000', 60000), 15000);
+const MONITOR_TIMEOUT = Math.max(toInt(process.env.MONITOR_TIMEOUT_MS || '8000', 8000), 2000);
 const DEFAULT_RUSTMAPS_API_KEY = process.env.RUSTMAPS_API_KEY || '';
 const SERVER_INFO_TTL = Math.max(toInt(process.env.SERVER_INFO_CACHE_MS, 60000), 10000);
 const ALLOWED_USER_SETTINGS = new Set(['rustmaps_api_key']);
@@ -57,8 +65,12 @@ const auth = authMiddleware(JWT_SECRET);
 const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
-let monitoring = false;
-let monitorTimer = null;
+let monitorController = null;
+let monitorRefreshPromise = null;
+
+const PLAYER_CONNECTION_DEDUPE_MS = 5 * 60 * 1000;
+const recentPlayerConnections = new Map();
+const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
 
 function recordStatus(id, data) {
   const key = Number(id);
@@ -103,6 +115,10 @@ function ensureRconBinding(row) {
       io.to(`srv:${key}`).emit('console', msg);
       console.log(`[RCON:${host}:${port}]`, msg);
     },
+    console: (line) => {
+      const cleanLine = typeof line === 'string' ? line.replace(ANSI_COLOR_REGEX, '') : '';
+      if (cleanLine) handlePlayerConnectionLine(key, cleanLine);
+    },
     rcon_error: handleError,
     close: ({ manual } = {}) => {
       recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: 'connection_closed' });
@@ -120,6 +136,51 @@ function ensureRconBinding(row) {
 function closeServerRcon(id) {
   cleanupRconBinding(id);
   terminateRcon(id);
+}
+
+function extractPlayerConnection(line) {
+  if (!line) return null;
+  const normalized = line.replace(ANSI_COLOR_REGEX, '').trim();
+  if (!normalized) return null;
+  const lower = normalized.toLowerCase();
+  if (!lower.includes('connected') && !lower.includes('joined')) return null;
+  if (lower.includes('disconnected') || lower.includes('kicked')) return null;
+  const steamMatch = normalized.match(/\[(\d{17})\]/);
+  if (!steamMatch) return null;
+  const steamid = steamMatch[1];
+  let prefix = normalized.slice(0, steamMatch.index).trim();
+  prefix = prefix.replace(/^\[[^\]]*\]\s*/, '').trim();
+  prefix = prefix.replace(/\s+(?:connecting|connected|joining|joined).*$/i, '').trim();
+  const persona = prefix || null;
+  return { steamid, persona };
+}
+
+function handlePlayerConnectionLine(serverId, line) {
+  const info = extractPlayerConnection(line);
+  if (!info) return;
+  const key = `${serverId}:${info.steamid}`;
+  const now = Date.now();
+  const last = recentPlayerConnections.get(key) || 0;
+  if (now - last < PLAYER_CONNECTION_DEDUPE_MS) return;
+  recentPlayerConnections.set(key, now);
+  if (recentPlayerConnections.size > 2000) {
+    const cutoff = now - PLAYER_CONNECTION_DEDUPE_MS;
+    for (const [k, ts] of recentPlayerConnections.entries()) {
+      if (ts < cutoff) recentPlayerConnections.delete(k);
+    }
+  }
+  const note = info.persona ? `Connected as ${info.persona}` : 'Connected';
+  db.upsertPlayer({
+    steamid: info.steamid,
+    persona: info.persona || null,
+    avatar: null,
+    country: null,
+    profileurl: null,
+    vac_banned: 0
+  }).catch((err) => console.warn('player upsert failed', err));
+  db.addPlayerEvent({ steamid: info.steamid, server_id: serverId, event: 'connected', note }).catch((err) => {
+    console.warn('player event log failed', err);
+  });
 }
 
 function parseStatusMessage(message) {
@@ -496,62 +557,83 @@ function decodeBase64Image(input) {
   }
 }
 
-async function monitorServers() {
-  if (monitoring) return;
-  monitoring = true;
-  try {
-    const list = await db.listServers();
-    const seen = new Set();
-    for (const row of list) {
-      const key = Number(row.id);
-      seen.add(key);
-      try {
+function toServerId(value) {
+  const id = Number(value);
+  return Number.isFinite(id) ? id : null;
+}
+
+rconEventBus.on('monitor_status', (serverId, payload) => {
+  const id = toServerId(serverId);
+  if (id == null) return;
+  const latency = Number.isFinite(payload?.latency) ? payload.latency : null;
+  const message = payload?.reply?.Message || '';
+  const details = parseStatusMessage(message);
+  recordStatus(id, {
+    ok: true,
+    lastCheck: new Date().toISOString(),
+    latency,
+    details
+  });
+});
+
+rconEventBus.on('monitor_error', (serverId, error) => {
+  const id = toServerId(serverId);
+  if (id == null) return;
+  const message = error?.message || String(error);
+  recordStatus(id, {
+    ok: false,
+    lastCheck: new Date().toISOString(),
+    error: message
+  });
+});
+
+async function refreshMonitoredServers() {
+  if (monitorRefreshPromise) return monitorRefreshPromise;
+  monitorRefreshPromise = (async () => {
+    try {
+      const list = await db.listServers();
+      const seen = new Set();
+      for (const row of list) {
+        const key = Number(row.id);
+        if (!Number.isFinite(key)) continue;
+        seen.add(key);
         ensureRconBinding(row);
-        const started = Date.now();
-        const reply = await sendRconCommand(row, 'status');
-        recordStatus(key, {
-          ok: true,
-          lastCheck: new Date().toISOString(),
-          latency: Date.now() - started,
-          details: parseStatusMessage(reply?.Message || '')
-        });
-      } catch (e) {
-        closeServerRcon(key);
-        recordStatus(key, {
-          ok: false,
-          lastCheck: new Date().toISOString(),
-          error: e?.message || String(e)
-        });
       }
+      for (const key of [...rconBindings.keys()]) {
+        if (!seen.has(key)) closeServerRcon(key);
+      }
+      for (const key of [...statusMap.keys()]) {
+        if (!seen.has(key)) statusMap.delete(key);
+      }
+      for (const entryKey of [...recentPlayerConnections.keys()]) {
+        const [serverId] = entryKey.split(':');
+        const numeric = Number(serverId);
+        if (Number.isFinite(numeric) && !seen.has(numeric)) recentPlayerConnections.delete(entryKey);
+      }
+      if (!monitorController) {
+        monitorController = startAutoMonitor(list, {
+          intervalMs: MONITOR_INTERVAL,
+          timeoutMs: MONITOR_TIMEOUT,
+          commands: ['status']
+        });
+      } else {
+        monitorController.update(list);
+      }
+    } catch (err) {
+      console.error('monitor refresh failed', err);
+    } finally {
+      monitorRefreshPromise = null;
     }
-    for (const key of [...statusMap.keys()]) {
-      if (!seen.has(key)) statusMap.delete(key);
-    }
-  } catch (e) {
-    console.error('monitor error', e);
-  } finally {
-    monitoring = false;
-  }
+  })();
+  return monitorRefreshPromise;
 }
-
-function triggerMonitorSoon(delay = 1000) {
-  if (monitorTimer) return;
-  monitorTimer = setTimeout(() => {
-    monitorTimer = null;
-    monitorServers().catch((err) => console.error('monitor retry error', err));
-  }, delay);
-}
-
-const monitorHandle = setInterval(() => {
-  monitorServers().catch((err) => console.error('monitor tick error', err));
-}, MONITOR_INTERVAL);
-if (monitorHandle.unref) monitorHandle.unref();
-monitorServers().catch((err) => console.error('initial monitor error', err));
 
 const mapPurgeHandle = setInterval(() => {
   purgeExpiredMapCaches().catch((err) => console.error('scheduled map purge error', err));
 }, MAP_PURGE_INTERVAL);
 if (mapPurgeHandle.unref) mapPurgeHandle.unref();
+
+await refreshMonitoredServers();
 
 // --- Public metadata
 app.get('/api/public-config', (req, res) => {
@@ -735,7 +817,7 @@ app.post('/api/servers', auth, async (req, res) => {
   if (!name || !host || !port || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
     const id = await db.createServer({ name, host, port: parseInt(port, 10), password, tls: tls ? 1 : 0 });
-    triggerMonitorSoon();
+    refreshMonitoredServers().catch((err) => console.error('monitor refresh (create) failed', err));
     res.json({ id });
   } catch {
     res.status(500).json({ error: 'db_error' });
@@ -749,7 +831,7 @@ app.patch('/api/servers/:id', auth, async (req, res) => {
     const updated = await db.updateServer(id, req.body || {});
     if (updated) {
       closeServerRcon(id);
-      triggerMonitorSoon();
+      refreshMonitoredServers().catch((err) => console.error('monitor refresh (update) failed', err));
     }
     res.json({ updated });
   } catch {
@@ -764,6 +846,7 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
     const deleted = await db.deleteServer(id);
     closeServerRcon(id);
     statusMap.delete(id);
+    refreshMonitoredServers().catch((err) => console.error('monitor refresh (delete) failed', err));
     res.json({ deleted });
   } catch {
     res.status(500).json({ error: 'db_error' });
