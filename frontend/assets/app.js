@@ -57,7 +57,6 @@
   const workspaceStatus = $('#workspaceStatus');
   const workspacePlayers = $('#workspacePlayers');
   const workspaceQueue = $('#workspaceQueue');
-  const workspaceLatency = $('#workspaceLatency');
   const btnBackToDashboard = $('#btnBackToDashboard');
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
@@ -433,7 +432,6 @@
     const players = status?.details?.players?.online ?? null;
     const maxPlayers = status?.details?.players?.max ?? null;
     const queued = status?.details?.queued ?? null;
-    const latency = typeof status?.latency === 'number' ? status.latency : null;
     const online = !!status?.ok;
     if (pill) {
       let cls = 'status-pill';
@@ -463,9 +461,6 @@
     if (workspaceQueue) {
       workspaceQueue.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
     }
-    if (workspaceLatency) {
-      workspaceLatency.textContent = latency != null ? `${latency} ms` : '--';
-    }
   }
 
   function showWorkspaceForServer(id) {
@@ -487,7 +482,6 @@
     if (workspaceMeta) workspaceMeta.textContent = 'Pick a server card to inspect live data.';
     if (workspacePlayers) workspacePlayers.textContent = '--';
     if (workspaceQueue) workspaceQueue.textContent = '--';
-    if (workspaceLatency) workspaceLatency.textContent = '--';
     if (workspaceStatus) {
       workspaceStatus.className = 'status-pill';
       workspaceStatus.textContent = 'offline';
@@ -501,6 +495,7 @@
     socket.on('connect', () => {
       ui.log('Realtime link established.');
       if (state.currentServerId != null) socket.emit('join-server', state.currentServerId);
+      refreshServerStatuses().catch(() => {});
     });
     socket.on('disconnect', () => {
       ui.log('Realtime link lost.');
@@ -552,7 +547,6 @@
     const details = entry.statusDetails;
     const playersEl = entry.playersValue;
     const queueEl = entry.queueValue;
-    const latencyEl = entry.latencyValue;
     if (!status) {
       if (pill) {
         pill.className = 'status-pill';
@@ -562,7 +556,6 @@
       if (details) details.textContent = '';
       if (playersEl) playersEl.textContent = '--';
       if (queueEl) queueEl.textContent = '--';
-      if (latencyEl) latencyEl.textContent = '--';
       updateWorkspaceDisplay(entry);
       return;
     }
@@ -570,7 +563,6 @@
     const queued = status?.details?.queued ?? null;
     const players = status?.details?.players?.online ?? null;
     const maxPlayers = status?.details?.players?.max ?? null;
-    const latency = typeof status.latency === 'number' ? status.latency : null;
     const lastCheck = status.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : null;
 
     if (pill) {
@@ -602,10 +594,6 @@
     if (queueEl) {
       queueEl.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
     }
-    if (latencyEl) {
-      latencyEl.textContent = latency != null ? `${latency} ms` : '--';
-    }
-
     if (details) {
       const parts = [];
       if (online && players != null) {
@@ -613,7 +601,6 @@
         parts.push(`${players}${maxInfo} players`);
       }
       if (online && queued != null && queued > 0) parts.push(`${queued} queued`);
-      if (latency != null) parts.push(`${latency} ms`);
       if (!online && status.error) parts.push(status.error);
       if (lastCheck) parts.push(`checked ${lastCheck}`);
       details.textContent = parts.join(' · ');
@@ -679,10 +666,8 @@
     stats.className = 'server-card-stats';
     const playersStat = createServerStat('👥', 'Players');
     const queueStat = createServerStat('⏳', 'Queue');
-    const latencyStat = createServerStat('⚡', 'Latency');
     stats.appendChild(playersStat.element);
     stats.appendChild(queueStat.element);
-    stats.appendChild(latencyStat.element);
 
     mainRow.appendChild(head);
     mainRow.appendChild(stats);
@@ -882,7 +867,6 @@
     entry.statusDetails = details;
     entry.playersValue = playersStat.value;
     entry.queueValue = queueStat.value;
-    entry.latencyValue = latencyStat.value;
     entry.toggleEdit = toggleEdit;
     entry.nameEl = nameEl;
     entry.metaEl = metaEl;

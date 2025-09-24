@@ -57,10 +57,10 @@ body.app{
 .btn.small{padding:6px 10px; font-size:12px}
 
 main.grid{
-  display:grid; grid-template-columns: 360px 1fr 360px; gap:18px;
+  display:grid; grid-template-columns: 420px 1fr 360px; gap:18px;
   padding:18px 22px 28px;
 }
-.col.left{min-width:320px}
+.col.left{min-width:380px}
 .col.center{min-width:520px}
 .col.right{min-width:320px}
 
@@ -86,7 +86,7 @@ main.grid{
   background:linear-gradient(180deg, #0c0f16 0%, #0a0d13 100%);
   padding:10px 12px; color:#dcdfe7;
 }
-.console .line{white-space:pre-wrap; line-height:1.35}
+.console .line{white-space:pre-wrap; line-height:1.35; word-break:break-word; overflow-wrap:anywhere}
 .console .ts{color:#6e7385}
 .console .warn{color:#fbbf24}
 .console .error{color:#f87171}
