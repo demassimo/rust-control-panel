@@ -90,6 +90,9 @@ function createApi(pool, dialect) {
     async updateUserRole(id, role){ await exec('UPDATE users SET role=? WHERE id=?',[role,id]); },
     async deleteUser(id){ const r = await exec('DELETE FROM users WHERE id=?',[id]); return r.affectedRows||0; },
     async listServers(){ return await exec('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
+    async listServersWithSecrets(){
+      return await exec('SELECT id,name,host,port,password,tls,created_at FROM servers ORDER BY id DESC');
+    },
     async getServer(id){ const r = await exec('SELECT * FROM servers WHERE id=?',[id]); return r[0]||null; },
     async createServer(s){ const r = await exec('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.insertId; },
     async updateServer(id,s){

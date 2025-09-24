@@ -88,6 +88,9 @@ function createApi(dbh, dialect) {
     async updateUserRole(id, role){ await dbh.run('UPDATE users SET role=? WHERE id=?',[role,id]); },
     async deleteUser(id){ const r = await dbh.run('DELETE FROM users WHERE id=?',[id]); return r.changes; },
     async listServers(){ return await dbh.all('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
+    async listServersWithSecrets(){
+      return await dbh.all('SELECT id,name,host,port,password,tls,created_at FROM servers ORDER BY id DESC');
+    },
     async getServer(id){ return await dbh.get('SELECT * FROM servers WHERE id=?',[id]); },
     async createServer(s){ const r = await dbh.run('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.lastID; },
     async updateServer(id,s){
