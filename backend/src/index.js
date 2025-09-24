@@ -76,21 +76,21 @@ function getStatusSnapshot() {
 
 function cleanupRconBinding(id) {
   const key = Number(id);
-  const binding = rconBindings.get(key);
-  if (!binding) return;
+  if (!Number.isFinite(key)) return;
+  const unsubscribe = rconBindings.get(key);
+  if (!unsubscribe) return;
   rconBindings.delete(key);
-  try { binding.unsubscribe?.(); }
+  try { unsubscribe(); }
   catch { /* ignore */ }
 }
 
 function ensureRconBinding(row) {
-  const key = Number(row.id);
+  const key = Number(row?.id);
   if (!Number.isFinite(key)) throw new Error('invalid_server_id');
-  if (rconBindings.has(key)) return rconBindings.get(key);
+  if (rconBindings.has(key)) return;
 
   const host = row.host;
   const port = row.port;
-  const binding = { host, port, unsubscribe: () => {} };
 
   const handleError = (error) => {
     const message = error?.message || String(error);
@@ -103,16 +103,18 @@ function ensureRconBinding(row) {
       io.to(`srv:${key}`).emit('console', msg);
       console.log(`[RCON:${host}:${port}]`, msg);
     },
-    error: handleError,
+    rcon_error: handleError,
     close: ({ manual } = {}) => {
       recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: 'connection_closed' });
       if (manual) cleanupRconBinding(key);
     }
   });
 
-  binding.unsubscribe = () => unsubscribe();
-  rconBindings.set(key, binding);
-  return binding;
+  rconBindings.set(key, unsubscribe);
+
+  connectRcon(row).catch((err) => {
+    console.error(`[RCON:${host}:${port}] connect failed:`, err);
+  });
 }
 
 function closeServerRcon(id) {
