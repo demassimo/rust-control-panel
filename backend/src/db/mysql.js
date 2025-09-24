@@ -57,6 +57,24 @@ function createApi(pool, dialect) {
         INDEX(steamid),
         CONSTRAINT fk_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS user_settings(
+        user_id INT NOT NULL,
+        \`key\` VARCHAR(64) NOT NULL,
+        value TEXT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY(user_id, \`key\`),
+        CONSTRAINT fk_user_settings FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS server_maps(
+        server_id INT PRIMARY KEY,
+        map_key VARCHAR(190) NULL,
+        data TEXT NULL,
+        image_path TEXT NULL,
+        custom TINYINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_server_maps FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
@@ -92,5 +110,25 @@ function createApi(pool, dialect) {
     async listPlayers({limit=100,offset=0}={}){ return await exec('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
+    async getUserSettings(userId){
+      const rows = await exec('SELECT `key`,value FROM user_settings WHERE user_id=?',[userId]);
+      const out = {};
+      for (const row of rows) out[row.key] = row.value;
+      return out;
+    },
+    async getUserSetting(userId,key){
+      const rows = await exec('SELECT value FROM user_settings WHERE user_id=? AND `key`=?',[userId,key]);
+      return rows[0]?.value ?? null;
+    },
+    async setUserSetting(userId,key,value){
+      await exec('INSERT INTO user_settings(user_id,`key`,value) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP',[userId,key,value]);
+    },
+    async deleteUserSetting(userId,key){ await exec('DELETE FROM user_settings WHERE user_id=? AND `key`=?',[userId,key]); },
+    async getServerMap(serverId){ const rows = await exec('SELECT * FROM server_maps WHERE server_id=?',[serverId]); return rows[0]||null; },
+    async listServerMaps(){ return await exec('SELECT * FROM server_maps'); },
+    async saveServerMap(serverId,{ map_key=null,data=null,image_path=null,custom=0 }){
+      await exec('INSERT INTO server_maps(server_id,map_key,data,image_path,custom) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE map_key=VALUES(map_key), data=VALUES(data), image_path=VALUES(image_path), custom=VALUES(custom), updated_at=CURRENT_TIMESTAMP',[serverId,map_key,data,image_path,custom?1:0]);
+    },
+    async deleteServerMap(serverId){ await exec('DELETE FROM server_maps WHERE server_id=?',[serverId]); },
   };
 }

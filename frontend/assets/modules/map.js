@@ -82,6 +82,32 @@
       teamInfo.className = 'map-team-info';
       sidebar.appendChild(teamInfo);
 
+      const uploadWrap = document.createElement('div');
+      uploadWrap.className = 'map-upload hidden';
+      const uploadText = document.createElement('p');
+      uploadText.innerHTML = 'RustMaps does not provide imagery for this world yet. Run <code>world.rendermap</code> on your server, then upload the generated image.';
+      const uploadActions = document.createElement('div');
+      uploadActions.className = 'map-upload-actions';
+      const uploadInput = document.createElement('input');
+      uploadInput.type = 'file';
+      uploadInput.accept = 'image/png,image/jpeg,image/webp';
+      const uploadBtn = document.createElement('button');
+      uploadBtn.className = 'ghost';
+      uploadBtn.textContent = 'Upload map image';
+      uploadActions.appendChild(uploadInput);
+      uploadActions.appendChild(uploadBtn);
+      const uploadStatus = document.createElement('p');
+      uploadStatus.className = 'notice hidden';
+      uploadWrap.appendChild(uploadText);
+      uploadWrap.appendChild(uploadActions);
+      uploadWrap.appendChild(uploadStatus);
+      sidebar.appendChild(uploadWrap);
+      uploadInput.addEventListener('change', () => hideUploadNotice());
+      uploadBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        handleUpload().catch((err) => ctx.log?.('Map upload failed: ' + (err?.message || err)));
+      });
+
       layout.appendChild(mapView);
       layout.appendChild(sidebar);
 
@@ -97,14 +123,44 @@
         pollTimer: null
       };
 
-      function setMessage(text) {
+      function showUploadNotice(message, variant = 'error') {
+        if (!uploadStatus) return;
+        uploadStatus.textContent = message;
+        uploadStatus.className = 'notice ' + (variant === 'success' ? 'success' : 'error');
+      }
+
+      function hideUploadNotice() {
+        if (!uploadStatus) return;
+        uploadStatus.className = 'notice hidden';
+        uploadStatus.textContent = '';
+      }
+
+      function readFileAsDataURL(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error || new Error('read_failed'));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function setMessage(content) {
         if (!message) return;
-        message.textContent = text;
+        message.innerHTML = '';
+        if (content instanceof Node) {
+          message.appendChild(content);
+        } else if (typeof content === 'string') {
+          message.textContent = content;
+        } else if (content != null) {
+          message.textContent = String(content);
+        }
         message.classList.remove('hidden');
       }
 
       function clearMessage() {
-        message?.classList.add('hidden');
+        if (!message) return;
+        message.innerHTML = '';
+        message.classList.add('hidden');
       }
 
       function stopPolling() {
@@ -161,12 +217,70 @@
       }
 
       function mapReady() {
-        return state.mapMeta && Number.isFinite(state.mapMeta.size) && state.mapMeta.size > 0;
+        if (!state.mapMeta || !state.mapMeta.imageUrl) return false;
+        const size = Number(state.mapMeta.size ?? state.serverInfo?.size);
+        return Number.isFinite(size) && size > 0;
+      }
+
+      function updateUploadSection() {
+        if (!uploadWrap) return;
+        const needsUpload = !!(state.mapMeta && state.mapMeta.custom && !state.mapMeta.imageUrl);
+        if (needsUpload) {
+          uploadWrap.classList.remove('hidden');
+        } else {
+          uploadWrap.classList.add('hidden');
+          hideUploadNotice();
+        }
+      }
+
+      async function handleUpload() {
+        if (!state.serverId) {
+          showUploadNotice('Connect to a server before uploading.');
+          return;
+        }
+        const file = uploadInput?.files?.[0];
+        if (!file) {
+          showUploadNotice('Choose an image before uploading.');
+          return;
+        }
+        hideUploadNotice();
+        uploadBtn.disabled = true;
+        const previousLabel = uploadBtn.textContent;
+        uploadBtn.textContent = 'Uploading…';
+        try {
+          const dataUrl = await readFileAsDataURL(file);
+          const payload = { image: dataUrl, mapKey: state.mapMeta?.mapKey || null };
+          const response = await ctx.api(`/api/servers/${state.serverId}/map-image`, payload, 'POST');
+          if (response?.map) {
+            state.mapMeta = response.map;
+            showUploadNotice('Map image uploaded successfully.', 'success');
+            clearMessage();
+            updateUploadSection();
+            renderAll();
+          } else {
+            showUploadNotice('Map image uploaded.', 'success');
+          }
+        } catch (err) {
+          if (ctx.errorCode?.(err) === 'unauthorized') {
+            ctx.handleUnauthorized?.();
+            return;
+          }
+          const code = ctx.errorCode?.(err);
+          if (code === 'missing_image') showUploadNotice('Choose an image before uploading.');
+          else if (code === 'invalid_image') showUploadNotice('The selected image could not be processed.');
+          else if (code === 'image_too_large') showUploadNotice('The image is too large. Please upload a file under 20 MB.');
+          else showUploadNotice(ctx.describeError?.(err) || 'Uploading the map image failed.');
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = previousLabel;
+          if (uploadInput) uploadInput.value = '';
+        }
       }
 
       function projectPosition(position) {
         if (!mapReady()) return null;
-        const size = state.mapMeta.size;
+        const size = Number(state.mapMeta?.size ?? state.serverInfo?.size);
+        if (!Number.isFinite(size) || size <= 0) return null;
         const x = Number(position?.x) || 0;
         const z = Number(position?.z) || 0;
         const px = clamp(((x + size / 2) / size) * 100, 0, 100);
@@ -256,8 +370,18 @@
           { label: 'Teams', value: teamCounts.size },
           { label: 'Solo players', value: soloCount }
         ];
-        if (state.mapMeta?.size) metaLines.push({ label: 'World size', value: state.mapMeta.size });
-        if (state.mapMeta?.seed) metaLines.push({ label: 'Seed', value: state.mapMeta.seed });
+        const mapSize = state.mapMeta?.size ?? state.serverInfo?.size;
+        if (mapSize) metaLines.push({ label: 'World size', value: mapSize });
+        const mapSeed = state.mapMeta?.seed ?? state.serverInfo?.seed;
+        if (mapSeed) metaLines.push({ label: 'Seed', value: mapSeed });
+        if (state.mapMeta?.cachedAt) {
+          const cachedTs = new Date(state.mapMeta.cachedAt);
+          metaLines.push({ label: 'Cached', value: cachedTs.toLocaleString() });
+        }
+        if (state.mapMeta?.imageUrl) {
+          const source = state.mapMeta.custom ? 'Uploaded image' : state.mapMeta.localImage ? 'Cached copy' : 'RustMaps';
+          metaLines.push({ label: 'Source', value: source });
+        }
         if (state.lastUpdated) {
           const ts = new Date(state.lastUpdated);
           metaLines.push({ label: 'Updated', value: ts.toLocaleTimeString() });
@@ -324,6 +448,7 @@
         renderPlayerList();
         renderSummary();
         renderTeamInfo();
+        updateUploadSection();
         clearBtn.disabled = !state.selectedSolo && !state.selectedTeam;
       }
 
@@ -348,24 +473,53 @@
       clearBtn.addEventListener('click', () => clearSelection());
       mapView.addEventListener('click', () => clearSelection());
 
-      async function refreshData(reason){
+      async function refreshData(reason) {
         if (!state.serverId) return;
+        hideUploadNotice();
+        if (reason !== 'poll') setMessage('Loading live map data…');
         try {
-          setMessage('Loading live map data…');
           const data = await ctx.api(`/api/servers/${state.serverId}/live-map`);
           state.players = Array.isArray(data?.players) ? data.players : [];
           state.mapMeta = data?.map || null;
           state.serverInfo = data?.info || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
-          if (!mapReady()) {
-            setMessage('Map metadata unavailable. Add a RustMaps API key to the backend configuration.');
+          updateUploadSection();
+          if (!state.mapMeta) {
+            setMessage('Waiting for map metadata…');
+          } else if (state.mapMeta?.notFound) {
+            const wrap = document.createElement('span');
+            wrap.textContent = 'RustMaps has not published imagery for this seed yet. Try again shortly or upload your render below.';
+            setMessage(wrap);
+          } else if (state.mapMeta?.custom && !state.mapMeta?.imageUrl) {
+            setMessage('Upload your rendered map image to enable the live map.');
+          } else if (!mapReady()) {
+            setMessage('Map metadata is incomplete. Try again shortly.');
           } else {
             clearMessage();
           }
           renderAll();
         } catch (err) {
-          if (ctx.errorCode?.(err) === 'unauthorized') {
+          const code = ctx.errorCode?.(err);
+          if (code === 'unauthorized') {
             ctx.handleUnauthorized?.();
+            return;
+          }
+          if (code === 'rustmaps_api_key_missing') {
+            const wrap = document.createElement('span');
+            wrap.textContent = 'Add your RustMaps API key in Settings to enable the live map. ';
+            if (typeof ctx.openSettings === 'function') {
+              const btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'link';
+              btn.textContent = 'Open settings';
+              btn.addEventListener('click', () => ctx.openSettings());
+              wrap.appendChild(btn);
+            }
+            setMessage(wrap);
+            return;
+          }
+          if (code === 'rustmaps_unauthorized') {
+            setMessage('RustMaps rejected your API key. Update it in Settings.');
             return;
           }
           const detail = ctx.describeError?.(err) || err?.message || 'Unable to fetch live map data.';
@@ -396,6 +550,8 @@
           renderPlayerList();
           renderSummary();
           renderTeamInfo();
+          updateUploadSection();
+          hideUploadNotice();
           setMessage('Connect to a server to load the live map.');
         }
       });
@@ -413,12 +569,21 @@
         renderPlayerList();
         renderSummary();
         renderTeamInfo();
+        updateUploadSection();
+        hideUploadNotice();
         setMessage('Sign in and connect to a server to view the live map.');
+      });
+
+      const offSettingsUpdate = ctx.on?.('settings:updated', () => {
+        if (state.serverId && (!state.mapMeta || !mapReady())) {
+          refreshData('settings');
+        }
       });
 
       ctx.onCleanup?.(() => offConnect?.());
       ctx.onCleanup?.(() => offDisconnect?.());
       ctx.onCleanup?.(() => offLogout?.());
+      ctx.onCleanup?.(() => offSettingsUpdate?.());
       ctx.onCleanup?.(() => stopPolling());
 
       setMessage('Connect to a server to load the live map.');

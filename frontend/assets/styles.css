@@ -14,6 +14,12 @@
 body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 20%,rgba(45,212,191,.12),transparent 40%),radial-gradient(circle at 80% 0,rgba(14,165,233,.08),transparent 45%),linear-gradient(180deg,#020409,#060a11);color:var(--text)}
 .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 64px}
 .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:32px;gap:16px}
+.topbar-title{display:flex;flex-direction:column;gap:8px}
+.topnav{display:flex;gap:8px;align-items:center}
+.topnav .nav-btn{padding:6px 12px;border-radius:10px;font-size:14px;border:1px solid transparent;background:transparent;color:var(--muted)}
+.topnav .nav-btn:hover{color:var(--accent)}
+.topnav .nav-btn.active{color:var(--accent);border-color:rgba(94,234,212,0.45);background:rgba(94,234,212,0.12)}
+.topnav.hidden{display:none}
 h1{margin:0;font-size:26px;font-weight:600}
 h2{margin-top:0;font-size:24px;font-weight:600}
 h3{margin:0;font-size:20px;font-weight:600}
@@ -32,6 +38,12 @@ h4{margin:24px 0 8px;font-size:16px;font-weight:600}
 .card-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 .card-header h3{font-size:18px}
 
+.settings-card{max-width:520px;margin:0 auto}
+.settings-body{display:flex;flex-direction:column;gap:16px}
+.settings-body label{display:flex;flex-direction:column;gap:6px;font-size:14px;color:var(--muted)}
+.settings-hint{font-size:13px;color:var(--muted);border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);border-radius:12px;padding:12px;line-height:1.6}
+.settings-hint code{background:#0b131f;padding:2px 6px;border-radius:6px;color:var(--accent);font-family:"JetBrains Mono",monospace;font-size:12px}
+
 input,button,select{font-size:15px}
 input,select{padding:10px 12px;border-radius:12px;border:1px solid #1f2b3d;background:var(--bg-alt);color:var(--text)}
 select{appearance:none;background-image:url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 12 8" fill="none"%3E%3Cpath d="M1 1.5L6 6.5L11 1.5" stroke="%23dbe8ef" stroke-width="1.4" stroke-linecap="round"/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
@@ -44,6 +56,8 @@ button.ghost:hover{border-color:#31506d}
 button.icon{width:36px;height:36px;display:flex;align-items:center;justify-content:center;padding:0;border-radius:50%;background:transparent;border:1px solid #243244}
 button.icon:hover{border-color:var(--accent-strong);color:var(--accent)}
 button.small{padding:6px 10px;font-size:13px;border-radius:10px}
+button.link{border:none;background:transparent;color:var(--accent);padding:0;font-size:14px}
+button.link:hover{color:#fff}
 
 .row{display:flex;gap:10px;align-items:center;margin-top:12px}
 .row.quick-row{flex-wrap:wrap}
@@ -112,6 +126,11 @@ ul{list-style:none;padding:0;margin:0}
 .live-map-card .map-team-members{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
 .live-map-card .map-team-members li{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--muted)}
 .map-color-chip{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid rgba(0,0,0,0.4);box-shadow:0 0 0 1px rgba(255,255,255,0.1)}
+.map-upload{border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:12px;background:#0b131f;display:flex;flex-direction:column;gap:10px}
+.map-upload p{margin:0;font-size:13px;color:var(--muted)}
+.map-upload-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.map-upload input[type=file]{padding:6px;background:transparent;border:none;color:var(--muted)}
+.map-upload .notice{margin:0}
 
 @media(max-width:720px){
   .wrap{padding:24px 16px 48px}

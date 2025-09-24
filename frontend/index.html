@@ -9,7 +9,13 @@
 <body>
   <div class="wrap">
     <header class="topbar">
-      <h1>Rust Admin Online — Open Source</h1>
+      <div class="topbar-title">
+        <h1>Rust Admin Online — Open Source</h1>
+        <nav id="mainNav" class="topnav hidden">
+          <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
+          <button id="navSettings" type="button" class="nav-btn">Settings</button>
+        </nav>
+      </div>
       <div id="userBox" class="muted"></div>
     </header>
 
@@ -39,66 +45,89 @@
     </section>
 
     <section id="appPanel" class="hidden">
-      <div class="grid3" id="mainGrid">
-        <div class="card" id="serversCard">
-          <div class="card-header">
-            <h3>Servers</h3>
-            <button id="btnRefreshServers" class="icon" title="Refresh">⟳</button>
-          </div>
-          <ul id="servers"></ul>
-          <details>
-            <summary>Add server</summary>
-            <div class="grid2">
-              <input id="svName" placeholder="Name">
-              <input id="svHost" placeholder="Host/IP">
-              <input id="svPort" type="number" placeholder="RCON Port" value="28017">
-              <input id="svPass" placeholder="Password">
+      <div id="dashboardPanel">
+        <div class="grid3" id="mainGrid">
+          <div class="card" id="serversCard">
+            <div class="card-header">
+              <h3>Servers</h3>
+              <button id="btnRefreshServers" class="icon" title="Refresh">⟳</button>
             </div>
-            <label class="inline"><input type="checkbox" id="svTLS"> Use TLS (wss)</label>
-            <button id="btnAddServer" class="ghost">Add server</button>
-          </details>
+            <ul id="servers"></ul>
+            <details>
+              <summary>Add server</summary>
+              <div class="grid2">
+                <input id="svName" placeholder="Name">
+                <input id="svHost" placeholder="Host/IP">
+                <input id="svPort" type="number" placeholder="RCON Port" value="28017">
+                <input id="svPass" placeholder="Password">
+              </div>
+              <label class="inline"><input type="checkbox" id="svTLS"> Use TLS (wss)</label>
+              <button id="btnAddServer" class="ghost">Add server</button>
+            </details>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>Console</h3>
+              <button id="btnClearConsole" class="icon" title="Clear console">✕</button>
+            </div>
+            <pre id="console"></pre>
+            <div class="row">
+              <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
+              <button id="btnSend" class="accent">Send</button>
+            </div>
+            <div class="row quick-row" id="quickCommands"></div>
+          </div>
+
+          <div id="moduleColumn" class="module-stack"></div>
         </div>
 
-        <div class="card">
+        <div id="userCard" class="card hidden">
           <div class="card-header">
-            <h3>Console</h3>
-            <button id="btnClearConsole" class="icon" title="Clear console">✕</button>
+            <h3>Team access</h3>
           </div>
-          <pre id="console"></pre>
-          <div class="row">
-            <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
-            <button id="btnSend" class="accent">Send</button>
+          <div class="user-create">
+            <h4>Invite a teammate</h4>
+            <div class="grid2 stack-sm">
+              <input id="newUserName" placeholder="Username">
+              <input id="newUserPassword" type="password" placeholder="Temporary password">
+            </div>
+            <label>Role
+              <select id="newUserRole">
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+            <div class="row">
+              <button id="btnCreateUser" class="accent">Create user</button>
+            </div>
+            <p id="userFeedback" class="notice hidden"></p>
           </div>
-          <div class="row quick-row" id="quickCommands"></div>
+          <h4>Existing users</h4>
+          <ul id="userList" class="users"></ul>
         </div>
-
-        <div id="moduleColumn" class="module-stack"></div>
       </div>
 
-      <div id="userCard" class="card hidden">
-        <div class="card-header">
-          <h3>Team access</h3>
-        </div>
-        <div class="user-create">
-          <h4>Invite a teammate</h4>
-          <div class="grid2 stack-sm">
-            <input id="newUserName" placeholder="Username">
-            <input id="newUserPassword" type="password" placeholder="Temporary password">
+      <section id="settingsPanel" class="hidden">
+        <div class="card settings-card">
+          <div class="card-header">
+            <h3>Personal settings</h3>
           </div>
-          <label>Role
-            <select id="newUserRole">
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
-          <div class="row">
-            <button id="btnCreateUser" class="accent">Create user</button>
+          <div class="settings-body">
+            <p class="muted">Your RustMaps API key is stored per user. The map is cached after the first successful download each wipe and reset on the first Thursday of every month.</p>
+            <label>RustMaps API key
+              <input id="rustMapsKey" placeholder="pk_live_..." autocomplete="off">
+            </label>
+            <div class="row">
+              <button id="btnSaveSettings" class="accent">Save settings</button>
+            </div>
+            <p id="settingsStatus" class="notice hidden"></p>
+            <div class="settings-hint">
+              <p>Missing imagery for custom maps? Run <code>world.rendermap</code> in RCON or the server console, wait for the render to finish inside your Rust server folder, and upload the image from the live map module.</p>
+            </div>
           </div>
-          <p id="userFeedback" class="notice hidden"></p>
         </div>
-        <h4>Existing users</h4>
-        <ul id="userList" class="users"></ul>
-      </div>
+      </section>
     </section>
   </div>
 

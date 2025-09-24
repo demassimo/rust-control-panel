@@ -7,6 +7,11 @@
   const loginPanel = $('#loginPanel');
   const appPanel = $('#appPanel');
   const userBox = $('#userBox');
+  const mainNav = $('#mainNav');
+  const navDashboard = $('#navDashboard');
+  const navSettings = $('#navSettings');
+  const dashboardPanel = $('#dashboardPanel');
+  const settingsPanel = $('#settingsPanel');
   const loginError = $('#loginError');
   const registerInfo = $('#registerInfo');
   const registerForm = $('#registerForm');
@@ -37,6 +42,9 @@
   const newUserRole = $('#newUserRole');
   const btnCreateUser = $('#btnCreateUser');
   const quickCommandsEl = $('#quickCommands');
+  const rustMapsKeyInput = $('#rustMapsKey');
+  const btnSaveSettings = $('#btnSaveSettings');
+  const settingsStatus = $('#settingsStatus');
 
   const state = {
     API: '',
@@ -45,7 +53,9 @@
     currentServerId: null,
     serverItems: new Map(),
     allowRegistration: false,
-    statusTimer: null
+    statusTimer: null,
+    settings: {},
+    activePanel: 'dashboard'
   };
 
   let socket = null;
@@ -134,6 +144,22 @@
   registerQuickCommand({ id: 'cmd-say', label: 'say', command: 'say "Hello from panel"', order: 30 });
   registerQuickCommand({ id: 'cmd-playerlist', label: 'playerlist', command: 'playerlist', order: 40 });
 
+  function switchPanel(panel = 'dashboard') {
+    state.activePanel = panel;
+    if (panel === 'settings') {
+      dashboardPanel?.classList.add('hidden');
+      settingsPanel?.classList.remove('hidden');
+      navSettings?.classList.add('active');
+      navDashboard?.classList.remove('active');
+    } else {
+      dashboardPanel?.classList.remove('hidden');
+      settingsPanel?.classList.add('hidden');
+      navDashboard?.classList.add('active');
+      navSettings?.classList.remove('active');
+    }
+    if (panel !== 'settings') hideNotice(settingsStatus);
+  }
+
   function createModuleCard({ id, title, icon } = {}) {
     if (!moduleColumn) throw new Error('Module mount element missing');
     const card = document.createElement('div');
@@ -176,14 +202,20 @@
     unauthorized: 'Your session expired. Please sign in again.',
     last_admin: 'You cannot remove the final administrator.',
     cannot_delete_self: 'You cannot remove your own account.',
-    no_rustmaps_api_key: 'RustMaps integration is not configured on the server.',
-    rustmaps_unauthorized: 'RustMaps rejected the configured API key.',
-    rustmaps_not_found: 'RustMaps could not find a generated map for this seed and size yet.',
+    rustmaps_api_key_missing: 'Add your RustMaps API key in Settings to enable the live map.',
+    rustmaps_unauthorized: 'RustMaps rejected the configured API key. Double-check it in Settings.',
+    rustmaps_not_found: 'RustMaps has not published a generated map for this seed yet.',
     rustmaps_error: 'RustMaps responded with an unexpected error.',
+    rustmaps_image_error: 'RustMaps returned an invalid map image.',
     live_map_failed: 'Unable to load the live map right now.',
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
-    no_server_selected: 'Select a server before sending commands.'
+    no_server_selected: 'Select a server before sending commands.',
+    invalid_payload: 'The request payload was not accepted.',
+    missing_image: 'Choose an image before uploading.',
+    invalid_image: 'The selected image could not be processed.',
+    image_too_large: 'The image is too large. Please upload a file under 20 MB.',
+    map_upload_failed: 'Uploading the map image failed. Please try again.'
   };
 
   function errorCode(err) {
@@ -482,10 +514,14 @@
     showLogin() {
       loginPanel.classList.remove('hidden');
       appPanel.classList.add('hidden');
+      mainNav?.classList.add('hidden');
+      switchPanel('dashboard');
     },
     showApp() {
       loginPanel.classList.add('hidden');
       appPanel.classList.remove('hidden');
+      mainNav?.classList.remove('hidden');
+      switchPanel(state.activePanel || 'dashboard');
     },
     log(line) {
       const time = new Date().toLocaleTimeString();
@@ -546,7 +582,9 @@
       servers: getServerList()
     }),
     getServers: getServerList,
-    getServer: getServerData
+    getServer: getServerData,
+    getSettings: () => ({ ...state.settings }),
+    openSettings: () => switchPanel('settings')
   };
 
   if (window.ModuleLoader?.init) {
@@ -561,16 +599,22 @@
     disconnectSocket();
     localStorage.removeItem('token');
     state.serverItems.clear();
+    state.settings = {};
+    state.activePanel = 'dashboard';
     serversEl.innerHTML = '';
     ui.clearConsole();
     ui.setUser(null);
     userCard.classList.add('hidden');
     hideNotice(userFeedback);
+    hideNotice(settingsStatus);
+    if (rustMapsKeyInput) rustMapsKeyInput.value = '';
     ui.showLogin();
     loadPublicConfig();
     if (previousServer != null) moduleBus.emit('server:disconnected', { serverId: previousServer, reason: 'logout' });
     state.currentServerId = null;
     moduleBus.emit('auth:logout');
+    moduleBus.emit('settings:updated', { settings: {} });
+    mainNav?.classList.add('hidden');
   }
 
   function handleUnauthorized() {
@@ -722,6 +766,38 @@
     }
   }
 
+  async function loadSettings() {
+    if (!state.TOKEN) return;
+    hideNotice(settingsStatus);
+    try {
+      const data = await api('/api/me/settings');
+      state.settings = data || {};
+      if (rustMapsKeyInput) rustMapsKeyInput.value = state.settings.rustmaps_api_key || '';
+      moduleBus.emit('settings:updated', { settings: { ...state.settings } });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to load settings: ' + describeError(err));
+    }
+  }
+
+  async function saveSettings() {
+    if (!state.TOKEN) {
+      showNotice(settingsStatus, describeError('unauthorized'), 'error');
+      return;
+    }
+    hideNotice(settingsStatus);
+    const payload = { rustmaps_api_key: rustMapsKeyInput?.value?.trim() || '' };
+    try {
+      const data = await api('/api/me/settings', payload, 'POST');
+      state.settings = data || {};
+      showNotice(settingsStatus, 'Settings saved.', 'success');
+      moduleBus.emit('settings:updated', { settings: { ...state.settings } });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(settingsStatus, describeError(err), 'error');
+    }
+  }
+
   async function attemptSessionResume() {
     if (!state.TOKEN) {
       ui.showLogin();
@@ -730,6 +806,7 @@
     try {
       const me = await api('/api/me');
       state.currentUser = me;
+      await loadSettings();
       ui.setUser(me);
       ui.showApp();
       ensureSocket();
@@ -763,6 +840,7 @@
       state.TOKEN = data.token;
       localStorage.setItem('token', state.TOKEN);
       state.currentUser = { id: data.id, username: data.username, role: data.role };
+      await loadSettings();
       ui.setUser(state.currentUser);
       ui.showApp();
       ensureSocket();
@@ -861,6 +939,10 @@
   }
 
   function bindEvents() {
+    navDashboard?.addEventListener('click', () => switchPanel('dashboard'));
+    navSettings?.addEventListener('click', () => switchPanel('settings'));
+    btnSaveSettings?.addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
+    rustMapsKeyInput?.addEventListener('input', () => hideNotice(settingsStatus));
     $('#btnLogin')?.addEventListener('click', handleLogin);
     btnRegister?.addEventListener('click', handleRegister);
     btnAddServer?.addEventListener('click', addServer);
