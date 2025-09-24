@@ -69,9 +69,19 @@ const auth = authMiddleware(JWT_SECRET);
 const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
+
+let monitorController = null;
+let monitorRefreshPromise = null;
+
+const PLAYER_CONNECTION_DEDUPE_MS = 5 * 60 * 1000;
+const recentPlayerConnections = new Map();
+const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
+
 const steamProfileCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
+
+
 
 let monitorController = null;
 let monitorRefreshPromise = null;
@@ -784,11 +794,22 @@ rconEventBus.on('monitor_error', (serverId, error) => {
   });
 });
 
+
+async function fetchServersForMonitoring() {
+  if (typeof db.listServersWithSecrets === 'function') {
+    return await db.listServersWithSecrets();
+  }
+  return await db.listServers();
+}
+
+
 async function refreshMonitoredServers() {
   if (monitorRefreshPromise) return monitorRefreshPromise;
   monitorRefreshPromise = (async () => {
     try {
-      const list = await db.listServers();
+
+      const list = await fetchServersForMonitoring();
+
       const seen = new Set();
       for (const row of list) {
         const key = Number(row.id);
@@ -994,7 +1015,17 @@ app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
 
 // --- Servers CRUD
 app.get('/api/servers', auth, async (req, res) => {
-  try { res.json(await db.listServers()); } catch { res.status(500).json({ error: 'db_error' }); }
+  try {
+    const rows = await db.listServers();
+    const sanitized = rows.map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const { password: _pw, ...rest } = row;
+      return rest;
+    });
+    res.json(sanitized);
+  } catch {
+    res.status(500).json({ error: 'db_error' });
+  }
 });
 
 app.get('/api/servers/status', auth, (req, res) => {
