@@ -723,6 +723,14 @@
     tlsInput.type = 'checkbox';
     tlsCheckboxLabel.appendChild(tlsInput);
     tlsCheckboxLabel.appendChild(document.createTextNode(' Use TLS (wss)'));
+    const removeRow = document.createElement('div');
+    removeRow.className = 'row remove-row';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'ghost danger';
+    removeBtn.textContent = 'Remove server';
+    removeRow.appendChild(removeBtn);
+
     const formRow = document.createElement('div');
     formRow.className = 'row';
     const cancelBtn = document.createElement('button');
@@ -739,6 +747,7 @@
     feedback.className = 'server-edit-feedback hidden';
     editForm.appendChild(formGrid);
     editForm.appendChild(tlsCheckboxLabel);
+    editForm.appendChild(removeRow);
     editForm.appendChild(formRow);
     editForm.appendChild(feedback);
 
@@ -787,6 +796,38 @@
       ev.preventDefault();
       showFeedback('');
       toggleEdit(false);
+    });
+
+    removeBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const label = entry.data?.name || server.name || `Server #${server.id}`;
+      if (!confirm(`Remove ${label}? This cannot be undone.`)) return;
+      removeBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveBtn.disabled = true;
+      showFeedback('Removing…');
+      try {
+        await api(`/api/servers/${server.id}`, null, 'DELETE');
+        ui.log('Server removed: ' + label);
+        const wasActive = state.currentServerId === server.id;
+        toggleEdit(false);
+        state.serverItems.delete(String(server.id));
+        card.remove();
+        highlightSelectedServer();
+        moduleBus.emit('servers:updated', { servers: getServerList() });
+        if (wasActive) hideWorkspace('remove');
+        await refreshServers();
+      } catch (err) {
+        if (errorCode(err) === 'unauthorized') {
+          handleUnauthorized();
+        } else {
+          showFeedback(describeError(err), 'error');
+        }
+      } finally {
+        removeBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.disabled = false;
+      }
     });
 
     editBtn.addEventListener('click', (ev) => {
