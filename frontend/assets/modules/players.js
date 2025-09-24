@@ -3,7 +3,7 @@
 
   window.registerModule({
     id: 'players-directory',
-    title: 'Players',
+    title: 'All Players',
     order: 10,
     setup(ctx){
       const list = document.createElement('ul');
@@ -52,7 +52,7 @@
       function render(players) {
         list.innerHTML = '';
         if (!Array.isArray(players) || players.length === 0) {
-          setMessage('No tracked players yet. Import Steam profiles to populate this list.');
+          setMessage('No tracked players for this server yet. Import Steam profiles or let players connect to populate this list.');
           return;
         }
         clearMessage();
@@ -60,11 +60,12 @@
           const li = document.createElement('li');
           const left = document.createElement('div');
           const strong = document.createElement('strong');
-          strong.textContent = p.persona || p.steamid;
+          strong.textContent = p.display_name || p.persona || p.steamid;
           left.appendChild(strong);
           const meta = document.createElement('div');
           meta.className = 'muted small';
-          meta.textContent = p.steamid;
+          const lastSeen = formatTimestamp(p.last_seen);
+          meta.textContent = lastSeen ? `${p.steamid} · Last seen ${lastSeen}` : p.steamid;
           left.appendChild(meta);
           const right = document.createElement('div');
           right.className = 'server-actions';
@@ -86,19 +87,31 @@
         }
       }
 
-      let isLoading = false;
-      async function refresh(reason){
-        if (isLoading) return;
-        const state = ctx.getState?.();
-        if (!state?.currentUser) {
+      const state = {
+        serverId: null,
+        isLoading: false
+      };
+
+      async function refresh(reason, serverIdOverride){
+        if (state.isLoading) return;
+        const globalState = ctx.getState?.();
+        if (!globalState?.currentUser) {
           list.innerHTML = '';
           setMessage('Sign in to view player directory.');
           return;
         }
-        isLoading = true;
+        const serverId = Number(serverIdOverride ?? state.serverId ?? globalState.currentServerId);
+        if (!Number.isFinite(serverId)) {
+          state.serverId = null;
+          list.innerHTML = '';
+          setMessage('Select a server to view player directory.');
+          return;
+        }
+        state.serverId = serverId;
+        state.isLoading = true;
         setMessage('Loading players…');
         try {
-          const players = await ctx.api('/api/players?limit=200');
+          const players = await ctx.api(`/api/servers/${serverId}/players?limit=200`);
           render(players);
         } catch (err) {
           if (ctx.errorCode?.(err) === 'unauthorized') {
@@ -108,18 +121,42 @@
             ctx.log?.('Players module error: ' + (err?.message || err));
           }
         } finally {
-          isLoading = false;
+          state.isLoading = false;
         }
       }
 
+      function formatTimestamp(value) {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleString();
+      }
+
       const offLogin = ctx.on?.('auth:login', () => refresh('login'));
-      const offRefresh = ctx.on?.('players:refresh', (payload) => refresh(payload?.reason || 'manual'));
+      const offServerConnect = ctx.on?.('server:connected', ({ serverId }) => {
+        state.serverId = Number(serverId);
+        refresh('server-connect', serverId);
+      });
+      const offServerDisconnect = ctx.on?.('server:disconnected', ({ serverId }) => {
+        if (state.serverId != null && Number(serverId) === Number(state.serverId)) {
+          state.serverId = null;
+          list.innerHTML = '';
+          setMessage('Select a server to view player directory.');
+        }
+      });
+      const offRefresh = ctx.on?.('players:refresh', (payload) => {
+        const nextServer = Number(payload?.serverId ?? state.serverId);
+        refresh(payload?.reason || 'manual', Number.isFinite(nextServer) ? nextServer : undefined);
+      });
       const offLogout = ctx.on?.('auth:logout', () => {
         list.innerHTML = '';
         setMessage('Sign in to view player directory.');
+        state.serverId = null;
       });
 
       ctx.onCleanup?.(() => offLogin?.());
+      ctx.onCleanup?.(() => offServerConnect?.());
+      ctx.onCleanup?.(() => offServerDisconnect?.());
       ctx.onCleanup?.(() => offRefresh?.());
       ctx.onCleanup?.(() => offLogout?.());
 

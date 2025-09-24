@@ -38,13 +38,31 @@
       </div>
     </section>
 
-    <!-- Center: Map -->
+    <!-- Center: Player map -->
     <section class="col center">
-      <div class="card map-card">
+      <div class="card map-card player-map-card">
+        <div class="card-head">
+          <div class="card-title">Player Map</div>
+          <nav class="subnav" aria-label="Player views">
+            <button type="button" class="subnav-btn active" id="player-view-all">All Players</button>
+          </nav>
+        </div>
         <div class="card-body no-pad">
           <!-- Your live-map module mounts here -->
           <div class="map-wrap" data-module="live-map" id="live-map-slot"
                data-props='{"serverId":"__SERVER_ID__"}'></div>
+        </div>
+        <div class="card-foot player-list-foot">
+          <div class="player-list-head">
+            <div class="player-list-title">All Players <span id="player-count" class="muted">(0)</span></div>
+            <div class="card-tools">
+              <button class="btn ghost small" id="show-all">Show everyone</button>
+            </div>
+          </div>
+          <div class="player-list-body">
+            <div class="live-players-board" data-module="live-players"
+                 data-props='{"serverId":"__SERVER_ID__"}'></div>
+          </div>
         </div>
       </div>
 
@@ -65,18 +83,6 @@
       </div>
     </aside>
 
-    <section class="card players-card">
-      <div class="card-head">
-        <div class="card-title">Connected Players <span id="player-count" class="muted">(0)</span></div>
-        <div class="card-tools">
-          <button class="btn ghost small" id="show-all">Show everyone</button>
-        </div>
-      </div>
-      <div class="card-body no-pad">
-        <div class="live-players-board" data-module="live-players"
-             data-props='{"serverId":"__SERVER_ID__"}'></div>
-      </div>
-    </section>
   </main>
 </body>
 </html>

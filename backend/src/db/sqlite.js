@@ -46,6 +46,17 @@ function createApi(dbh, dialect) {
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS server_players(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL,
+        steamid TEXT NOT NULL,
+        display_name TEXT,
+        first_seen TEXT DEFAULT (datetime('now')),
+        last_seen TEXT DEFAULT (datetime('now')),
+        UNIQUE(server_id, steamid),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_server_players_server ON server_players(server_id);
       CREATE TABLE IF NOT EXISTS player_events(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         steamid TEXT NOT NULL,
@@ -149,6 +160,34 @@ function createApi(dbh, dialect) {
       return await dbh.all(`SELECT * FROM players WHERE steamid IN (${placeholders})`, steamids);
     },
     async listPlayers({limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
+    async recordServerPlayer({ server_id, steamid, display_name = null, seen_at = null }){
+      const serverIdNum = Number(server_id);
+      if (!Number.isFinite(serverIdNum)) return;
+      const sid = String(steamid || '').trim();
+      if (!sid) return;
+      const seen = seen_at || new Date().toISOString();
+      await dbh.run(`
+        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen)
+        VALUES(?,?,?,?,?)
+        ON CONFLICT(server_id, steamid) DO UPDATE SET
+          display_name=COALESCE(excluded.display_name, server_players.display_name),
+          last_seen=excluded.last_seen
+      `,[serverIdNum,sid,display_name,seen,seen]);
+    },
+    async listServerPlayers(serverId,{limit=100,offset=0}={}){
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      return await dbh.all(`
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.first_seen, sp.last_seen,
+               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=?
+        ORDER BY sp.last_seen DESC
+        LIMIT ? OFFSET ?
+      `,[serverIdNum,limit,offset]);
+    },
     async addPlayerEvent(ev){ await dbh.run('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
     async getUserSettings(userId){
