@@ -46,7 +46,7 @@ function normalizeEndpoint({ host, port, tls }) {
   return { host: resolvedHost, port: resolvedPort, tls: useTls };
 }
 
-export default class RustWebRcon extends EventEmitter {
+class RustWebRcon extends EventEmitter {
   constructor({
     host,
     port,
@@ -296,3 +296,103 @@ export default class RustWebRcon extends EventEmitter {
     else this.emit('event', obj);
   }
 }
+
+const clientMap = new Map();
+const bridge = new EventEmitter();
+
+function toServerKey(rowOrId) {
+  if (rowOrId && typeof rowOrId === 'object') {
+    const value = Number(rowOrId.id ?? rowOrId.server_id ?? rowOrId.serverId);
+    if (Number.isFinite(value)) return value;
+  }
+  const numeric = Number(rowOrId);
+  if (Number.isFinite(numeric)) return numeric;
+  throw new Error('RustWebRcon: server id is required.');
+}
+
+function emitScoped(event, key, ...args) {
+  bridge.emit(event, key, ...args);
+  bridge.emit(`${event}:${key}`, ...args);
+}
+
+function attachClientEvents(key, client) {
+  client.on('open', () => emitScoped('open', key));
+  client.on('reconnect', () => emitScoped('reconnect', key));
+  client.on('message', (message) => emitScoped('message', key, message));
+  client.on('console', (line, payload) => emitScoped('console', key, line, payload));
+  client.on('chat', (line, payload) => emitScoped('chat', key, line, payload));
+  client.on('event', (payload) => emitScoped('event', key, payload));
+  client.on('raw', (text) => emitScoped('raw', key, text));
+  client.on('error', (err) => emitScoped('error', key, err));
+  client.on('close', () => {
+    clientMap.delete(key);
+    emitScoped('close', key, { manual: !!client.manualClose });
+  });
+}
+
+function ensureClient(row) {
+  const key = toServerKey(row);
+  if (clientMap.has(key)) return clientMap.get(key);
+  const host = row?.host;
+  const port = row?.port;
+  const password = row?.password;
+  const tls = !!row?.tls;
+  if (!host || !password) throw new Error('RustWebRcon: host and password are required.');
+  const client = new RustWebRcon({ host, port, password, tls });
+  attachClientEvents(key, client);
+  clientMap.set(key, client);
+  return client;
+}
+
+export function connectRcon(row) {
+  const client = ensureClient(row);
+  return client.ensure();
+}
+
+export function sendRconCommand(row, command, options) {
+  const client = ensureClient(row);
+  return client.command(command, options);
+}
+
+export function closeRcon(id) {
+  const key = toServerKey(id);
+  const client = clientMap.get(key);
+  if (!client) return;
+  clientMap.delete(key);
+  client.close().catch(() => {});
+}
+
+export function subscribeToRcon(id, handlers = {}) {
+  const key = toServerKey(id);
+  const mapping = [
+    ['open', handlers.open],
+    ['reconnect', handlers.reconnect],
+    ['message', handlers.message],
+    ['console', handlers.console],
+    ['chat', handlers.chat],
+    ['event', handlers.event],
+    ['raw', handlers.raw],
+    ['error', handlers.error],
+    ['close', handlers.close]
+  ];
+  const unsubs = [];
+  for (const [event, handler] of mapping) {
+    if (typeof handler !== 'function') continue;
+    const wrapped = (...args) => handler(...args);
+    bridge.on(`${event}:${key}`, wrapped);
+    unsubs.push(() => bridge.off(`${event}:${key}`, wrapped));
+  }
+  return () => {
+    while (unsubs.length) {
+      const fn = unsubs.pop();
+      try { fn(); }
+      catch { /* ignore */ }
+    }
+  };
+}
+
+export function activeRconIds() {
+  return [...clientMap.keys()];
+}
+
+export { RustWebRcon };
