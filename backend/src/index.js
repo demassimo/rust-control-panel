@@ -9,7 +9,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
-import { RustWebRcon } from './rcon.js';
+// index.js
+import RustWebRcon from './rcon.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
