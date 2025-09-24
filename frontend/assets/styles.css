@@ -101,7 +101,7 @@ button.accent {
 
 button.accent:hover { filter: brightness(1.05); }
 
-button.ghost {
+button.ghost { 
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(255, 255, 255, 0.08);
   color: var(--muted-strong);
@@ -109,6 +109,18 @@ button.ghost {
 }
 
 button.ghost:hover { border-color: rgba(255, 255, 255, 0.16); color: var(--text); }
+
+button.ghost.danger {
+  color: var(--danger);
+  border-color: rgba(248, 113, 113, 0.32);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+button.ghost.danger:hover {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fee2e2;
+}
 
 button.small { padding: 7px 14px; font-size: 0.9rem; border-radius: 999px; }
 
@@ -684,6 +696,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 .server-card-edit .row {
   margin-top: 0;
   justify-content: flex-end;
+}
+
+.server-card-edit .row.remove-row {
+  justify-content: flex-start;
 }
 
 .server-edit-feedback {
