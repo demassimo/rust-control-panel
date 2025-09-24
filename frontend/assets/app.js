@@ -496,7 +496,10 @@
   function highlightSelectedServer() {
     state.serverItems.forEach((entry, key) => {
       const active = Number(key) === state.currentServerId;
-      entry.element?.classList.toggle('active', active);
+      if (entry.element) {
+        entry.element.classList.toggle('active', active);
+        entry.element.setAttribute('aria-pressed', active ? 'true' : 'false');
+      }
     });
   }
 
@@ -604,27 +607,34 @@
   }
 
   function renderServer(server, status) {
-    const card = document.createElement('button');
-    card.type = 'button';
+    const entry = { data: { ...server }, status: null };
+    const card = document.createElement('div');
     card.className = 'server-card';
     card.dataset.serverId = server.id;
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+
+    const mainRow = document.createElement('div');
+    mainRow.className = 'server-card-main';
+
     const head = document.createElement('div');
     head.className = 'server-card-head';
     const titleWrap = document.createElement('div');
     titleWrap.className = 'server-card-title';
-    const name = document.createElement('h3');
-    name.textContent = server.name;
-    const meta = document.createElement('div');
-    meta.className = 'server-card-meta';
+    const nameEl = document.createElement('h3');
+    nameEl.textContent = server.name;
+    const metaEl = document.createElement('div');
+    metaEl.className = 'server-card-meta';
     const tlsLabel = server.tls ? ' · TLS' : '';
-    meta.textContent = `${server.host}:${server.port}${tlsLabel}`;
-    titleWrap.appendChild(name);
-    titleWrap.appendChild(meta);
+    metaEl.textContent = `${server.host}:${server.port}${tlsLabel}`;
+    titleWrap.appendChild(nameEl);
+    titleWrap.appendChild(metaEl);
     const statusPill = document.createElement('span');
     statusPill.className = 'status-pill';
     statusPill.textContent = 'Checking…';
     head.appendChild(titleWrap);
     head.appendChild(statusPill);
+
     const stats = document.createElement('div');
     stats.className = 'server-card-stats';
     const playersStat = createServerStat('👥', 'Players');
@@ -633,23 +643,198 @@
     stats.appendChild(playersStat.element);
     stats.appendChild(queueStat.element);
     stats.appendChild(latencyStat.element);
+
+    mainRow.appendChild(head);
+    mainRow.appendChild(stats);
+
     const foot = document.createElement('div');
     foot.className = 'server-card-foot';
-    card.appendChild(head);
-    card.appendChild(stats);
-    card.appendChild(foot);
-    card.addEventListener('click', () => connectServer(server.id));
-    serversEl.appendChild(card);
-    state.serverItems.set(String(server.id), {
-      element: card,
-      statusPill,
-      statusDetails: foot,
-      data: server,
-      status: null,
-      playersValue: playersStat.value,
-      queueValue: queueStat.value,
-      latencyValue: latencyStat.value
+    const details = document.createElement('div');
+    details.className = 'server-card-details';
+    const actions = document.createElement('div');
+    actions.className = 'server-card-actions';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'ghost small';
+    editBtn.textContent = 'Edit server';
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'accent small';
+    openBtn.textContent = 'Open workspace';
+    openBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      connectServer(server.id);
     });
+    actions.appendChild(editBtn);
+    actions.appendChild(openBtn);
+    foot.appendChild(details);
+    foot.appendChild(actions);
+
+    const editForm = document.createElement('form');
+    editForm.className = 'server-card-edit hidden';
+    editForm.id = `server-edit-${server.id}`;
+    editBtn.setAttribute('aria-controls', editForm.id);
+    editBtn.setAttribute('aria-expanded', 'false');
+    const formGrid = document.createElement('div');
+    formGrid.className = 'grid2 stack-sm';
+    const nameInput = document.createElement('input');
+    nameInput.placeholder = 'Name';
+    const hostInput = document.createElement('input');
+    hostInput.placeholder = 'Host/IP';
+    const portInput = document.createElement('input');
+    portInput.type = 'number';
+    portInput.min = '1';
+    portInput.placeholder = 'RCON Port';
+    const passwordInput = document.createElement('input');
+    passwordInput.type = 'password';
+    passwordInput.placeholder = 'Leave blank to keep current password';
+    formGrid.appendChild(nameInput);
+    formGrid.appendChild(hostInput);
+    formGrid.appendChild(portInput);
+    formGrid.appendChild(passwordInput);
+    const tlsLabel = document.createElement('label');
+    tlsLabel.className = 'inline';
+    const tlsInput = document.createElement('input');
+    tlsInput.type = 'checkbox';
+    tlsLabel.appendChild(tlsInput);
+    tlsLabel.appendChild(document.createTextNode(' Use TLS (wss)'));
+    const formRow = document.createElement('div');
+    formRow.className = 'row';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'ghost';
+    cancelBtn.textContent = 'Cancel';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'submit';
+    saveBtn.className = 'accent';
+    saveBtn.textContent = 'Save changes';
+    formRow.appendChild(cancelBtn);
+    formRow.appendChild(saveBtn);
+    const feedback = document.createElement('p');
+    feedback.className = 'server-edit-feedback hidden';
+    editForm.appendChild(formGrid);
+    editForm.appendChild(tlsLabel);
+    editForm.appendChild(formRow);
+    editForm.appendChild(feedback);
+
+    function showFeedback(message = '', variant = '') {
+      feedback.textContent = message;
+      feedback.classList.remove('hidden', 'error', 'success');
+      if (!message) {
+        feedback.classList.add('hidden');
+        return;
+      }
+      if (variant) feedback.classList.add(variant);
+    }
+
+    function resetEditInputs() {
+      const data = entry.data || {};
+      nameInput.value = data.name || '';
+      hostInput.value = data.host || '';
+      portInput.value = data.port != null ? String(data.port) : '';
+      tlsInput.checked = !!data.tls;
+      passwordInput.value = '';
+    }
+
+    let editOpen = false;
+    function toggleEdit(force) {
+      const next = typeof force === 'boolean' ? force : !editOpen;
+      if (next === editOpen) return;
+      editOpen = next;
+      if (next) {
+        resetEditInputs();
+        showFeedback('');
+        editForm.classList.remove('hidden');
+        editBtn.textContent = 'Close editor';
+        editBtn.setAttribute('aria-expanded', 'true');
+        card.classList.add('editing');
+        nameInput.focus();
+      } else {
+        editForm.classList.add('hidden');
+        editBtn.textContent = 'Edit server';
+        resetEditInputs();
+        editBtn.setAttribute('aria-expanded', 'false');
+        card.classList.remove('editing');
+      }
+    }
+
+    cancelBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      showFeedback('');
+      toggleEdit(false);
+    });
+
+    editBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleEdit();
+    });
+
+    editForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const name = nameInput.value.trim();
+      const host = hostInput.value.trim();
+      const port = parseInt(portInput.value || '0', 10);
+      const password = passwordInput.value.trim();
+      const useTls = !!tlsInput.checked;
+      if (!name || !host || !Number.isFinite(port) || port <= 0) {
+        showFeedback(describeError('missing_fields'), 'error');
+        return;
+      }
+      const payload = { name, host, port, tls: useTls };
+      if (password) payload.password = password;
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      showFeedback('Saving…');
+      try {
+        await api(`/api/servers/${server.id}`, payload, 'PATCH');
+        entry.data = { ...entry.data, name, host, port, tls: useTls ? 1 : 0 };
+        nameEl.textContent = name;
+        metaEl.textContent = `${host}:${port}${useTls ? ' · TLS' : ''}`;
+        ui.log('Server updated: ' + name);
+        showFeedback('Saved.', 'success');
+        setTimeout(() => toggleEdit(false), 700);
+      } catch (err) {
+        if (errorCode(err) === 'unauthorized') {
+          handleUnauthorized();
+        } else {
+          showFeedback(describeError(err), 'error');
+        }
+      } finally {
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        passwordInput.value = '';
+      }
+    });
+
+    card.addEventListener('click', (ev) => {
+      if (ev.target.closest('.server-card-actions') || ev.target.closest('.server-card-edit')) return;
+      connectServer(server.id);
+    });
+
+    card.addEventListener('keydown', (ev) => {
+      if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === card) {
+        ev.preventDefault();
+        connectServer(server.id);
+      }
+    });
+
+    card.appendChild(mainRow);
+    card.appendChild(foot);
+    card.appendChild(editForm);
+    serversEl.appendChild(card);
+
+    entry.element = card;
+    entry.statusPill = statusPill;
+    entry.statusDetails = details;
+    entry.playersValue = playersStat.value;
+    entry.queueValue = queueStat.value;
+    entry.latencyValue = latencyStat.value;
+    entry.toggleEdit = toggleEdit;
+    entry.nameEl = nameEl;
+    entry.metaEl = metaEl;
+    state.serverItems.set(String(server.id), entry);
+
     updateServerStatus(server.id, status);
   }
 
@@ -761,7 +946,7 @@
       }
       const profileBtn = document.createElement('button');
       profileBtn.className = 'ghost small';
-      profileBtn.textContent = 'Profile';
+      profileBtn.textContent = 'Profile & Settings';
       profileBtn.onclick = () => {
         hideWorkspace('nav');
         switchPanel('settings');
