@@ -2,6 +2,50 @@
 import WebSocket from 'ws';
 import EventEmitter from 'events';
 
+function normalizeEndpoint({ host, port, tls }) {
+  const rawHost = typeof host === 'string' ? host.trim() : '';
+  if (!rawHost) throw new Error('RustWebRcon: host is required.');
+
+  let resolvedHost = rawHost;
+  let resolvedPort = Number.parseInt(port, 10);
+  let useTls = !!tls;
+
+  const ensureScheme = (value, scheme) => (/^[a-z]+:\/\//i.test(value) ? value : `${scheme}//${value}`);
+  const tryParseUrl = (value) => {
+    try { return new URL(value); }
+    catch { return null; }
+  };
+
+  const scheme = useTls ? 'wss://' : 'ws://';
+  let parsed = tryParseUrl(ensureScheme(resolvedHost, scheme));
+  if (!parsed && resolvedHost.includes(':') && !resolvedHost.includes('[') && !resolvedHost.includes('//')) {
+    parsed = tryParseUrl(`${scheme}[${resolvedHost}]`);
+  }
+
+  if (parsed) {
+    if (parsed.hostname) resolvedHost = parsed.hostname;
+    if (parsed.port) {
+      const candidate = Number.parseInt(parsed.port, 10);
+      if (Number.isFinite(candidate)) resolvedPort = candidate;
+    }
+    if (parsed.protocol === 'wss:' || parsed.protocol === 'https:') useTls = true;
+    else if (parsed.protocol === 'ws:' || parsed.protocol === 'http:') useTls = false;
+  } else {
+    const hostPortMatch = resolvedHost.match(/^([^:\[]+):(\d+)$/);
+    if (hostPortMatch && !hostPortMatch[1].includes(':')) {
+      resolvedHost = hostPortMatch[1];
+      const candidate = Number.parseInt(hostPortMatch[2], 10);
+      if (Number.isFinite(candidate)) resolvedPort = candidate;
+    }
+  }
+
+  if (!Number.isFinite(resolvedPort) || resolvedPort <= 0 || resolvedPort > 65535) {
+    throw new Error('RustWebRcon: a valid port is required.');
+  }
+
+  return { host: resolvedHost, port: resolvedPort, tls: useTls };
+}
+
 export default class RustWebRcon extends EventEmitter {
   constructor({
     host,
@@ -15,13 +59,15 @@ export default class RustWebRcon extends EventEmitter {
     reconnectDelayMs = 3000,  // fixed delay (no backoff)
   }) {
     super();
-    if (!host || !port || !password) {
-      throw new Error('RustWebRcon: host, port, and password are required.');
+    if (!password) {
+      throw new Error('RustWebRcon: password is required.');
     }
-    this.host = host;
-    this.port = port;
+
+    const normalized = normalizeEndpoint({ host, port, tls });
+    this.host = normalized.host;
+    this.port = normalized.port;
+    this.tls = normalized.tls;
     this.password = password;
-    this.tls = !!tls;
 
     this.ws = null;
     this.connected = false;
