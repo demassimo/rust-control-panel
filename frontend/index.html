@@ -3,70 +3,154 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="panel-api-base" content="http://localhost:8787" />
   <title>Rust Admin Online — Open Source</title>
   <link rel="stylesheet" href="assets/styles.css" />
 </head>
 <body>
-  <div class="wrap">
-    <header class="topbar">
-      <div class="topbar-title">
-        <h1>Rust Admin Online — Open Source</h1>
-        <nav id="mainNav" class="topnav hidden">
-          <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
-          <button id="navSettings" type="button" class="nav-btn">Settings</button>
-        </nav>
+  <div class="app-shell">
+    <section id="loginPanel" class="login-layout">
+      <div class="login-hero">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">🛡️</span>
+          <div>
+            <h1>Rust Admin Dashboard</h1>
+            <p>Stay on top of every wipe with live server telemetry, team management and rapid response tools.</p>
+          </div>
+        </div>
+        <ul class="hero-points">
+          <li>Realtime console streaming with quick commands</li>
+          <li>Live map overlays with player and team syncing</li>
+          <li>Role-based access control for trusted operators</li>
+        </ul>
       </div>
-      <div id="userBox" class="muted"></div>
-    </header>
-
-    <section id="loginPanel" class="auth-grid">
-      <div class="auth-card">
-        <h2>Welcome back</h2>
-        <p class="muted">Sign in to orchestrate your Rust worlds and keep every server in check.</p>
-        <label>API Base URL<input id="apiBase" value="http://localhost:8787" placeholder="http://localhost:8787"></label>
-        <label>Username<input id="username" value="admin" autocomplete="username"></label>
-        <label>Password<input id="password" type="password" value="admin123" autocomplete="current-password"></label>
-        <button id="btnLogin" class="accent">Sign in</button>
-        <p id="loginError" class="notice hidden"></p>
-        <p class="muted small">Default credentials are for first boot only — change them in Settings once you are inside.</p>
-      </div>
-      <div class="auth-card" id="registerCard">
-        <h2>Create an account</h2>
-        <p id="registerInfo" class="muted">Registration is disabled by the administrator.</p>
-        <div id="registerForm" class="hidden">
-          <label>Username<input id="regUsername" autocomplete="username" placeholder="yourname"></label>
-          <label>Password<input id="regPassword" type="password" autocomplete="new-password" placeholder="Minimum 8 characters"></label>
-          <label>Confirm password<input id="regConfirm" type="password" autocomplete="new-password"></label>
-          <button id="btnRegister" class="ghost">Register</button>
-          <p id="registerError" class="notice hidden"></p>
-          <p id="registerSuccess" class="notice success hidden"></p>
+      <div class="login-grid">
+        <div class="login-card">
+          <h2>Sign in</h2>
+          <p class="muted">Enter your credentials to continue.</p>
+          <label>Username<input id="username" value="admin" autocomplete="username"></label>
+          <label>Password<input id="password" type="password" value="admin123" autocomplete="current-password"></label>
+          <button id="btnLogin" class="accent">Sign in</button>
+          <p id="loginError" class="notice hidden"></p>
+          <p class="muted small">Default credentials are for first boot only — change them once you are inside.</p>
+        </div>
+        <div class="login-card" id="registerCard">
+          <h2>Create an account</h2>
+          <p id="registerInfo" class="muted">Registration is disabled by the administrator.</p>
+          <div id="registerForm" class="hidden">
+            <label>Username<input id="regUsername" autocomplete="username" placeholder="yourname"></label>
+            <label>Password<input id="regPassword" type="password" autocomplete="new-password" placeholder="Minimum 8 characters"></label>
+            <label>Confirm password<input id="regConfirm" type="password" autocomplete="new-password"></label>
+            <button id="btnRegister" class="ghost">Register</button>
+            <p id="registerError" class="notice hidden"></p>
+            <p id="registerSuccess" class="notice success hidden"></p>
+          </div>
         </div>
       </div>
     </section>
 
-    <section id="appPanel" class="hidden">
-      <div id="dashboardPanel">
-        <div class="grid3" id="mainGrid">
-          <div class="card" id="serversCard">
-            <div class="card-header">
-              <h3>Servers</h3>
-              <button id="btnRefreshServers" class="icon" title="Refresh">⟳</button>
-            </div>
-            <ul id="servers"></ul>
-            <details>
-              <summary>Add server</summary>
-              <div class="grid2">
-                <input id="svName" placeholder="Name">
-                <input id="svHost" placeholder="Host/IP">
-                <input id="svPort" type="number" placeholder="RCON Port" value="28017">
-                <input id="svPass" placeholder="Password">
-              </div>
-              <label class="inline"><input type="checkbox" id="svTLS"> Use TLS (wss)</label>
-              <button id="btnAddServer" class="ghost">Add server</button>
-            </details>
+    <section id="appPanel" class="hidden app-layout">
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">🛡️</span>
+          <div>
+            <h1>Rust Admin Dashboard</h1>
+            <p class="muted">Welcome back, <span id="welcomeName">operator</span></p>
           </div>
+        </div>
+        <div class="header-controls">
+          <button id="btnToggleAddServer" class="ghost small">Add server</button>
+          <nav id="mainNav" class="topnav hidden">
+            <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
+            <button id="navSettings" type="button" class="nav-btn">Settings</button>
+          </nav>
+          <div id="userBox" class="user-box"></div>
+        </div>
+      </header>
 
-          <div class="card">
+      <main id="dashboardPanel" class="dashboard">
+        <section class="servers-section">
+          <div class="section-head">
+            <div>
+              <h2>Servers</h2>
+              <p class="muted">Monitor uptime and player population at a glance.</p>
+            </div>
+            <div class="section-actions">
+              <button id="btnRefreshServers" class="ghost icon" title="Refresh servers">⟳</button>
+            </div>
+          </div>
+          <div id="servers" class="server-grid"></div>
+          <p id="serversEmpty" class="empty-state hidden">No servers added yet. Connect your first Rust server to get started.</p>
+          <div id="addServerCard" class="add-server-card hidden">
+            <h3>Add server</h3>
+            <div class="grid2">
+              <input id="svName" placeholder="Name">
+              <input id="svHost" placeholder="Host/IP">
+              <input id="svPort" type="number" placeholder="RCON Port" value="28017">
+              <input id="svPass" placeholder="Password">
+            </div>
+            <label class="inline"><input type="checkbox" id="svTLS"> Use TLS (wss)</label>
+            <div class="row">
+              <button id="btnAddServer" class="accent">Save server</button>
+            </div>
+          </div>
+        </section>
+        <aside id="userCard" class="team-card hidden">
+          <div class="section-head">
+            <div>
+              <h2>Team access</h2>
+              <p class="muted">Invite trusted admins and manage their roles.</p>
+            </div>
+          </div>
+          <div class="team-card-body">
+            <div class="user-create">
+              <h4>Invite a teammate</h4>
+              <div class="grid2 stack-sm">
+                <input id="newUserName" placeholder="Username">
+                <input id="newUserPassword" type="password" placeholder="Temporary password">
+              </div>
+              <label>Role
+                <select id="newUserRole">
+                  <option value="user">User</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </label>
+              <div class="row">
+                <button id="btnCreateUser" class="accent">Create user</button>
+              </div>
+              <p id="userFeedback" class="notice hidden"></p>
+            </div>
+            <h4>Existing users</h4>
+            <ul id="userList" class="users"></ul>
+          </div>
+        </aside>
+      </main>
+
+      <section id="workspacePanel" class="workspace hidden">
+        <div class="workspace-header">
+          <button id="btnBackToDashboard" class="ghost small">← Back to Dashboard</button>
+          <div class="workspace-title">
+            <h2 id="workspaceServerName">Main PvP Server</h2>
+            <p id="workspaceServerMeta" class="muted small">192.168.1.100:28015</p>
+          </div>
+          <span id="workspaceStatus" class="status-pill">offline</span>
+        </div>
+        <div class="workspace-summary">
+          <div class="summary-card">
+            <span class="summary-label">Players</span>
+            <strong id="workspacePlayers">--</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Queue</span>
+            <strong id="workspaceQueue">--</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Latency</span>
+            <strong id="workspaceLatency">--</strong>
+          </div>
+        </div>
+        <div class="workspace-grid">
+          <div class="card console-card">
             <div class="card-header">
               <h3>Console</h3>
               <button id="btnClearConsole" class="icon" title="Clear console">✕</button>
@@ -78,52 +162,76 @@
             </div>
             <div class="row quick-row" id="quickCommands"></div>
           </div>
-
           <div id="moduleColumn" class="module-stack"></div>
         </div>
+      </section>
 
-        <div id="userCard" class="card hidden">
-          <div class="card-header">
-            <h3>Team access</h3>
-          </div>
-          <div class="user-create">
-            <h4>Invite a teammate</h4>
-            <div class="grid2 stack-sm">
-              <input id="newUserName" placeholder="Username">
-              <input id="newUserPassword" type="password" placeholder="Temporary password">
+      <section id="settingsPanel" class="hidden settings-panel">
+        <div class="profile-grid">
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>Profile Information</h3>
+              <p class="muted small">Manage your personal details.</p>
             </div>
-            <label>Role
-              <select id="newUserRole">
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
-              </select>
-            </label>
-            <div class="row">
-              <button id="btnCreateUser" class="accent">Create user</button>
+            <div class="profile-card-body">
+              <div class="profile-field">
+                <span class="label">Username</span>
+                <span id="profileUsername" class="value muted">—</span>
+              </div>
+              <div class="profile-field">
+                <span class="label">Role</span>
+                <span id="profileRole" class="value muted">—</span>
+              </div>
             </div>
-            <p id="userFeedback" class="notice hidden"></p>
           </div>
-          <h4>Existing users</h4>
-          <ul id="userList" class="users"></ul>
-        </div>
-      </div>
 
-      <section id="settingsPanel" class="hidden">
-        <div class="card settings-card">
-          <div class="card-header">
-            <h3>Personal settings</h3>
-          </div>
-          <div class="settings-body">
-            <p class="muted">Your RustMaps API key is stored per user. The map is cached after the first successful download each wipe and reset on the first Thursday of every month.</p>
-            <label>RustMaps API key
-              <input id="rustMapsKey" placeholder="pk_live_..." autocomplete="off">
-            </label>
-            <div class="row">
-              <button id="btnSaveSettings" class="accent">Save settings</button>
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>RustMaps Integration</h3>
+              <p class="muted small">Paste your API key to enable live map rendering.</p>
             </div>
-            <p id="settingsStatus" class="notice hidden"></p>
-            <div class="settings-hint">
-              <p>Missing imagery for custom maps? Run <code>world.rendermap</code> in RCON or the server console, wait for the render to finish inside your Rust server folder, and upload the image from the live map module.</p>
+            <div class="profile-card-body">
+              <label>RustMaps API key
+                <input id="rustMapsKey" placeholder="pk_live_..." autocomplete="off">
+              </label>
+              <div class="row">
+                <button id="btnSaveSettings" class="accent">Save settings</button>
+              </div>
+              <p id="settingsStatus" class="notice hidden"></p>
+            </div>
+          </div>
+
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>Change Password</h3>
+              <p class="muted small">Update your password regularly to keep access secure.</p>
+            </div>
+            <div class="profile-card-body">
+              <label>Current Password
+                <input type="password" id="currentPassword" placeholder="••••••••" disabled>
+              </label>
+              <label>New Password
+                <input type="password" id="newPassword" placeholder="Minimum 8 characters" disabled>
+              </label>
+              <label>Confirm Password
+                <input type="password" id="confirmPassword" placeholder="Minimum 8 characters" disabled>
+              </label>
+              <p class="muted small">Password changes are managed from the server CLI in this build.</p>
+            </div>
+          </div>
+
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>Two-Factor Authentication</h3>
+              <p class="muted small">Add an extra layer of security to your account.</p>
+            </div>
+            <div class="profile-card-body">
+              <div class="profile-field">
+                <span class="label">2FA Status</span>
+                <span class="value muted">Disabled</span>
+              </div>
+              <button class="ghost" disabled>Enable 2FA</button>
+              <p class="muted small">Coming soon.</p>
             </div>
           </div>
         </div>

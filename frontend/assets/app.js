@@ -11,6 +11,7 @@
   const navDashboard = $('#navDashboard');
   const navSettings = $('#navSettings');
   const dashboardPanel = $('#dashboardPanel');
+  const workspacePanel = $('#workspacePanel');
   const settingsPanel = $('#settingsPanel');
   const loginError = $('#loginError');
   const registerInfo = $('#registerInfo');
@@ -24,6 +25,7 @@
   const btnRefreshServers = $('#btnRefreshServers');
   const btnClearConsole = $('#btnClearConsole');
   const btnAddServer = $('#btnAddServer');
+  const btnToggleAddServer = $('#btnToggleAddServer');
   const svName = $('#svName');
   const svHost = $('#svHost');
   const svPort = $('#svPort');
@@ -31,7 +33,6 @@
   const svTLS = $('#svTLS');
   const btnSend = $('#btnSend');
   const cmdInput = $('#cmd');
-  const apiBaseInput = $('#apiBase');
   const loginUsername = $('#username');
   const loginPassword = $('#password');
   const regUsername = $('#regUsername');
@@ -45,6 +46,18 @@
   const rustMapsKeyInput = $('#rustMapsKey');
   const btnSaveSettings = $('#btnSaveSettings');
   const settingsStatus = $('#settingsStatus');
+  const serversEmpty = $('#serversEmpty');
+  const addServerCard = $('#addServerCard');
+  const welcomeName = $('#welcomeName');
+  const workspaceName = $('#workspaceServerName');
+  const workspaceMeta = $('#workspaceServerMeta');
+  const workspaceStatus = $('#workspaceStatus');
+  const workspacePlayers = $('#workspacePlayers');
+  const workspaceQueue = $('#workspaceQueue');
+  const workspaceLatency = $('#workspaceLatency');
+  const btnBackToDashboard = $('#btnBackToDashboard');
+  const profileUsername = $('#profileUsername');
+  const profileRole = $('#profileRole');
 
   const state = {
     API: '',
@@ -59,6 +72,7 @@
   };
 
   let socket = null;
+  let addServerPinned = false;
 
   const moduleBus = (() => {
     const listeners = new Map();
@@ -148,11 +162,13 @@
     state.activePanel = panel;
     if (panel === 'settings') {
       dashboardPanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.remove('hidden');
       navSettings?.classList.add('active');
       navDashboard?.classList.remove('active');
     } else {
       dashboardPanel?.classList.remove('hidden');
+      if (panel !== 'dashboard') workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       navDashboard?.classList.add('active');
       navSettings?.classList.remove('active');
@@ -248,9 +264,24 @@
     const trimmed = (value || '').trim().replace(/\/$/, '');
     if (!trimmed) return;
     state.API = trimmed;
-    if (apiBaseInput) apiBaseInput.value = trimmed;
     localStorage.setItem('apiBase', trimmed);
     loadPublicConfig();
+  }
+
+  function detectDefaultApiBase() {
+    const stored = localStorage.getItem('apiBase');
+    if (stored) return stored;
+    const meta = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
+    if (meta) return meta;
+    try {
+      const { protocol, hostname } = window.location;
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return `${protocol}//${hostname}:8787`;
+      }
+      return window.location.origin;
+    } catch {
+      return 'http://localhost:8787';
+    }
   }
 
   async function loadPublicConfig() {
@@ -296,6 +327,134 @@
     }
   }
 
+  function createServerStat(icon, label) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'server-stat';
+    const iconEl = document.createElement('span');
+    iconEl.className = 'stat-icon';
+    iconEl.textContent = icon;
+    const content = document.createElement('div');
+    const value = document.createElement('strong');
+    value.textContent = '--';
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    content.appendChild(value);
+    content.appendChild(caption);
+    wrapper.appendChild(iconEl);
+    wrapper.appendChild(content);
+    return { element: wrapper, value };
+  }
+
+  function showAddServerCard(options = {}) {
+    if (!addServerCard) return;
+    if (options.pinned) addServerPinned = true;
+    addServerCard.classList.remove('hidden');
+    if (svName) svName.focus();
+  }
+
+  function hideAddServerCard(options = {}) {
+    if (!addServerCard) return;
+    if (!options.force && addServerPinned) return;
+    addServerCard.classList.add('hidden');
+    if (options.force) addServerPinned = false;
+  }
+
+  function toggleAddServerCardVisibility() {
+    if (!addServerCard) return;
+    addServerPinned = !addServerPinned;
+    addServerCard.classList.toggle('hidden', !addServerPinned);
+    if (addServerPinned && svName) svName.focus();
+  }
+
+  function leaveCurrentServer(reason = 'close') {
+    const previous = state.currentServerId;
+    if (previous == null) return;
+    if (socket?.connected) {
+      try { socket.emit('leave-server', previous); }
+      catch { /* ignore */ }
+    }
+    moduleBus.emit('server:disconnected', { serverId: previous, reason });
+    state.currentServerId = null;
+    highlightSelectedServer();
+  }
+
+  function updateWorkspaceDisplay(entry) {
+    if (!entry || state.currentServerId == null) return;
+    const numericId = Number(entry.data?.id ?? entry.data);
+    if (!Number.isFinite(numericId) || numericId !== state.currentServerId) return;
+    const server = entry.data || {};
+    if (workspaceName) workspaceName.textContent = server.name || `Server #${numericId}`;
+    if (workspaceMeta) {
+      const tlsLabel = server.tls ? ' · TLS' : '';
+      workspaceMeta.textContent = server.host ? `${server.host}:${server.port}${tlsLabel}` : '';
+    }
+    const status = entry.status;
+    const pill = workspaceStatus;
+    const players = status?.details?.players?.online ?? null;
+    const maxPlayers = status?.details?.players?.max ?? null;
+    const queued = status?.details?.queued ?? null;
+    const latency = typeof status?.latency === 'number' ? status.latency : null;
+    const online = !!status?.ok;
+    if (pill) {
+      let cls = 'status-pill';
+      if (online) {
+        if (queued && queued > 0) {
+          cls += ' degraded';
+          pill.textContent = 'Busy';
+        } else {
+          cls += ' online';
+          pill.textContent = 'Online';
+        }
+      } else {
+        cls += ' offline';
+        pill.textContent = 'Offline';
+      }
+      pill.className = cls;
+      pill.title = status?.details?.hostname || status?.error || '';
+    }
+    if (workspacePlayers) {
+      if (online && players != null) {
+        const maxInfo = maxPlayers != null ? `/${maxPlayers}` : '';
+        workspacePlayers.textContent = `${players}${maxInfo}`;
+      } else {
+        workspacePlayers.textContent = '--';
+      }
+    }
+    if (workspaceQueue) {
+      workspaceQueue.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
+    }
+    if (workspaceLatency) {
+      workspaceLatency.textContent = latency != null ? `${latency} ms` : '--';
+    }
+  }
+
+  function showWorkspaceForServer(id) {
+    const entry = state.serverItems.get(String(id));
+    if (!entry) return;
+    dashboardPanel?.classList.add('hidden');
+    settingsPanel?.classList.add('hidden');
+    workspacePanel?.classList.remove('hidden');
+    updateWorkspaceDisplay(entry);
+  }
+
+  function hideWorkspace(reason = 'close') {
+    workspacePanel?.classList.add('hidden');
+    dashboardPanel?.classList.remove('hidden');
+    settingsPanel?.classList.add('hidden');
+    leaveCurrentServer(reason);
+    ui.clearConsole();
+    if (workspaceName) workspaceName.textContent = 'Select a server';
+    if (workspaceMeta) workspaceMeta.textContent = 'Pick a server card to inspect live data.';
+    if (workspacePlayers) workspacePlayers.textContent = '--';
+    if (workspaceQueue) workspaceQueue.textContent = '--';
+    if (workspaceLatency) workspaceLatency.textContent = '--';
+    if (workspaceStatus) {
+      workspaceStatus.className = 'status-pill';
+      workspaceStatus.textContent = 'offline';
+      workspaceStatus.title = '';
+    }
+  }
+
   function ensureSocket() {
     if (socket || !state.API) return socket;
     socket = io(state.API, { transports: ['websocket'] });
@@ -337,11 +496,7 @@
   function highlightSelectedServer() {
     state.serverItems.forEach((entry, key) => {
       const active = Number(key) === state.currentServerId;
-      entry.element.classList.toggle('active', active);
-      if (entry.connectBtn) {
-        entry.connectBtn.textContent = active ? 'Connected' : 'Connect';
-        entry.connectBtn.disabled = active;
-      }
+      entry.element?.classList.toggle('active', active);
     });
   }
 
@@ -349,14 +504,23 @@
     const key = String(id);
     const entry = state.serverItems.get(key);
     if (!entry) return;
-    entry.status = status;
+    entry.status = status || null;
     const pill = entry.statusPill;
     const details = entry.statusDetails;
+    const playersEl = entry.playersValue;
+    const queueEl = entry.queueValue;
+    const latencyEl = entry.latencyValue;
     if (!status) {
-      pill.className = 'status-pill';
-      pill.textContent = 'Unknown';
-      pill.title = '';
+      if (pill) {
+        pill.className = 'status-pill';
+        pill.textContent = 'Unknown';
+        pill.title = '';
+      }
       if (details) details.textContent = '';
+      if (playersEl) playersEl.textContent = '--';
+      if (queueEl) queueEl.textContent = '--';
+      if (latencyEl) latencyEl.textContent = '--';
+      updateWorkspaceDisplay(entry);
       return;
     }
     const online = !!status.ok;
@@ -366,21 +530,38 @@
     const latency = typeof status.latency === 'number' ? status.latency : null;
     const lastCheck = status.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : null;
 
-    let pillClass = 'status-pill';
-    if (online) {
-      if (queued && queued > 0) {
-        pillClass += ' degraded';
-        pill.textContent = 'Busy';
+    if (pill) {
+      let pillClass = 'status-pill';
+      if (online) {
+        if (queued && queued > 0) {
+          pillClass += ' degraded';
+          pill.textContent = 'Busy';
+        } else {
+          pillClass += ' online';
+          pill.textContent = 'Online';
+        }
       } else {
-        pillClass += ' online';
-        pill.textContent = 'Online';
+        pillClass += ' offline';
+        pill.textContent = 'Offline';
       }
-    } else {
-      pillClass += ' offline';
-      pill.textContent = 'Offline';
+      pill.className = pillClass;
+      pill.title = status?.details?.hostname || status?.error || '';
     }
-    pill.className = pillClass;
-    pill.title = status?.details?.hostname || status?.error || '';
+
+    if (playersEl) {
+      if (online && players != null) {
+        const maxInfo = maxPlayers != null ? `/${maxPlayers}` : '';
+        playersEl.textContent = `${players}${maxInfo}`;
+      } else {
+        playersEl.textContent = '--';
+      }
+    }
+    if (queueEl) {
+      queueEl.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
+    }
+    if (latencyEl) {
+      latencyEl.textContent = latency != null ? `${latency} ms` : '--';
+    }
 
     if (details) {
       const parts = [];
@@ -395,6 +576,7 @@
       details.textContent = parts.join(' · ');
       details.title = status?.details?.raw || status?.error || '';
     }
+    updateWorkspaceDisplay(entry);
     moduleBus.emit('server:status', { serverId: Number(id), status });
   }
 
@@ -422,44 +604,51 @@
   }
 
   function renderServer(server, status) {
-    const li = document.createElement('li');
-    li.dataset.serverId = server.id;
-    const heading = document.createElement('div');
-    heading.className = 'server-heading';
-    const titleBox = document.createElement('div');
-    const strong = document.createElement('strong');
-    strong.textContent = server.name;
-    titleBox.appendChild(strong);
-    const actions = document.createElement('div');
-    actions.className = 'server-actions';
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'server-card';
+    card.dataset.serverId = server.id;
+    const head = document.createElement('div');
+    head.className = 'server-card-head';
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'server-card-title';
+    const name = document.createElement('h3');
+    name.textContent = server.name;
+    const meta = document.createElement('div');
+    meta.className = 'server-card-meta';
+    const tlsLabel = server.tls ? ' · TLS' : '';
+    meta.textContent = `${server.host}:${server.port}${tlsLabel}`;
+    titleWrap.appendChild(name);
+    titleWrap.appendChild(meta);
     const statusPill = document.createElement('span');
     statusPill.className = 'status-pill';
     statusPill.textContent = 'Checking…';
-    const connectBtn = document.createElement('button');
-    connectBtn.className = 'accent connect';
-    connectBtn.textContent = 'Connect';
-    connectBtn.onclick = () => connectServer(server.id);
-    actions.appendChild(statusPill);
-    actions.appendChild(connectBtn);
-    heading.appendChild(titleBox);
-    heading.appendChild(actions);
-    const meta = document.createElement('div');
-    meta.className = 'server-meta';
-    const tlsLabel = server.tls ? ' · TLS' : '';
-    meta.innerHTML = `<span>${server.host}:${server.port}${tlsLabel}</span><span>ID ${server.id}</span>`;
-    const statusDetails = document.createElement('div');
-    statusDetails.className = 'status-details';
-    li.appendChild(heading);
-    li.appendChild(meta);
-    li.appendChild(statusDetails);
-    serversEl.appendChild(li);
+    head.appendChild(titleWrap);
+    head.appendChild(statusPill);
+    const stats = document.createElement('div');
+    stats.className = 'server-card-stats';
+    const playersStat = createServerStat('👥', 'Players');
+    const queueStat = createServerStat('⏳', 'Queue');
+    const latencyStat = createServerStat('⚡', 'Latency');
+    stats.appendChild(playersStat.element);
+    stats.appendChild(queueStat.element);
+    stats.appendChild(latencyStat.element);
+    const foot = document.createElement('div');
+    foot.className = 'server-card-foot';
+    card.appendChild(head);
+    card.appendChild(stats);
+    card.appendChild(foot);
+    card.addEventListener('click', () => connectServer(server.id));
+    serversEl.appendChild(card);
     state.serverItems.set(String(server.id), {
-      element: li,
+      element: card,
       statusPill,
-      statusDetails,
-      connectBtn,
+      statusDetails: foot,
       data: server,
-      status: null
+      status: null,
+      playersValue: playersStat.value,
+      queueValue: queueStat.value,
+      latencyValue: latencyStat.value
     });
     updateServerStatus(server.id, status);
   }
@@ -473,6 +662,13 @@
       for (const server of list) {
         const status = statuses?.[server.id] || statuses?.[String(server.id)];
         renderServer(server, status);
+      }
+      const hasServers = list.length > 0;
+      serversEmpty?.classList.toggle('hidden', hasServers);
+      if (!hasServers) {
+        showAddServerCard();
+      } else if (!addServerPinned) {
+        hideAddServerCard();
       }
       highlightSelectedServer();
       moduleBus.emit('servers:updated', { servers: list });
@@ -488,24 +684,31 @@
   function connectServer(id) {
     const numericId = Number(id);
     if (!Number.isFinite(numericId)) return;
+    const entry = state.serverItems.get(String(numericId));
+    if (!entry) return;
     const previous = state.currentServerId;
-    if (previous === numericId && socket?.connected) return;
+    if (previous === numericId) {
+      showWorkspaceForServer(numericId);
+      updateWorkspaceDisplay(entry);
+      return;
+    }
+    if (previous != null && previous !== numericId) {
+      if (socket?.connected) {
+        try { socket.emit('leave-server', previous); }
+        catch { /* ignore */ }
+      }
+      moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
+    }
     state.currentServerId = numericId;
     highlightSelectedServer();
-    const entry = state.serverItems.get(String(numericId));
-    const name = entry?.data?.name || `Server #${numericId}`;
     ui.clearConsole();
+    const name = entry?.data?.name || `Server #${numericId}`;
     ui.log(`Connecting to ${name}…`);
     const sock = ensureSocket();
-    if (sock && sock.connected && previous != null && previous !== numericId) {
-      sock.emit('leave-server', previous);
-    }
     if (sock && sock.connected) {
       sock.emit('join-server', numericId);
     }
-    if (previous != null && previous !== numericId) {
-      moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
-    }
+    showWorkspaceForServer(numericId);
     moduleBus.emit('server:connected', { serverId: numericId, server: entry?.data || null });
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
   }
@@ -515,12 +718,16 @@
       loginPanel.classList.remove('hidden');
       appPanel.classList.add('hidden');
       mainNav?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
       switchPanel('dashboard');
     },
     showApp() {
       loginPanel.classList.add('hidden');
       appPanel.classList.remove('hidden');
       mainNav?.classList.remove('hidden');
+      workspacePanel?.classList.add('hidden');
+      dashboardPanel?.classList.remove('hidden');
+      settingsPanel?.classList.add('hidden');
       switchPanel(state.activePanel || 'dashboard');
     },
     log(line) {
@@ -533,8 +740,15 @@
     },
     setUser(user) {
       userBox.innerHTML = '';
+      if (welcomeName) welcomeName.textContent = user?.username || 'operator';
+      if (profileUsername) profileUsername.textContent = user?.username || '—';
+      if (profileRole) {
+        const roleLabel = user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : '—';
+        profileRole.textContent = roleLabel;
+      }
       if (!user) return;
       const wrap = document.createElement('div');
+      wrap.className = 'user-ident';
       const strong = document.createElement('strong');
       strong.textContent = user.username;
       wrap.appendChild(strong);
@@ -545,10 +759,19 @@
         wrap.appendChild(document.createTextNode(' '));
         wrap.appendChild(badge);
       }
+      const profileBtn = document.createElement('button');
+      profileBtn.className = 'ghost small';
+      profileBtn.textContent = 'Profile';
+      profileBtn.onclick = () => {
+        hideWorkspace('nav');
+        switchPanel('settings');
+      };
       const btn = document.createElement('button');
-      btn.textContent = 'Sign out';
+      btn.className = 'ghost small';
+      btn.textContent = 'Logout';
       btn.onclick = () => logout();
       userBox.appendChild(wrap);
+      userBox.appendChild(profileBtn);
       userBox.appendChild(btn);
     }
   };
@@ -592,7 +815,7 @@
   }
 
   function logout() {
-    const previousServer = state.currentServerId;
+    hideWorkspace('logout');
     state.TOKEN = '';
     state.currentUser = null;
     stopStatusPolling();
@@ -610,8 +833,6 @@
     if (rustMapsKeyInput) rustMapsKeyInput.value = '';
     ui.showLogin();
     loadPublicConfig();
-    if (previousServer != null) moduleBus.emit('server:disconnected', { serverId: previousServer, reason: 'logout' });
-    state.currentServerId = null;
     moduleBus.emit('auth:logout');
     moduleBus.emit('settings:updated', { settings: {} });
     mainNav?.classList.add('hidden');
@@ -827,8 +1048,6 @@
 
   async function handleLogin() {
     hideNotice(loginError);
-    const base = apiBaseInput?.value;
-    if (base) setApiBase(base);
     const username = loginUsername?.value.trim();
     const password = loginPassword?.value || '';
     if (!username || !password) {
@@ -902,6 +1121,8 @@
       if (svPort) svPort.value = '28017';
       if (svPass) svPass.value = '';
       if (svTLS) svTLS.checked = false;
+      addServerPinned = false;
+      hideAddServerCard({ force: true });
       await refreshServers();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -939,8 +1160,8 @@
   }
 
   function bindEvents() {
-    navDashboard?.addEventListener('click', () => switchPanel('dashboard'));
-    navSettings?.addEventListener('click', () => switchPanel('settings'));
+    navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); });
+    navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); });
     btnSaveSettings?.addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
     rustMapsKeyInput?.addEventListener('input', () => hideNotice(settingsStatus));
     $('#btnLogin')?.addEventListener('click', handleLogin);
@@ -955,6 +1176,8 @@
     });
     btnRefreshServers?.addEventListener('click', () => refreshServers());
     btnClearConsole?.addEventListener('click', () => ui.clearConsole());
+    btnToggleAddServer?.addEventListener('click', () => toggleAddServerCardVisibility());
+    btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     btnCreateUser?.addEventListener('click', async () => {
       if (state.currentUser?.role !== 'admin') return;
       hideNotice(userFeedback);
@@ -981,13 +1204,10 @@
         else showNotice(userFeedback, describeError(err), 'error');
       }
     });
-    apiBaseInput?.addEventListener('change', (e) => setApiBase(e.target.value));
-    apiBaseInput?.addEventListener('blur', (e) => setApiBase(e.target.value));
   }
 
   async function init() {
-    const storedBase = localStorage.getItem('apiBase') || apiBaseInput?.value || 'http://localhost:8787';
-    setApiBase(storedBase || 'http://localhost:8787');
+    setApiBase(detectDefaultApiBase());
     bindEvents();
     if (state.TOKEN) {
       await attemptSessionResume();
