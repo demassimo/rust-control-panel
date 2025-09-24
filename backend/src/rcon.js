@@ -1,4 +1,4 @@
-// rcon.js — WebRCON client with central management (ESM, Node 18+)
+// rcon.js â€” WebRCON client with central management (ESM, Node 18+)
 import WebSocket from 'ws';
 import EventEmitter from 'events';
 
@@ -102,8 +102,12 @@ class RustWebRcon extends EventEmitter {
 
   get url() {
     const proto = this.tls ? 'wss' : 'ws';
-    const host = this.host.includes(':') && !this.host.startsWith('[') ? `[${this.host}]` : this.host;
-    return `${proto}://${host}:${this.port}/${encodeURIComponent(this.password)}`;
+    const host = this.host.includes(':') && !this.host.startsWith('[')
+      ? `[${this.host}]`
+      : this.host;
+
+    // IMPORTANT: raw password, no encodeURIComponent()
+    return `${proto}://${host}:${this.port}/${this.password}`;
   }
 
   async connect() {
@@ -180,7 +184,7 @@ class RustWebRcon extends EventEmitter {
       this.ws.on('message', onMessage);
       this.ws.on('error', onError);
       this.ws.on('close', onClose);
-      // No 'pong' — Rust doesn't send ws control frames
+      // No 'pong' â€” Rust doesn't send ws control frames
     });
   }
 
@@ -378,17 +382,30 @@ function attachClientEvents(key, client) {
 function ensureClient(row) {
   const key = toServerKey(row);
   if (clientMap.has(key)) return clientMap.get(key);
+
   const host = row?.host;
   const port = row?.port;
-  const password = row?.password;
+
+  // Normalize password: decode once if encoded, otherwise use raw
+  let password = row?.password || '';
+  try {
+    password = decodeURIComponent(password);
+  } catch {
+    // ignore if not encoded
+  }
+
   const tls = !!row?.tls;
   if (!host || !password) throw new Error('RustWebRcon: host and password are required.');
+
   const client = new RustWebRcon({
-    host, port, password, tls,
-    // disable keepalive completely if you want: heartbeatIntervalMs: 0,
+    host,
+    port,
+    password,
+    tls,
     heartbeatIntervalMs: 20000,
     keepaliveIdleMs: 20000,
   });
+
   attachClientEvents(key, client);
   clientMap.set(key, client);
   return client;
@@ -581,7 +598,7 @@ async function _pollOnce(id) {
         const reply = await sendRconCommand(row, cmd, { timeoutMs: _monitor.opts.timeoutMs });
         lastReply = reply;
       } catch (e) {
-        // single command failed — escalate as monitor error and backoff
+        // single command failed â€” escalate as monitor error and backoff
         emitScoped('monitor_error', id, e);
         const delay = _nextDelay(id);
         _monitor.inflight.delete(id);
