@@ -693,12 +693,12 @@
     formGrid.appendChild(hostInput);
     formGrid.appendChild(portInput);
     formGrid.appendChild(passwordInput);
-    const tlsLabel = document.createElement('label');
-    tlsLabel.className = 'inline';
+    const tlsCheckboxLabel = document.createElement('label');
+    tlsCheckboxLabel.className = 'inline';
     const tlsInput = document.createElement('input');
     tlsInput.type = 'checkbox';
-    tlsLabel.appendChild(tlsInput);
-    tlsLabel.appendChild(document.createTextNode(' Use TLS (wss)'));
+    tlsCheckboxLabel.appendChild(tlsInput);
+    tlsCheckboxLabel.appendChild(document.createTextNode(' Use TLS (wss)'));
     const formRow = document.createElement('div');
     formRow.className = 'row';
     const cancelBtn = document.createElement('button');
@@ -714,7 +714,7 @@
     const feedback = document.createElement('p');
     feedback.className = 'server-edit-feedback hidden';
     editForm.appendChild(formGrid);
-    editForm.appendChild(tlsLabel);
+    editForm.appendChild(tlsCheckboxLabel);
     editForm.appendChild(formRow);
     editForm.appendChild(feedback);
 
