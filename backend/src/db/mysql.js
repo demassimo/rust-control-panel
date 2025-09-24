@@ -82,6 +82,17 @@ function createApi(pool, dialect) {
         INDEX(steamid),
         CONSTRAINT fk_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS server_player_counts(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        player_count INT NOT NULL,
+        max_players INT NULL,
+        queued INT NULL,
+        sleepers INT NULL,
+        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_player_counts_server (server_id, recorded_at),
+        CONSTRAINT fk_player_counts_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS user_settings(
         user_id INT NOT NULL,
         \`key\` VARCHAR(64) NOT NULL,
@@ -152,6 +163,32 @@ function createApi(pool, dialect) {
           display_name=COALESCE(VALUES(display_name), server_players.display_name),
           last_seen=VALUES(last_seen)
       `,[serverIdNum,sid,display_name,seen,seen]);
+    },
+    async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, recorded_at=null }){
+      const serverIdNum = Number(server_id);
+      const playerCountNum = Number(player_count);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(playerCountNum)) return;
+      const maxPlayersNum = Number(max_players);
+      const queuedNum = Number(queued);
+      const sleepersNum = Number(sleepers);
+      let timestampDate = null;
+      if (recorded_at) {
+        const parsed = recorded_at instanceof Date ? recorded_at : new Date(recorded_at);
+        if (!Number.isNaN(parsed.getTime())) timestampDate = parsed;
+      }
+      if (!timestampDate) timestampDate = new Date();
+      const timestamp = timestampDate.toISOString().slice(0, 19).replace('T', ' ');
+      await exec(`
+        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, recorded_at)
+        VALUES(?,?,?,?,?,?)
+      `,[
+        serverIdNum,
+        Math.max(0, Math.trunc(playerCountNum)),
+        Number.isFinite(maxPlayersNum) ? Math.max(0, Math.trunc(maxPlayersNum)) : null,
+        Number.isFinite(queuedNum) ? Math.max(0, Math.trunc(queuedNum)) : null,
+        Number.isFinite(sleepersNum) ? Math.max(0, Math.trunc(sleepersNum)) : null,
+        timestamp
+      ]);
     },
     async listServerPlayers(serverId,{limit=100,offset=0}={}){
       const serverIdNum = Number(serverId);

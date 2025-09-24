@@ -66,6 +66,17 @@ function createApi(dbh, dialect) {
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE SET NULL
       );
+      CREATE TABLE IF NOT EXISTS server_player_counts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL,
+        player_count INTEGER NOT NULL,
+        max_players INTEGER,
+        queued INTEGER,
+        sleepers INTEGER,
+        recorded_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_player_counts_server ON server_player_counts(server_id, recorded_at);
       CREATE TABLE IF NOT EXISTS user_settings(
         user_id INTEGER NOT NULL,
         key TEXT NOT NULL,
@@ -173,6 +184,31 @@ function createApi(dbh, dialect) {
           display_name=COALESCE(excluded.display_name, server_players.display_name),
           last_seen=excluded.last_seen
       `,[serverIdNum,sid,display_name,seen,seen]);
+    },
+    async recordServerPlayerCount({ server_id, player_count, max_players = null, queued = null, sleepers = null, recorded_at = null }){
+      const serverIdNum = Number(server_id);
+      const playerCountNum = Number(player_count);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(playerCountNum)) return;
+      const maxPlayersNum = Number(max_players);
+      const queuedNum = Number(queued);
+      const sleepersNum = Number(sleepers);
+      let timestamp = null;
+      if (recorded_at) {
+        const parsed = recorded_at instanceof Date ? recorded_at : new Date(recorded_at);
+        if (!Number.isNaN(parsed.getTime())) timestamp = parsed.toISOString();
+      }
+      if (!timestamp) timestamp = new Date().toISOString();
+      await dbh.run(`
+        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, recorded_at)
+        VALUES(?,?,?,?,?,?)
+      `,[
+        serverIdNum,
+        Math.max(0, Math.trunc(playerCountNum)),
+        Number.isFinite(maxPlayersNum) ? Math.max(0, Math.trunc(maxPlayersNum)) : null,
+        Number.isFinite(queuedNum) ? Math.max(0, Math.trunc(queuedNum)) : null,
+        Number.isFinite(sleepersNum) ? Math.max(0, Math.trunc(sleepersNum)) : null,
+        timestamp
+      ]);
     },
     async listServerPlayers(serverId,{limit=100,offset=0}={}){
       const serverIdNum = Number(serverId);
