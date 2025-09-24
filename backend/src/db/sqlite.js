@@ -38,6 +38,11 @@ function createApi(dbh, dialect) {
         country TEXT,
         profileurl TEXT,
         vac_banned INTEGER DEFAULT 0,
+        game_bans INTEGER DEFAULT 0,
+        last_ban_days INTEGER,
+        visibility INTEGER,
+        rust_playtime_minutes INTEGER,
+        playtime_updated_at TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -69,10 +74,21 @@ function createApi(dbh, dialect) {
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
       `);
-      const cols = await dbh.all("PRAGMA table_info('users')");
-      if (!cols.some((c) => c.name === 'role')) {
+      const userCols = await dbh.all("PRAGMA table_info('users')");
+      if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
       }
+      const playerCols = await dbh.all("PRAGMA table_info('players')");
+      const ensureColumn = async (name, definition) => {
+        if (!playerCols.some((c) => c.name === name)) {
+          await dbh.run(`ALTER TABLE players ADD COLUMN ${definition}`);
+        }
+      };
+      await ensureColumn('game_bans', 'game_bans INTEGER DEFAULT 0');
+      await ensureColumn('last_ban_days', 'last_ban_days INTEGER');
+      await ensureColumn('visibility', 'visibility INTEGER');
+      await ensureColumn('rust_playtime_minutes', 'rust_playtime_minutes INTEGER');
+      await ensureColumn('playtime_updated_at', 'playtime_updated_at TEXT');
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
@@ -99,18 +115,36 @@ function createApi(dbh, dialect) {
     async deleteServer(id){ const r = await dbh.run('DELETE FROM servers WHERE id=?',[id]); return r.changes; },
     async upsertPlayer(p){
       const now = new Date().toISOString();
-      const row = await dbh.get('SELECT id FROM players WHERE steamid=?',[p.steamid]);
-      if (row) {
-        await dbh.run('UPDATE players SET persona=?,avatar=?,country=?,profileurl=?,vac_banned=?,updated_at=? WHERE steamid=?',
-          [p.persona,p.avatar,p.country,p.profileurl,p.vac_banned?1:0,now,p.steamid]);
-        return row.id;
+      const existing = await dbh.get('SELECT * FROM players WHERE steamid=?',[p.steamid]);
+      const next = {
+        persona: p.persona ?? existing?.persona ?? null,
+        avatar: p.avatar ?? existing?.avatar ?? null,
+        country: p.country ?? existing?.country ?? null,
+        profileurl: p.profileurl ?? existing?.profileurl ?? null,
+        vac_banned: p.vac_banned ?? existing?.vac_banned ?? 0,
+        game_bans: p.game_bans ?? existing?.game_bans ?? 0,
+        last_ban_days: p.last_ban_days ?? existing?.last_ban_days ?? null,
+        visibility: p.visibility ?? existing?.visibility ?? null,
+        rust_playtime_minutes: p.rust_playtime_minutes ?? existing?.rust_playtime_minutes ?? null,
+        playtime_updated_at: p.playtime_updated_at ?? existing?.playtime_updated_at ?? null
+      };
+      if (existing) {
+        await dbh.run(`UPDATE players SET persona=?,avatar=?,country=?,profileurl=?,vac_banned=?,game_bans=?,last_ban_days=?,visibility=?,rust_playtime_minutes=?,playtime_updated_at=?,updated_at=? WHERE steamid=?`,
+          [next.persona,next.avatar,next.country,next.profileurl,next.vac_banned?1:0,next.game_bans??0,next.last_ban_days??null,next.visibility??null,next.rust_playtime_minutes??null,next.playtime_updated_at??null,now,p.steamid]);
+        return existing.id;
       } else {
-        const r = await dbh.run('INSERT INTO players(steamid,persona,avatar,country,profileurl,vac_banned,updated_at) VALUES(?,?,?,?,?,?,?)',
-          [p.steamid,p.persona,p.avatar,p.country,p.profileurl,p.vac_banned?1:0,now]);
+        const r = await dbh.run(`INSERT INTO players(steamid,persona,avatar,country,profileurl,vac_banned,game_bans,last_ban_days,visibility,rust_playtime_minutes,playtime_updated_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [p.steamid,next.persona,next.avatar,next.country,next.profileurl,next.vac_banned?1:0,next.game_bans??0,next.last_ban_days??null,next.visibility??null,next.rust_playtime_minutes??null,next.playtime_updated_at??null,now]);
         return r.lastID;
       }
     },
     async getPlayer(steamid){ return await dbh.get('SELECT * FROM players WHERE steamid=?',[steamid]); },
+    async getPlayersBySteamIds(steamids=[]){
+      if (!Array.isArray(steamids) || steamids.length === 0) return [];
+      const placeholders = steamids.map(() => '?').join(',');
+      return await dbh.all(`SELECT * FROM players WHERE steamid IN (${placeholders})`, steamids);
+    },
     async listPlayers({limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
     async addPlayerEvent(ev){ await dbh.run('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
