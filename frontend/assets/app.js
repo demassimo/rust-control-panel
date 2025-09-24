@@ -768,7 +768,12 @@
     editBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      toggleEdit();
+      if (!editOpen) {
+        toggleEdit(true);
+      } else {
+        toggleEdit(false);
+      }
+      ev.stopImmediatePropagation();
     });
 
     editForm.addEventListener('submit', async (ev) => {
@@ -809,7 +814,11 @@
     });
 
     card.addEventListener('click', (ev) => {
-      if (ev.target.closest('.server-card-actions') || ev.target.closest('.server-card-edit')) return;
+      const target = ev.target instanceof Element ? ev.target : null;
+      if (target && (target.closest('.server-card-actions') || target.closest('.server-card-edit'))) {
+        return;
+      }
+      if (editOpen) return;
       connectServer(server.id);
     });
 
@@ -945,19 +954,11 @@
         wrap.appendChild(document.createTextNode(' '));
         wrap.appendChild(badge);
       }
-      const profileBtn = document.createElement('button');
-      profileBtn.className = 'ghost small';
-      profileBtn.textContent = 'Profile & Settings';
-      profileBtn.onclick = () => {
-        hideWorkspace('nav');
-        switchPanel('settings');
-      };
       const btn = document.createElement('button');
       btn.className = 'ghost small';
       btn.textContent = 'Logout';
       btn.onclick = () => logout();
       userBox.appendChild(wrap);
-      userBox.appendChild(profileBtn);
       userBox.appendChild(btn);
     }
   };
