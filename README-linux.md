@@ -44,6 +44,7 @@ MYSQL_DATABASE=rustadmin
 ```
 
 Set `STEAM_API_KEY=...` for Steam enrichment.
+Set `RUSTMAPS_API_KEY=...` to enable the live map module (see https://api.rustmaps.com for keys).
 
 ## Access control
 

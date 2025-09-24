@@ -16,7 +16,16 @@ const PORT = parseInt(process.env.PORT || '8787', 10);
 const BIND = process.env.BIND || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev';
 const ALLOW_REGISTRATION = (process.env.ALLOW_REGISTRATION || '').toLowerCase() === 'true';
-const MONITOR_INTERVAL = Math.max(parseInt(process.env.MONITOR_INTERVAL_MS || '60000', 10), 15000);
+
+const toInt = (value, fallback) => {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const MONITOR_INTERVAL = Math.max(toInt(process.env.MONITOR_INTERVAL_MS || '60000', 60000), 15000);
+const RUSTMAPS_API_KEY = process.env.RUSTMAPS_API_KEY || '';
+const SERVER_INFO_TTL = Math.max(toInt(process.env.SERVER_INFO_CACHE_MS, 60000), 10000);
+const MAP_CACHE_TTL = Math.max(toInt(process.env.RUSTMAPS_CACHE_MS, 30 * 60 * 1000), 60000);
 
 app.use(express.json({ limit: '1mb' }));
 app.use(cors({ origin: (origin, cb) => cb(null, true), credentials: true }));
@@ -26,6 +35,8 @@ await initDb();
 const auth = authMiddleware(JWT_SECRET);
 const rconMap = new Map();
 const statusMap = new Map();
+const serverInfoCache = new Map();
+const mapCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
 
@@ -96,6 +107,136 @@ function parseStatusMessage(message) {
     if (sleepersMatch) info.sleepers = parseInt(sleepersMatch[1], 10);
   }
   return info;
+}
+
+function parseServerInfoMessage(message) {
+  const info = {
+    raw: message,
+    mapName: null,
+    size: null,
+    seed: null
+  };
+  if (!message) return info;
+  const lines = message.split(/\r?\n/);
+  for (const line of lines) {
+    const parts = line.split(':');
+    if (parts.length < 2) continue;
+    const key = parts.shift().trim().toLowerCase();
+    const value = parts.join(':').trim();
+    if (!value) continue;
+    if (key.includes('map')) {
+      if (!key.includes('seed') && !key.includes('size')) info.mapName = value;
+    }
+    if (key.includes('world size') || key === 'worldsize' || key === 'size') {
+      const size = parseInt(value, 10);
+      if (Number.isFinite(size)) info.size = size;
+    }
+    if (key.includes('seed')) {
+      const seed = parseInt(value, 10);
+      if (Number.isFinite(seed)) info.seed = seed;
+    }
+  }
+  return info;
+}
+
+function parsePlayerListMessage(message) {
+  if (!message) return [];
+  let text = message.trim();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    if (start !== -1 && end !== -1) {
+      try { payload = JSON.parse(text.slice(start, end + 1)); } catch { /* ignore */ }
+    }
+  }
+  if (payload && Array.isArray(payload.Players)) payload = payload.Players;
+  if (!Array.isArray(payload)) return [];
+  return payload.map((entry) => ({
+    steamId: entry.SteamID || entry.steamId || entry.steamid || '',
+    ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
+    displayName: entry.DisplayName || entry.displayName || '',
+    ping: Number(entry.Ping ?? entry.ping ?? 0) || 0,
+    address: entry.Address || entry.address || '',
+    connectedSeconds: Number(entry.ConnectedSeconds ?? entry.connectedSeconds ?? 0) || 0,
+    violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
+    health: Number(entry.Health ?? entry.health ?? 0) || 0,
+    position: {
+      x: Number(entry.Position?.x ?? entry.position?.x ?? 0) || 0,
+      y: Number(entry.Position?.y ?? entry.position?.y ?? 0) || 0,
+      z: Number(entry.Position?.z ?? entry.position?.z ?? 0) || 0
+    },
+    teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
+    networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
+  }));
+}
+
+function getCachedServerInfo(id) {
+  const cached = serverInfoCache.get(id);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > SERVER_INFO_TTL) {
+    serverInfoCache.delete(id);
+    return null;
+  }
+  return cached.data;
+}
+
+function cacheServerInfo(id, info) {
+  serverInfoCache.set(id, { data: info, timestamp: Date.now() });
+}
+
+async function fetchRustMapMetadata(size, seed) {
+  if (!size || !seed) return null;
+  const key = `${size}:${seed}`;
+  const cached = mapCache.get(key);
+  if (cached && Date.now() - cached.timestamp < MAP_CACHE_TTL) return cached.data;
+  if (!RUSTMAPS_API_KEY) {
+    const err = new Error('no_rustmaps_api_key');
+    err.code = 'no_rustmaps_api_key';
+    throw err;
+  }
+  const url = `https://api.rustmaps.com/v4/maps/${encodeURIComponent(size)}/${encodeURIComponent(seed)}?staging=false`;
+  const res = await fetch(url, { headers: { 'x-api-key': RUSTMAPS_API_KEY } });
+  if (res.status === 401 || res.status === 403) {
+    const err = new Error('rustmaps_unauthorized');
+    err.code = 'rustmaps_unauthorized';
+    throw err;
+  }
+  if (res.status === 404) {
+    const err = new Error('rustmaps_not_found');
+    err.code = 'rustmaps_not_found';
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error('rustmaps_error');
+    err.code = 'rustmaps_error';
+    err.status = res.status;
+    throw err;
+  }
+  const body = await res.json();
+  const data = body?.data;
+  if (!data) {
+    const err = new Error('rustmaps_error');
+    err.code = 'rustmaps_error';
+    throw err;
+  }
+  const normalized = {
+    id: data.id || null,
+    type: data.type || null,
+    seed: data.seed || seed,
+    size: data.size || size,
+    saveVersion: data.saveVersion || null,
+    imageUrl: data.imageUrl || data.rawImageUrl || null,
+    rawImageUrl: data.rawImageUrl || null,
+    thumbnailUrl: data.thumbnailUrl || null,
+    url: data.url || null,
+    isCustomMap: !!data.isCustomMap,
+    totalMonuments: data.totalMonuments || null
+  };
+  mapCache.set(key, { data: normalized, timestamp: Date.now() });
+  return normalized;
 }
 
 async function monitorServers() {
@@ -335,6 +476,56 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
     res.json({ deleted });
   } catch {
     res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/live-map', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const client = getOrCreateRcon(server);
+    let info = getCachedServerInfo(id);
+    if (!info) {
+      try {
+        const reply = await client.command('serverinfo');
+        info = parseServerInfoMessage(reply?.Message || '');
+        cacheServerInfo(id, info);
+      } catch (err) {
+        info = { raw: null, mapName: null, size: null, seed: null };
+      }
+    }
+    let playerPayload = '';
+    try {
+      const reply = await client.command('playerlist');
+      playerPayload = reply?.Message || '';
+    } catch (err) {
+      console.error('playerlist command failed', err);
+      return res.status(502).json({ error: 'playerlist_failed' });
+    }
+    const players = parsePlayerListMessage(playerPayload);
+    let map = null;
+    if (info?.size && info?.seed) {
+      try {
+        map = await fetchRustMapMetadata(info.size, info.seed);
+      } catch (err) {
+        const code = err?.code || err?.message;
+        if (code === 'no_rustmaps_api_key' || code === 'rustmaps_unauthorized') {
+          return res.status(400).json({ error: code });
+        }
+        if (code === 'rustmaps_not_found') {
+          map = null;
+        } else {
+          console.error('RustMaps metadata fetch failed', err);
+          return res.status(502).json({ error: 'rustmaps_error' });
+        }
+      }
+    }
+    res.json({ players, map, info, fetchedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('live-map route error', err);
+    res.status(500).json({ error: 'live_map_failed' });
   }
 });
 

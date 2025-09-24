@@ -69,21 +69,10 @@
             <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
             <button id="btnSend" class="accent">Send</button>
           </div>
-          <div class="row quick-row">
-            <button data-quick="status" class="ghost">status</button>
-            <button data-quick="serverinfo" class="ghost">serverinfo</button>
-            <button data-quick='say "Hello from panel"' class="ghost">say</button>
-            <button data-quick="playerlist" class="ghost">playerlist</button>
-          </div>
+          <div class="row quick-row" id="quickCommands"></div>
         </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h3>Players</h3>
-            <button id="btnSyncPlayers" class="ghost small">Sync from Steam</button>
-          </div>
-          <ul id="players"></ul>
-        </div>
+        <div id="moduleColumn" class="module-stack"></div>
       </div>
 
       <div id="userCard" class="card hidden">
@@ -113,6 +102,9 @@
     </section>
   </div>
 
+  <script src="assets/modules/module-loader.js"></script>
+  <script src="assets/modules/players.js"></script>
+  <script src="assets/modules/map.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
   <script src="assets/app.js"></script>
 </body>
