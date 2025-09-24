@@ -187,6 +187,11 @@ function handlePlayerConnectionLine(serverId, line) {
     profileurl: null,
     vac_banned: 0
   }).catch((err) => console.warn('player upsert failed', err));
+  db.recordServerPlayer({
+    server_id: serverId,
+    steamid: info.steamid,
+    display_name: info.persona || null
+  }).catch((err) => console.warn('server player upsert failed', err));
   db.addPlayerEvent({ steamid: info.steamid, server_id: serverId, event: 'connected', note }).catch((err) => {
     console.warn('player event log failed', err);
   });
@@ -317,6 +322,23 @@ function normaliseDbPlayer(row) {
     rust_playtime_minutes: toNumber(row.rust_playtime_minutes),
     playtime_updated_at: toIso(row.playtime_updated_at || row.playtimeUpdatedAt),
     updated_at: toIso(row.updated_at || row.updatedAt)
+  };
+}
+
+function normaliseServerPlayer(row) {
+  if (!row) return null;
+  const base = normaliseDbPlayer(row) || { steamid: row.steamid || row.SteamID || '' };
+  const serverId = Number(row.server_id ?? row.serverId);
+  const toIso = (val) => {
+    const date = parseDateLike(val);
+    return date ? date.toISOString() : null;
+  };
+  return {
+    server_id: Number.isFinite(serverId) ? serverId : null,
+    display_name: row.display_name || row.displayName || base.persona || base.steamid || '',
+    first_seen: toIso(row.first_seen || row.firstSeen),
+    last_seen: toIso(row.last_seen || row.lastSeen),
+    ...base
   };
 }
 
@@ -469,6 +491,31 @@ async function enrichLivePlayers(players) {
       const endpoint = extractEndpoint(player.address);
       return { ...player, ip: endpoint.ip, port: endpoint.port, steamProfile: null };
     });
+  }
+}
+
+async function syncServerPlayerDirectory(serverId, players) {
+  const numericId = Number(serverId);
+  if (!Number.isFinite(numericId) || !Array.isArray(players)) return;
+  const seenAt = new Date().toISOString();
+  const tasks = [];
+  for (const player of players) {
+    const steamId = String(player?.steamId || '').trim();
+    if (!steamId) continue;
+    const displayName = player.displayName || player.persona || player.steamProfile?.persona || null;
+    tasks.push(db.recordServerPlayer({
+      server_id: numericId,
+      steamid: steamId,
+      display_name: displayName,
+      seen_at: seenAt
+    }));
+  }
+  if (tasks.length > 0) {
+    try {
+      await Promise.all(tasks);
+    } catch (err) {
+      console.warn('Failed to sync server player directory', err);
+    }
   }
 }
 
@@ -1098,6 +1145,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     let players = parsePlayerListMessage(playerPayload);
     players = await enrichLivePlayers(players);
+    await syncServerPlayerDirectory(id, players);
     const now = new Date();
     let mapRecord = await db.getServerMap(id);
     if (mapRecord && shouldResetMapRecord(mapRecord, now)) {
@@ -1273,6 +1321,21 @@ app.get('/api/players', auth, async (req, res) => {
     const rows = await db.listPlayers({ limit, offset });
     res.json(rows);
   } catch {
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/players', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
+  const offset = parseInt(req.query.offset || '0', 10);
+  try {
+    const rows = await db.listServerPlayers(id, { limit, offset });
+    const payload = rows.map((row) => normaliseServerPlayer(row)).filter(Boolean);
+    res.json(payload);
+  } catch (err) {
+    console.error('listServerPlayers failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
