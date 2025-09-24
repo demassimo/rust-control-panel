@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
-import RustWebRcon from './rcon.js';
+import { connectRcon, sendRconCommand, closeRcon as terminateRcon, subscribeToRcon } from './rcon.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -54,7 +54,7 @@ await fs.mkdir(MAP_GLOBAL_CACHE_DIR, { recursive: true });
 await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
 const auth = authMiddleware(JWT_SECRET);
-const rconMap = new Map();
+const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
 let monitoring = false;
@@ -74,31 +74,50 @@ function getStatusSnapshot() {
   return out;
 }
 
-function closeRcon(id) {
+function cleanupRconBinding(id) {
   const key = Number(id);
-  const client = rconMap.get(key);
-  if (client) {
-    try { client.close(); } catch { /* ignore */ }
-    rconMap.delete(key);
-  }
+  const binding = rconBindings.get(key);
+  if (!binding) return;
+  rconBindings.delete(key);
+  try { binding.unsubscribe?.(); }
+  catch { /* ignore */ }
 }
 
-function getOrCreateRcon(row) {
+function ensureRconBinding(row) {
   const key = Number(row.id);
-  if (rconMap.has(key)) return rconMap.get(key);
-  const client = new RustWebRcon({ host: row.host, port: row.port, password: row.password, tls: !!row.tls });
-  client.on('message', (msg) => io.to(`srv:${key}`).emit('console', msg));
-  client.on('error', (e) => {
-    const message = e?.message || String(e);
+  if (!Number.isFinite(key)) throw new Error('invalid_server_id');
+  if (rconBindings.has(key)) return rconBindings.get(key);
+
+  const host = row.host;
+  const port = row.port;
+  const binding = { host, port, unsubscribe: () => {} };
+
+  const handleError = (error) => {
+    const message = error?.message || String(error);
     io.to(`srv:${key}`).emit('error', message);
     recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: message });
+  };
+
+  const unsubscribe = subscribeToRcon(key, {
+    message: (msg) => {
+      io.to(`srv:${key}`).emit('console', msg);
+      console.log(`[RCON:${host}:${port}]`, msg);
+    },
+    error: handleError,
+    close: ({ manual } = {}) => {
+      recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: 'connection_closed' });
+      if (manual) cleanupRconBinding(key);
+    }
   });
-  client.on('close', () => {
-    rconMap.delete(key);
-    recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: 'connection_closed' });
-  });
-  rconMap.set(key, client);
-  return client;
+
+  binding.unsubscribe = () => unsubscribe();
+  rconBindings.set(key, binding);
+  return binding;
+}
+
+function closeServerRcon(id) {
+  cleanupRconBinding(id);
+  terminateRcon(id);
 }
 
 function parseStatusMessage(message) {
@@ -485,10 +504,9 @@ async function monitorServers() {
       const key = Number(row.id);
       seen.add(key);
       try {
-        const client = getOrCreateRcon(row);
+        ensureRconBinding(row);
         const started = Date.now();
-        await client.ensure();
-        const reply = await client.command('status');
+        const reply = await sendRconCommand(row, 'status');
         recordStatus(key, {
           ok: true,
           lastCheck: new Date().toISOString(),
@@ -496,7 +514,7 @@ async function monitorServers() {
           details: parseStatusMessage(reply?.Message || '')
         });
       } catch (e) {
-        closeRcon(key);
+        closeServerRcon(key);
         recordStatus(key, {
           ok: false,
           lastCheck: new Date().toISOString(),
@@ -728,7 +746,7 @@ app.patch('/api/servers/:id', auth, async (req, res) => {
   try {
     const updated = await db.updateServer(id, req.body || {});
     if (updated) {
-      closeRcon(id);
+      closeServerRcon(id);
       triggerMonitorSoon();
     }
     res.json({ updated });
@@ -742,7 +760,7 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   try {
     const deleted = await db.deleteServer(id);
-    closeRcon(id);
+    closeServerRcon(id);
     statusMap.delete(id);
     res.json({ deleted });
   } catch {
@@ -756,11 +774,11 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
   try {
     const server = await db.getServer(id);
     if (!server) return res.status(404).json({ error: 'not_found' });
-    const client = getOrCreateRcon(server);
+    ensureRconBinding(server);
     let info = getCachedServerInfo(id);
     if (!info) {
       try {
-        const reply = await client.command('serverinfo');
+        const reply = await sendRconCommand(server, 'serverinfo');
         info = parseServerInfoMessage(reply?.Message || '');
         cacheServerInfo(id, info);
       } catch (err) {
@@ -769,7 +787,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     let playerPayload = '';
     try {
-      const reply = await client.command('playerlist');
+      const reply = await sendRconCommand(server, 'playerlist');
       playerPayload = reply?.Message || '';
     } catch (err) {
       console.error('playerlist command failed', err);
@@ -935,8 +953,8 @@ app.post('/api/rcon/:id', auth, async (req, res) => {
   try {
     const row = await db.getServer(id);
     if (!row) return res.status(404).json({ error: 'not_found' });
-    const client = getOrCreateRcon(row);
-    const reply = await client.command(cmd);
+    ensureRconBinding(row);
+    const reply = await sendRconCommand(row, cmd);
     res.json(reply);
   } catch (e) {
     res.status(500).json({ error: e.message || 'rcon_error' });
@@ -1030,9 +1048,9 @@ io.on('connection', (socket) => {
     const status = statusMap.get(id);
     if (status) socket.emit('status', status);
     try {
-      const client = getOrCreateRcon(row);
-      await client.ensure();
-      client.command('status').catch(() => {});
+      ensureRconBinding(row);
+      await connectRcon(row);
+      sendRconCommand(row, 'status').catch(() => {});
     } catch (e) {
       socket.emit('error', e.message || String(e));
     }
