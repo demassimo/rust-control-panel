@@ -793,7 +793,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: 420px minmax(0, 1fr);
+  grid-template-columns: 500px minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
@@ -833,6 +833,9 @@ pre {
   font-family: var(--font-mono);
   font-size: 0.88rem;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 #cmd { flex: 1; }
