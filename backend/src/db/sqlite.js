@@ -134,5 +134,14 @@ function createApi(dbh, dialect) {
       await dbh.run("INSERT INTO server_maps(server_id,map_key,data,image_path,custom,created_at,updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET map_key=excluded.map_key, data=excluded.data, image_path=excluded.image_path, custom=excluded.custom, updated_at=excluded.updated_at",[serverId,map_key,data,image_path,custom?1:0]);
     },
     async deleteServerMap(serverId){ await dbh.run('DELETE FROM server_maps WHERE server_id=?',[serverId]); },
+    async countServerMapsByImagePath(imagePath, excludeServerId=null){
+      if (!imagePath) return 0;
+      if (Number.isFinite(excludeServerId)) {
+        const row = await dbh.get('SELECT COUNT(*) c FROM server_maps WHERE image_path=? AND server_id!=?', [imagePath, excludeServerId]);
+        return row?.c ? Number(row.c) : 0;
+      }
+      const row = await dbh.get('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
+      return row?.c ? Number(row.c) : 0;
+    }
   };
 }

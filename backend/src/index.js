@@ -15,6 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
+const MAP_GLOBAL_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'global');
 
 const app = express();
 const server = http.createServer(app);
@@ -35,12 +36,17 @@ const DEFAULT_RUSTMAPS_API_KEY = process.env.RUSTMAPS_API_KEY || '';
 const SERVER_INFO_TTL = Math.max(toInt(process.env.SERVER_INFO_CACHE_MS, 60000), 10000);
 const ALLOWED_USER_SETTINGS = new Set(['rustmaps_api_key']);
 const MAP_PURGE_INTERVAL = Math.max(toInt(process.env.MAP_PURGE_INTERVAL_MS, 6 * 60 * 60 * 1000), 15 * 60 * 1000);
+const MAP_CACHE_TZ_OFFSET_MINUTES = 120; // UTC+2
+const MAP_CACHE_RESET_HOUR = 20;
+const MAP_CACHE_RESET_MINUTE = 0;
+const KNOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
 
 app.use(express.json({ limit: '25mb' }));
 app.use(cors({ origin: (origin, cb) => cb(null, true), credentials: true }));
 
 await initDb();
 await fs.mkdir(MAP_STORAGE_DIR, { recursive: true });
+await fs.mkdir(MAP_GLOBAL_CACHE_DIR, { recursive: true });
 await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
 const auth = authMiddleware(JWT_SECRET);
@@ -49,6 +55,7 @@ const statusMap = new Map();
 const serverInfoCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
+let lastGlobalMapCacheReset = null;
 
 function recordStatus(id, data) {
   const key = Number(id);
@@ -197,12 +204,16 @@ function cacheServerInfo(id, info) {
   serverInfoCache.set(id, { data: info, timestamp: Date.now() });
 }
 
-function firstThursdayOfMonth(date = new Date()) {
-  const first = new Date(date.getFullYear(), date.getMonth(), 1);
-  const offset = (4 - first.getDay() + 7) % 7;
-  first.setDate(first.getDate() + offset);
-  first.setHours(0, 0, 0, 0);
-  return first;
+function firstThursdayResetTime(now = new Date()) {
+  const tzAdjusted = new Date(now.getTime() + MAP_CACHE_TZ_OFFSET_MINUTES * 60000);
+  const year = tzAdjusted.getUTCFullYear();
+  const month = tzAdjusted.getUTCMonth();
+  const firstDayDow = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  const daysUntilThursday = (4 - firstDayDow + 7) % 7;
+  const day = 1 + daysUntilThursday;
+  const hourUtc = MAP_CACHE_RESET_HOUR - Math.trunc(MAP_CACHE_TZ_OFFSET_MINUTES / 60);
+  const minuteUtc = MAP_CACHE_RESET_MINUTE - (MAP_CACHE_TZ_OFFSET_MINUTES % 60);
+  return new Date(Date.UTC(year, month, day, hourUtc, minuteUtc, 0, 0));
 }
 
 function parseTimestamp(value) {
@@ -212,12 +223,11 @@ function parseTimestamp(value) {
   return new Date(ts);
 }
 
-function shouldResetMapRecord(record, now = new Date()) {
+function shouldResetMapRecord(record, now = new Date(), resetPoint = firstThursdayResetTime(now)) {
   if (!record) return false;
   const updated = parseTimestamp(record.updated_at || record.updatedAt || record.created_at || record.createdAt);
   if (!updated) return false;
-  const first = firstThursdayOfMonth(now);
-  return now >= first && updated < first;
+  return now >= resetPoint && updated < resetPoint;
 }
 
 function sanitizeFilenameSegment(value) {
@@ -228,9 +238,14 @@ function sanitizeFilenameSegment(value) {
     .replace(/^-|-$/g, '') || 'map').slice(0, 80);
 }
 
-function mapImageFilePath(serverId, mapKey, extension = 'png') {
+function serverMapImageFilePath(serverId, mapKey, extension = 'png') {
   const safeKey = sanitizeFilenameSegment(mapKey || `server-${serverId}`);
   return path.join(MAP_STORAGE_DIR, `server-${serverId}-${safeKey}.${extension}`);
+}
+
+function globalMapImageFilePath(mapKey, extension = 'png') {
+  const safeKey = sanitizeFilenameSegment(mapKey || 'map');
+  return path.join(MAP_GLOBAL_CACHE_DIR, `${safeKey}.${extension}`);
 }
 
 function isWithinDir(targetPath, dir) {
@@ -240,9 +255,32 @@ function isWithinDir(targetPath, dir) {
   return resolvedTarget.startsWith(resolvedDir);
 }
 
+async function findGlobalMapImage(mapKey) {
+  if (!mapKey) return null;
+  for (const ext of KNOWN_IMAGE_EXTENSIONS) {
+    const filePath = globalMapImageFilePath(mapKey, ext);
+    try {
+      await fs.access(filePath);
+      return { path: filePath, extension: ext };
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 async function removeMapImage(record) {
   if (!record?.image_path) return;
   if (!isWithinDir(record.image_path, MAP_STORAGE_DIR)) return;
+  if (typeof db.countServerMapsByImagePath === 'function') {
+    try {
+      const exclude = Number(record.server_id ?? record.serverId);
+      const remaining = await db.countServerMapsByImagePath(record.image_path, Number.isFinite(exclude) ? exclude : null);
+      if (remaining > 0) return;
+    } catch (err) {
+      console.warn('map image reference count failed', err);
+    }
+  }
   try {
     await fs.unlink(record.image_path);
   } catch (err) {
@@ -250,27 +288,62 @@ async function removeMapImage(record) {
   }
 }
 
+async function clearGlobalMapCache(activeImages = new Set()) {
+  let entries;
+  try {
+    entries = await fs.readdir(MAP_GLOBAL_CACHE_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === 'ENOENT') return;
+    console.warn('global map cache read failed', err);
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const target = path.join(MAP_GLOBAL_CACHE_DIR, entry.name);
+    if (activeImages.has(target)) continue;
+    try {
+      await fs.unlink(target);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') console.warn('Failed to remove cached global map image', err);
+    }
+  }
+}
+
+async function purgeGlobalCacheIfDue(resetPoint, now = new Date(), activeImages = new Set()) {
+  if (!resetPoint) return;
+  if (lastGlobalMapCacheReset && lastGlobalMapCacheReset >= resetPoint) return;
+  await clearGlobalMapCache(activeImages);
+  lastGlobalMapCacheReset = now;
+}
+
 async function purgeExpiredMapCaches(now = new Date()) {
+  const resetPoint = firstThursdayResetTime(now);
   if (typeof db.listServerMaps !== 'function') return;
   let rows;
   try {
     rows = await db.listServerMaps();
   } catch (err) {
     console.error('map cache query failed', err);
-    return;
+    rows = [];
   }
-  if (!Array.isArray(rows) || rows.length === 0) return;
-  for (const row of rows) {
-    try {
-      if (!shouldResetMapRecord(row, now)) continue;
-      await removeMapImage(row);
-      const id = Number(row.server_id ?? row.serverId ?? row.id);
-      if (!Number.isFinite(id)) continue;
-      await db.deleteServerMap(id);
-    } catch (err) {
-      console.warn('map cache purge failed for server', row?.server_id ?? row?.serverId ?? row?.id, err);
+  const activeImages = new Set();
+  if (Array.isArray(rows) && rows.length > 0) {
+    for (const row of rows) {
+      try {
+        if (!shouldResetMapRecord(row, now, resetPoint)) {
+          if (row?.image_path) activeImages.add(row.image_path);
+          continue;
+        }
+        await removeMapImage(row);
+        const id = Number(row.server_id ?? row.serverId ?? row.id);
+        if (!Number.isFinite(id)) continue;
+        await db.deleteServerMap(id);
+      } catch (err) {
+        console.warn('map cache purge failed for server', row?.server_id ?? row?.serverId ?? row?.id, err);
+      }
     }
   }
+  await purgeGlobalCacheIfDue(resetPoint, now, activeImages);
 }
 
 function mapRecordToPayload(serverId, record) {
@@ -726,15 +799,21 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
           await removeMapImage(mapRecord);
           let imagePath = null;
           if (!metadata.isCustomMap) {
-            try {
-              const download = await downloadRustMapImage(metadata, apiKey);
-              if (download?.buffer) {
-                const filePath = mapImageFilePath(id, finalKey || infoMapKey || 'map', download.extension);
-                await fs.writeFile(filePath, download.buffer);
-                imagePath = filePath;
+            const cacheKey = finalKey || infoMapKey || `server-${id}`;
+            const cached = await findGlobalMapImage(cacheKey);
+            if (cached?.path) {
+              imagePath = cached.path;
+            } else {
+              try {
+                const download = await downloadRustMapImage(metadata, apiKey);
+                if (download?.buffer) {
+                  const filePath = globalMapImageFilePath(cacheKey, download.extension);
+                  await fs.writeFile(filePath, download.buffer);
+                  imagePath = filePath;
+                }
+              } catch (imageErr) {
+                console.warn('RustMaps image download failed', imageErr);
               }
-            } catch (imageErr) {
-              console.warn('RustMaps image download failed', imageErr);
             }
           }
           if (metadata.isCustomMap || imagePath) {
@@ -806,7 +885,7 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
     const derivedKey = deriveMapKey(info) || null;
     const targetKey = mapKey || record?.map_key || derivedKey || `custom-${id}`;
     if (record) await removeMapImage(record);
-    const filePath = mapImageFilePath(id, targetKey, decoded.extension);
+    const filePath = serverMapImageFilePath(id, targetKey, decoded.extension);
     await fs.writeFile(filePath, decoded.buffer);
     let data = {};
     if (record?.data) {

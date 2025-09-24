@@ -130,5 +130,14 @@ function createApi(pool, dialect) {
       await exec('INSERT INTO server_maps(server_id,map_key,data,image_path,custom) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE map_key=VALUES(map_key), data=VALUES(data), image_path=VALUES(image_path), custom=VALUES(custom), updated_at=CURRENT_TIMESTAMP',[serverId,map_key,data,image_path,custom?1:0]);
     },
     async deleteServerMap(serverId){ await exec('DELETE FROM server_maps WHERE server_id=?',[serverId]); },
+    async countServerMapsByImagePath(imagePath, excludeServerId=null){
+      if (!imagePath) return 0;
+      if (Number.isFinite(excludeServerId)){
+        const rows = await exec('SELECT COUNT(*) c FROM server_maps WHERE image_path=? AND server_id!=?', [imagePath, excludeServerId]);
+        return rows?.[0]?.c ? Number(rows[0].c) : 0;
+      }
+      const rows = await exec('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
+      return rows?.[0]?.c ? Number(rows[0].c) : 0;
+    }
   };
 }

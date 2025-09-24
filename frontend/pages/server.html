@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Rust Control Panel – Server</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/assets/css/dark-theme.css" />
+  <script defer src="/assets/modules/module-loader.js"></script>
+  <script defer src="/assets/js/panel-shell.js"></script>
+</head>
+<body class="app">
+  <header class="topbar">
+    <a class="back" href="/servers">← Back to Servers</a>
+    <div class="server-title">
+      <div class="name" id="srv-name">Main PvP Server</div>
+      <div class="meta" id="srv-endpoint">192.168.1.100:28015 · <span id="srv-online">online</span></div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="btn-fullmap" title="Open full map">🗺 Show Full Map</button>
+      <span class="badge success" id="srv-status">online</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- Left: Live Console -->
+    <section class="col left card">
+      <div class="card-head">
+        <div class="card-title">Console</div>
+      </div>
+      <div class="card-body no-pad">
+        <div class="console" data-module="live-console" data-props='{}'></div>
+      </div>
+      <div class="console-input">
+        <input type="text" id="console-cmd" placeholder="Enter console command..." />
+        <button class="btn danger" id="console-send">Send</button>
+      </div>
+    </section>
+
+    <!-- Center: Map -->
+    <section class="col center">
+      <div class="card map-card">
+        <div class="card-body no-pad">
+          <!-- Your live-map module mounts here -->
+          <div class="map-wrap" data-module="live-map" id="live-map-slot"
+               data-props='{"serverId":"__SERVER_ID__"}'></div>
+        </div>
+      </div>
+
+      <!-- Bottom: Player list (filters the map on click) -->
+      <div class="card list-card">
+        <div class="card-head">
+          <div class="card-title">Online Players <span id="player-count" class="muted">(0)</span></div>
+          <div class="card-tools">
+            <button class="btn ghost small" id="show-all">Show All</button>
+          </div>
+        </div>
+        <div class="card-body no-pad">
+          <div class="players-list" data-module="players-list"
+               data-props='{"serverId":"__SERVER_ID__"}'></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Server/Player Info -->
+    <aside class="col right card">
+      <div class="card-head">
+        <div class="card-title" id="info-title">Server Info</div>
+      </div>
+      <div class="card-body" id="info-content">
+        <!-- Default server info module slot -->
+        <div data-module="server-info" data-props='{"serverId":"__SERVER_ID__"}'></div>
+      </div>
+      <div class="card-foot" id="info-actions">
+        <button class="btn ghost" id="btn-restart">Restart Server</button>
+        <button class="btn ghost" id="btn-saveworld">Save World</button>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>
