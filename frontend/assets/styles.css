@@ -28,6 +28,8 @@ html, body { height: 100%; }
 body {
   margin: 0;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   font-family: var(--font-sans);
   color: var(--text);
   background:
@@ -51,13 +53,23 @@ body::before {
 
 .app-shell {
   position: relative;
-  max-width: 1280px;
+  flex: 1;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
-  padding: 48px 32px 96px;
+  padding: clamp(28px, 4vw, 64px) clamp(28px, 5vw, 72px) clamp(48px, 6vw, 96px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(28px, 4vw, 48px);
 }
 
 @media (max-width: 900px) {
   .app-shell { padding: 32px 20px 80px; }
+  .app-header { flex-direction: column; align-items: stretch; }
+  .header-controls { width: 100%; justify-content: space-between; }
+  .topnav { width: 100%; justify-content: center; }
+  .header-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
+  .user-box { width: 100%; justify-content: space-between; flex-wrap: wrap; }
 }
 
 h1, h2, h3, h4, h5 { margin: 0; font-weight: 600; }
@@ -227,56 +239,106 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 .app-layout {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  flex: 1;
+  gap: clamp(28px, 3vw, 42px);
 }
 
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 24px 32px;
+  flex-wrap: wrap;
+  gap: clamp(16px, 2vw, 32px);
+  padding: clamp(20px, 3vw, 32px) clamp(24px, 4vw, 40px);
   background: var(--panel);
   border-radius: var(--radius-lg);
   border: 1px solid var(--card-border);
   box-shadow: var(--card-glow);
   position: sticky;
-  top: 24px;
+  top: clamp(20px, 3vw, 36px);
   z-index: 20;
   backdrop-filter: blur(14px);
+}
+
+.app-header .brand {
+  flex: 1 1 260px;
 }
 
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: clamp(14px, 2vw, 28px);
+  flex: 1 1 360px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
-.topnav { display: flex; gap: 8px; }
-.topnav .nav-btn {
-  padding: 8px 18px;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 260px;
+  min-width: 220px;
+  padding: 4px;
   border-radius: 999px;
-  border: 1px solid transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 18px 36px rgba(244, 63, 94, 0.16);
+  margin-right: auto;
+}
+
+.topnav .nav-btn {
+  padding: 9px 20px;
+  border-radius: 999px;
+  border: none;
   background: transparent;
   color: var(--muted);
   font-weight: 600;
+  transition: color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
-.topnav .nav-btn:hover { color: var(--text); }
-.topnav .nav-btn.active {
+.topnav .nav-btn:hover,
+.topnav .nav-btn:focus-visible {
   color: var(--text);
-  border-color: rgba(251, 113, 133, 0.45);
-  background: rgba(244, 63, 94, 0.16);
+}
+
+.topnav .nav-btn:focus-visible {
+  outline: 2px solid rgba(251, 113, 133, 0.45);
+  outline-offset: 2px;
+}
+
+.topnav .nav-btn.active {
+  color: #1f0206;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  box-shadow: 0 12px 26px rgba(244, 63, 94, 0.25);
 }
 
 .user-box {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--muted-strong);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.25);
 }
 
 .user-ident { display: flex; align-items: center; gap: 8px; }
+
+.user-box button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+}
 
 .user-box strong { font-size: 1rem; color: var(--text); }
 .user-box .badge {
@@ -287,7 +349,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 
 .dashboard {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 2.25fr) minmax(320px, 1fr);
   gap: 28px;
 }
 
@@ -350,6 +412,12 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
   background: radial-gradient(160px 140px at 80% 20%, rgba(244, 63, 94, 0.25), transparent 70%);
   opacity: 0;
   transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.server-card > * {
+  position: relative;
+  z-index: 1;
 }
 
 .server-card:hover { transform: translateY(-4px); box-shadow: 0 24px 40px rgba(244, 63, 94, 0.18); }
