@@ -53,20 +53,22 @@
       <header class="app-header">
         <div class="brand">
           <span class="brand-icon" aria-hidden="true">🛡️</span>
-          <div>
+          <div class="brand-meta">
             <h1>Rust Admin Dashboard</h1>
-            <p class="muted">Welcome back, <span id="welcomeName">operator</span></p>
+            <div class="brand-account">
+              <span class="muted">Welcome back,</span>
+              <button id="profileMenuTrigger" type="button" class="brand-profile" aria-haspopup="true" aria-expanded="false" aria-controls="userBox">
+                <span id="welcomeName" class="profile-name">operator</span>
+                <span class="chevron" aria-hidden="true">▾</span>
+              </button>
+              <div id="userBox" class="user-box hidden" role="menu" aria-labelledby="profileMenuTrigger" aria-hidden="true"></div>
+            </div>
           </div>
         </div>
         <div class="header-controls">
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
-            <button id="navSettings" type="button" class="nav-btn">Account</button>
           </nav>
-          <div class="header-actions">
-            <button id="btnToggleAddServer" class="ghost small">Add server</button>
-            <div id="userBox" class="user-box hidden"></div>
-          </div>
         </div>
       </header>
 
@@ -81,7 +83,13 @@
               <button id="btnRefreshServers" class="ghost icon" title="Refresh servers">⟳</button>
             </div>
           </div>
-          <div id="servers" class="server-grid"></div>
+          <div id="servers" class="server-grid">
+            <button id="addServerPrompt" type="button" class="server-card add-server-prompt" aria-controls="addServerCard" aria-expanded="false">
+              <span class="add-icon" aria-hidden="true">＋</span>
+              <span class="add-text">Add a server</span>
+              <span class="add-subtext muted small">Connect a Rust server to monitor it here.</span>
+            </button>
+          </div>
           <p id="serversEmpty" class="empty-state hidden">No servers added yet. Connect your first Rust server to get started.</p>
           <div id="addServerCard" class="add-server-card hidden">
             <h3>Add server</h3>
