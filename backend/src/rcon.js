@@ -1,3 +1,8 @@
+// rcon.js - WebRCON client (ESM)
+// Node 18+
+// Usage (behind reverse proxy w/ TLS):
+//   const rcon = new RustWebRcon({ host: 'panel.example.com', port: 443, password: '***', tls: 'auto', basePath: '/rcon', origin: 'https://panel.example.com', tlsInsecure: false });
+
 import WebSocket from 'ws';
 import EventEmitter from 'events';
 
@@ -6,17 +11,26 @@ export default class RustWebRcon extends EventEmitter {
     host,
     port,
     password,
-    tls = false,                  // true|false|"auto"
+
+    // TLS: true|false|"auto"
+    tls = false,
+
+    // Reverse proxy / CDN helpers:
+    basePath = '',           // e.g. '/rcon' if your proxy maps /rcon/<password>/
+    origin = null,           // e.g. 'https://panel.example.com' for strict proxies/CDNs
+    tlsInsecure = false,     // convenient switch for self-signed proxy certs (maps to wsOptions.rejectUnauthorized=false)
+
     // Reliability tuning:
-    reconnectDelayMs = 1000,      // initial backoff (ms)
-    maxReconnectDelayMs = 15000,  // cap for backoff (ms)
-    backoffFactor = 1.8,          // exponential factor
-    jitterRatio = 0.3,            // add +/- jitter to delays
-    heartbeatIntervalMs = 20000,  // ws.ping interval
-    pongTimeoutMs = 12000,        // time to wait after ping before declaring dead
-    commandTimeoutMs = 10000,     // default per-command timeout
-    maxInFlight = 64,             // safety cap for pending requests
-    // Pass-through for TLS/WS options (e.g., { rejectUnauthorized:false }):
+    reconnectDelayMs = 1000,
+    maxReconnectDelayMs = 15000,
+    backoffFactor = 1.8,
+    jitterRatio = 0.3,
+    heartbeatIntervalMs = 20000,
+    pongTimeoutMs = 12000,
+    commandTimeoutMs = 10000,
+    maxInFlight = 64,
+
+    // Extra ws options (agent, headers, etc.). Will be merged with internal ones.
     wsOptions = {},
   }) {
     super();
@@ -29,10 +43,15 @@ export default class RustWebRcon extends EventEmitter {
     this.port = port;
     this.password = password;
 
-    // TLS configuration: true/false explicitly, or "auto" to probe.
+    // Reverse-proxy options
+    this.basePath = String(basePath || '');
+    this.origin = origin ? String(origin) : null;
+
+    // TLS config
     this.configuredTls = (typeof tls === 'string' && tls.toLowerCase() === 'auto') ? null : !!tls;
     this.usingTls = this.configuredTls ?? false;
     this.autoTlsEnabled = false;
+    this.tlsInsecure = !!tlsInsecure;
 
     // Timers / state
     this.ws = null;
@@ -58,19 +77,32 @@ export default class RustWebRcon extends EventEmitter {
 
     // Commands
     this.nextId = 1;
-    this.pending = new Map(); // id -> {resolve,reject,timeout}
+    this.pending = new Map();
     this.maxInFlight = Math.max(1, maxInFlight);
     this.defaultCommandTimeoutMs = Math.max(1000, commandTimeoutMs);
 
-    // Options to pass to ws ctor (e.g., TLS agent, rejectUnauthorized, headers)
-    this.wsOptions = wsOptions;
+    // ws options (merged later)
+    this.wsOptions = { ...wsOptions };
+
+    // For debugging
+    this.lastUrl = '';
   }
 
   // ---- Public API ----------------------------------------------------------
 
   get url() {
     const proto = this.usingTls ? 'wss' : 'ws';
-    return `${proto}://${this.host}:${this.port}/${encodeURIComponent(this.password)}/`;
+    const host = this.isIpv6Literal(this.host) ? `[${this.host}]` : this.host;
+
+    // Normalize basePath: '', or '/rcon' -> '/rcon'
+    const base = this.basePath ? (this.basePath.startsWith('/') ? this.basePath : `/${this.basePath}`) : '';
+
+    // WebRCON requires '/<password>/' at the END; basePath sits before it when proxied.
+    const tail = `/${encodeURIComponent(this.password)}/`;
+
+    const url = `${proto}://${host}:${this.port}${base}${tail}`;
+    this.lastUrl = url;
+    return url;
   }
 
   async connect() {
@@ -80,7 +112,6 @@ export default class RustWebRcon extends EventEmitter {
     this.manualClose = false;
     this.clearReconnectTimer();
 
-    // Try a few times if we detect TLS mismatch and flip mode.
     let tlsFlipAttempts = 0;
 
     const attempt = async () => {
@@ -88,8 +119,7 @@ export default class RustWebRcon extends EventEmitter {
       this.connectPromise = promise;
       try {
         await promise;
-        // Reset backoff on successful connect.
-        this.currentDelay = this.baseReconnectDelayMs;
+        this.currentDelay = this.baseReconnectDelayMs; // reset backoff
         return;
       } catch (err) {
         if (this.shouldRetryAfterTlsChange(err) && tlsFlipAttempts < 2) {
@@ -110,11 +140,23 @@ export default class RustWebRcon extends EventEmitter {
   }
 
   /**
-   * Send a Rust RCON command.
-   * @param {string} cmd
-   * @param {{timeoutMs?:number}} opts
-   * @returns {Promise<object>} Raw WebRCON reply object
+   * Resolve once socket is open and a basic command succeeds.
+   * Helpful when you want "fully ready" before wiring UI.
    */
+  async waitUntilReady(timeoutMs = 15000) {
+    const start = Date.now();
+    if (!this.connected) await this.connect();
+    while (true) {
+      try {
+        await this.getServerInfo({ timeoutMs: 4000 });
+        return;
+      } catch (e) {
+        if (Date.now() - start > timeoutMs) throw new Error('waitUntilReady timed out');
+        await this.sleep(300);
+      }
+    }
+  }
+
   async command(cmd, opts = {}) {
     await this.ensure();
 
@@ -150,9 +192,6 @@ export default class RustWebRcon extends EventEmitter {
     });
   }
 
-  /**
-   * Send a raw payload (advanced use).
-   */
   async sendRaw(obj, opts = {}) {
     await this.ensure();
     const id = this.nextId++;
@@ -183,9 +222,6 @@ export default class RustWebRcon extends EventEmitter {
     });
   }
 
-  /**
-   * Gracefully close and stop all timers.
-   */
   async close() {
     this.manualClose = true;
     this.clearReconnectTimer();
@@ -198,9 +234,6 @@ export default class RustWebRcon extends EventEmitter {
     this.resetTlsState();
   }
 
-  /**
-   * Hard destroy (no reconnects, clears listeners).
-   */
   async destroy() {
     await this.close();
     this.removeAllListeners();
@@ -209,7 +242,20 @@ export default class RustWebRcon extends EventEmitter {
   // ---- Internal connection management -------------------------------------
 
   createConnectionPromise() {
-    const ws = new WebSocket(this.url, this.wsOptions);
+    const headers = { ...(this.wsOptions.headers || {}) };
+    if (this.origin && !headers.Origin) headers.Origin = this.origin;
+
+    const mergedWsOptions = {
+      ...this.wsOptions,
+      headers,
+    };
+
+    // tlsInsecure => wsOptions.rejectUnauthorized:false
+    if (this.tlsInsecure) {
+      mergedWsOptions.rejectUnauthorized = false;
+    }
+
+    const ws = new WebSocket(this.url, mergedWsOptions);
     this.ws = ws;
 
     return new Promise((resolve, reject) => {
@@ -251,7 +297,6 @@ export default class RustWebRcon extends EventEmitter {
             pending.resolve(parsed);
           }
         } else {
-          // Sometimes the server can send non-JSON lines (rare). Expose them.
           this.emit('raw', text);
         }
       };
@@ -297,7 +342,6 @@ export default class RustWebRcon extends EventEmitter {
     });
   }
 
-  // Send ws.ping on interval and expect a timely pong. If not, drop & reconnect.
   startHeartbeat() {
     this.stopHeartbeat();
     if (!this.ws) return;
@@ -307,7 +351,6 @@ export default class RustWebRcon extends EventEmitter {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       try {
         this.ws.ping();
-        // If no pong in time, consider dead:
         this.armPongTimer();
       } catch (err) {
         this.emit('error', err);
@@ -315,7 +358,6 @@ export default class RustWebRcon extends EventEmitter {
       }
     };
 
-    // First ping quickly after connect to start the watchdog quickly:
     this.heartbeatInterval = setInterval(pingOnce, this.heartbeatIntervalMs);
     setTimeout(pingOnce, 500);
   }
@@ -330,7 +372,6 @@ export default class RustWebRcon extends EventEmitter {
   armPongTimer() {
     this.clearPongTimer();
     this.pongTimer = setTimeout(() => {
-      // No pong received in time -> drop connection to trigger reconnect.
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.emit('error', new Error('WebRCON heartbeat missed pong; reconnecting.'));
         try { this.ws.terminate?.(); } catch { try { this.ws.close(); } catch {} }
@@ -354,7 +395,6 @@ export default class RustWebRcon extends EventEmitter {
 
     this.nextReconnectDelayOverride = null;
 
-    // Apply jitter: +/- jitterRatio
     const jitter = base * this.jitterRatio;
     const delay = Math.max(200, Math.floor(base + (Math.random() * 2 - 1) * jitter));
 
@@ -366,7 +406,6 @@ export default class RustWebRcon extends EventEmitter {
         this.emit('reconnect');
       } catch (err) {
         this.emit('error', err);
-        // Increase backoff for next time:
         this.currentDelay = Math.min(
           Math.floor(this.currentDelay * this.backoffFactor),
           this.maxReconnectDelayMs
@@ -426,7 +465,6 @@ export default class RustWebRcon extends EventEmitter {
     if (this.usingTls) return false;
     if (this.configuredTls === true) return false; // already forced TLS
     if (this.autoTlsEnabled) return false;
-    // Node/ws error when contacting TLS endpoint via plain ws:
     return /Expected HTTP\/, RTSP\/ or ICE\//i.test(message || '');
   }
 
@@ -435,7 +473,6 @@ export default class RustWebRcon extends EventEmitter {
     if (!this.autoTlsEnabled) return false;
     const message = err?.message?.toLowerCase?.() || '';
     const code = err?.code;
-    // Common TLS handshake mismatches:
     if (code === 'ERR_SSL_WRONG_VERSION_NUMBER' || code === 'ERR_SSL_UNKNOWN_PROTOCOL') return true;
     if (code === 'EPROTO' || code === 'ECONNRESET') {
       return message.includes('wrong version number') ||
@@ -480,20 +517,13 @@ export default class RustWebRcon extends EventEmitter {
   }
 
   safeJson(text) {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(text); } catch { return null; }
   }
 
-  // Map common Rust WebRCON "Type" to higher-level events for convenience.
   routeTypedEvents(obj) {
     const t = String(obj?.Type ?? '').toLowerCase();
     const msg = obj?.Message ?? '';
-    // Emit coarse-grained events; UI can subscribe as needed.
     if (!t && typeof msg === 'string') {
-      // Fallback: generic console line
       this.emit('console', msg);
       return;
     }
@@ -506,8 +536,11 @@ export default class RustWebRcon extends EventEmitter {
     }
   }
 
-  // Convenience commands (optional sugar)
   async getServerInfo(opts) { return this.command('serverinfo', opts); }
   async status(opts) { return this.command('status', opts); }
   async players(opts) { return this.command('global.players', opts); }
+
+  // Tiny utils
+  isIpv6Literal(h) { return h && h.includes(':') && !h.startsWith('['); }
+  sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 }
