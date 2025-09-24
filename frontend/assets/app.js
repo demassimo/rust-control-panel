@@ -505,10 +505,14 @@
       if (status && typeof status.id !== 'undefined') updateServerStatus(status.id, status);
     });
     socket.on('console', (msg) => {
-      if (msg?.Message) {
-        ui.log(msg.Message.trim());
-        moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
+      const raw = typeof msg === 'string'
+        ? msg
+        : (msg?.Message ?? msg?.message ?? '');
+      const text = typeof raw === 'string' ? raw.trim() : '';
+      if (text) {
+        ui.log(text);
       }
+      moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
