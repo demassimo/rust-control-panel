@@ -35,6 +35,7 @@
   const cmdInput = $('#cmd');
   const loginUsername = $('#username');
   const loginPassword = $('#password');
+  const btnLogin = $('#btnLogin');
   const regUsername = $('#regUsername');
   const regPassword = $('#regPassword');
   const regConfirm = $('#regConfirm');
@@ -1239,6 +1240,11 @@
       showNotice(loginError, describeError('missing_fields'), 'error');
       return;
     }
+    const restore = btnLogin ? { disabled: btnLogin.disabled, text: btnLogin.textContent } : null;
+    if (btnLogin) {
+      btnLogin.disabled = true;
+      btnLogin.textContent = 'Signing in…';
+    }
     try {
       const data = await publicJson('/api/login', { method: 'POST', body: { username, password } });
       state.TOKEN = data.token;
@@ -1255,6 +1261,13 @@
       startStatusPolling();
     } catch (err) {
       showNotice(loginError, describeError(err), 'error');
+      if (loginPassword) loginPassword.value = '';
+      loginPassword?.focus();
+    } finally {
+      if (btnLogin && restore) {
+        btnLogin.disabled = restore.disabled;
+        btnLogin.textContent = restore.text;
+      }
     }
   }
 
@@ -1349,7 +1362,19 @@
     navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); });
     btnSaveSettings?.addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
     rustMapsKeyInput?.addEventListener('input', () => hideNotice(settingsStatus));
-    $('#btnLogin')?.addEventListener('click', handleLogin);
+    const triggerLogin = (ev) => {
+      ev?.preventDefault();
+      handleLogin();
+    };
+    btnLogin?.addEventListener('click', triggerLogin);
+    loginUsername?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') triggerLogin(ev);
+    });
+    loginPassword?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') triggerLogin(ev);
+    });
+    loginUsername?.addEventListener('input', () => hideNotice(loginError));
+    loginPassword?.addEventListener('input', () => hideNotice(loginError));
     btnRegister?.addEventListener('click', handleRegister);
     btnAddServer?.addEventListener('click', addServer);
     btnSend?.addEventListener('click', sendCommand);
