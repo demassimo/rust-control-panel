@@ -72,8 +72,8 @@ export default class RustWebRcon extends EventEmitter {
         if (obj) {
           this.emit('message', obj);
           this._routeTyped(obj);
-          const id = obj.Identifier;
-          if (typeof id === 'number' && this.pending.has(id)) {
+          const id = Number(obj.Identifier);
+          if (Number.isFinite(id) && this.pending.has(id)) {
             const p = this.pending.get(id);
             this.pending.delete(id);
             clearTimeout(p.timeout);
