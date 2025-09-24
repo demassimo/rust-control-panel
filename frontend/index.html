@@ -59,12 +59,14 @@
           </div>
         </div>
         <div class="header-controls">
-          <button id="btnToggleAddServer" class="ghost small">Add server</button>
-          <nav id="mainNav" class="topnav hidden">
+          <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
-            <button id="navSettings" type="button" class="nav-btn">Profile</button>
+            <button id="navSettings" type="button" class="nav-btn">Account</button>
           </nav>
-          <div id="userBox" class="user-box"></div>
+          <div class="header-actions">
+            <button id="btnToggleAddServer" class="ghost small">Add server</button>
+            <div id="userBox" class="user-box hidden"></div>
+          </div>
         </div>
       </header>
 

@@ -934,6 +934,11 @@
       consoleEl.textContent = '';
     },
     setUser(user) {
+      if (navSettings) {
+        const label = user?.username || 'Account';
+        navSettings.textContent = label;
+        navSettings.title = 'Open account settings';
+      }
       userBox.innerHTML = '';
       if (welcomeName) welcomeName.textContent = user?.username || 'operator';
       if (profileUsername) profileUsername.textContent = user?.username || '—';
@@ -941,7 +946,11 @@
         const roleLabel = user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : '—';
         profileRole.textContent = roleLabel;
       }
-      if (!user) return;
+      if (!user) {
+        userBox.classList.add('hidden');
+        return;
+      }
+      userBox.classList.remove('hidden');
       const wrap = document.createElement('div');
       wrap.className = 'user-ident';
       const strong = document.createElement('strong');
