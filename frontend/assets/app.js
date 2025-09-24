@@ -25,7 +25,7 @@
   const btnRefreshServers = $('#btnRefreshServers');
   const btnClearConsole = $('#btnClearConsole');
   const btnAddServer = $('#btnAddServer');
-  const btnToggleAddServer = $('#btnToggleAddServer');
+  const addServerPrompt = $('#addServerPrompt');
   const svName = $('#svName');
   const svHost = $('#svHost');
   const svPort = $('#svPort');
@@ -50,6 +50,8 @@
   const serversEmpty = $('#serversEmpty');
   const addServerCard = $('#addServerCard');
   const welcomeName = $('#welcomeName');
+  const profileMenuTrigger = $('#profileMenuTrigger');
+  const brandAccount = $('.brand-account');
   const workspaceName = $('#workspaceServerName');
   const workspaceMeta = $('#workspaceServerMeta');
   const workspaceStatus = $('#workspaceStatus');
@@ -74,6 +76,38 @@
 
   let socket = null;
   let addServerPinned = false;
+
+  function setProfileMenuOpen(open) {
+    if (!userBox) return;
+    const active = !!open;
+    userBox.classList.toggle('hidden', !active);
+    userBox.setAttribute('aria-hidden', active ? 'false' : 'true');
+    profileMenuTrigger?.setAttribute('aria-expanded', active ? 'true' : 'false');
+    brandAccount?.classList.toggle('menu-open', active);
+    if (active) {
+      requestAnimationFrame(() => {
+        const focusTarget = userBox.querySelector('button');
+        focusTarget?.focus();
+      });
+    }
+  }
+
+  function toggleProfileMenu(force) {
+    if (!userBox) return;
+    const shouldOpen = typeof force === 'boolean' ? force : userBox.classList.contains('hidden');
+    setProfileMenuOpen(shouldOpen);
+  }
+
+  function closeProfileMenu() {
+    setProfileMenuOpen(false);
+  }
+
+  function setAddServerPromptState(open) {
+    if (!addServerPrompt) return;
+    const active = !!open;
+    addServerPrompt.setAttribute('aria-expanded', active ? 'true' : 'false');
+    addServerPrompt.classList.toggle('open', active);
+  }
 
   const moduleBus = (() => {
     const listeners = new Map();
@@ -348,8 +382,10 @@
 
   function showAddServerCard(options = {}) {
     if (!addServerCard) return;
-    if (options.pinned) addServerPinned = true;
+    const pinned = !!options.pinned;
+    if (pinned) addServerPinned = true;
     addServerCard.classList.remove('hidden');
+    setAddServerPromptState(true);
     if (svName) svName.focus();
   }
 
@@ -358,13 +394,16 @@
     if (!options.force && addServerPinned) return;
     addServerCard.classList.add('hidden');
     if (options.force) addServerPinned = false;
+    if (!addServerPinned) setAddServerPromptState(false);
   }
 
   function toggleAddServerCardVisibility() {
     if (!addServerCard) return;
-    addServerPinned = !addServerPinned;
-    addServerCard.classList.toggle('hidden', !addServerPinned);
-    if (addServerPinned && svName) svName.focus();
+    const willOpen = addServerCard.classList.contains('hidden');
+    addServerPinned = willOpen;
+    addServerCard.classList.toggle('hidden', !willOpen);
+    setAddServerPromptState(willOpen);
+    if (willOpen && svName) svName.focus();
   }
 
   function leaveCurrentServer(reason = 'close') {
@@ -832,7 +871,11 @@
     card.appendChild(mainRow);
     card.appendChild(foot);
     card.appendChild(editForm);
-    serversEl.appendChild(card);
+    if (addServerPrompt && addServerPrompt.parentElement === serversEl) {
+      serversEl.insertBefore(card, addServerPrompt);
+    } else {
+      serversEl.appendChild(card);
+    }
 
     entry.element = card;
     entry.statusPill = statusPill;
@@ -853,6 +896,10 @@
       const list = await api('/api/servers');
       serversEl.innerHTML = '';
       state.serverItems.clear();
+      if (addServerPrompt) {
+        serversEl.appendChild(addServerPrompt);
+        setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));
+      }
       const statuses = await fetchServerStatuses();
       for (const server of list) {
         const status = statuses?.[server.id] || statuses?.[String(server.id)];
@@ -939,36 +986,65 @@
         navSettings.textContent = label;
         navSettings.title = 'Open account settings';
       }
-      userBox.innerHTML = '';
       if (welcomeName) welcomeName.textContent = user?.username || 'operator';
+      if (profileMenuTrigger) {
+        profileMenuTrigger.disabled = !user;
+        profileMenuTrigger.setAttribute('aria-expanded', 'false');
+        const triggerLabel = user?.username ? `Open profile menu for ${user.username}` : 'Open profile menu';
+        profileMenuTrigger.setAttribute('aria-label', triggerLabel);
+      }
+      closeProfileMenu();
+      userBox.innerHTML = '';
       if (profileUsername) profileUsername.textContent = user?.username || '—';
       if (profileRole) {
         const roleLabel = user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : '—';
         profileRole.textContent = roleLabel;
       }
       if (!user) {
-        userBox.classList.add('hidden');
         return;
       }
-      userBox.classList.remove('hidden');
-      const wrap = document.createElement('div');
-      wrap.className = 'user-ident';
+      const header = document.createElement('div');
+      header.className = 'user-box-header';
       const strong = document.createElement('strong');
       strong.textContent = user.username;
-      wrap.appendChild(strong);
+      header.appendChild(strong);
       if (user.role === 'admin') {
         const badge = document.createElement('span');
         badge.className = 'badge';
         badge.textContent = 'Admin';
-        wrap.appendChild(document.createTextNode(' '));
-        wrap.appendChild(badge);
+        header.appendChild(badge);
       }
-      const btn = document.createElement('button');
-      btn.className = 'ghost small';
-      btn.textContent = 'Logout';
-      btn.onclick = () => logout();
-      userBox.appendChild(wrap);
-      userBox.appendChild(btn);
+      userBox.appendChild(header);
+
+      const descriptor = document.createElement('span');
+      descriptor.className = 'menu-description';
+      descriptor.textContent = user.role === 'admin' ? 'Administrator access' : 'Standard access';
+      userBox.appendChild(descriptor);
+
+      const actions = document.createElement('div');
+      actions.className = 'user-box-actions';
+
+      const accountBtn = document.createElement('button');
+      accountBtn.type = 'button';
+      accountBtn.className = 'menu-item';
+      accountBtn.setAttribute('role', 'menuitem');
+      accountBtn.textContent = 'Account settings';
+      accountBtn.addEventListener('click', () => {
+        hideWorkspace('nav');
+        switchPanel('settings');
+        closeProfileMenu();
+      });
+
+      const logoutBtn = document.createElement('button');
+      logoutBtn.type = 'button';
+      logoutBtn.className = 'menu-item danger';
+      logoutBtn.setAttribute('role', 'menuitem');
+      logoutBtn.textContent = 'Logout';
+      logoutBtn.addEventListener('click', () => logout());
+
+      actions.appendChild(accountBtn);
+      actions.appendChild(logoutBtn);
+      userBox.appendChild(actions);
     }
   };
 
@@ -1368,8 +1444,13 @@
   }
 
   function bindEvents() {
-    navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); });
-    navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); });
+    navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
+    navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); closeProfileMenu(); });
+    profileMenuTrigger?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      if (!state.currentUser) return;
+      toggleProfileMenu();
+    });
     btnSaveSettings?.addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
     rustMapsKeyInput?.addEventListener('input', () => hideNotice(settingsStatus));
     const triggerLogin = (ev) => {
@@ -1396,7 +1477,7 @@
     });
     btnRefreshServers?.addEventListener('click', () => refreshServers());
     btnClearConsole?.addEventListener('click', () => ui.clearConsole());
-    btnToggleAddServer?.addEventListener('click', () => toggleAddServerCardVisibility());
+    addServerPrompt?.addEventListener('click', () => toggleAddServerCardVisibility());
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     btnCreateUser?.addEventListener('click', async () => {
       if (state.currentUser?.role !== 'admin') return;
@@ -1423,6 +1504,16 @@
         if (errorCode(err) === 'unauthorized') handleUnauthorized();
         else showNotice(userFeedback, describeError(err), 'error');
       }
+    });
+    setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));
+    document.addEventListener('click', (ev) => {
+      const target = ev.target instanceof Node ? ev.target : null;
+      if (!target) return;
+      if (profileMenuTrigger?.contains(target) || userBox?.contains(target)) return;
+      closeProfileMenu();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') closeProfileMenu();
     });
   }
 
