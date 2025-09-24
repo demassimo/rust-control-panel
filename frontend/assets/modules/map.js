@@ -35,7 +35,7 @@
 
   window.registerModule({
     id: 'live-map',
-    title: 'Live map',
+    title: 'Player Map',
     order: 20,
     setup(ctx){
       ctx.root?.classList.add('module-card','live-map-card');

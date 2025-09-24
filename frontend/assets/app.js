@@ -512,8 +512,9 @@
       if (text) {
         ui.log(text);
       }
-      const sourceId = msg?.ServerId ?? msg?.serverId ?? msg?.id ?? state.currentServerId;
-      moduleBus.emit('console:message', { serverId: sourceId, message: msg });
+
+      moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
+
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);

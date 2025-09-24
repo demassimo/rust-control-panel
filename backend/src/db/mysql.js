@@ -52,6 +52,17 @@ function createApi(pool, dialect) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS server_players(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        steamid VARCHAR(32) NOT NULL,
+        display_name VARCHAR(190) NULL,
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY server_steam (server_id, steamid),
+        INDEX idx_server_players_server (server_id),
+        CONSTRAINT fk_server_players_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       const ensureColumn = async (sql) => {
         try { await exec(sql); }
         catch (e) { if (e.code !== 'ER_DUP_FIELDNAME') throw e; }
@@ -70,6 +81,17 @@ function createApi(pool, dialect) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX(steamid),
         CONSTRAINT fk_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS server_player_counts(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        player_count INT NOT NULL,
+        max_players INT NULL,
+        queued INT NULL,
+        sleepers INT NULL,
+        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_player_counts_server (server_id, recorded_at),
+        CONSTRAINT fk_player_counts_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS user_settings(
         user_id INT NOT NULL,
@@ -128,6 +150,60 @@ function createApi(pool, dialect) {
     async getPlayer(steamid){ const r = await exec('SELECT * FROM players WHERE steamid=?',[steamid]); return r[0]||null; },
     async getPlayersBySteamIds(steamids=[]){ if (!Array.isArray(steamids) || steamids.length === 0) return []; const placeholders = steamids.map(()=>'?' ).join(','); return await exec(`SELECT * FROM players WHERE steamid IN (${placeholders})`, steamids); },
     async listPlayers({limit=100,offset=0}={}){ return await exec('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
+    async recordServerPlayer({ server_id, steamid, display_name=null, seen_at=null }){
+      const serverIdNum = Number(server_id);
+      if (!Number.isFinite(serverIdNum)) return;
+      const sid = String(steamid || '').trim();
+      if (!sid) return;
+      const seen = seen_at || new Date().toISOString().slice(0, 19).replace('T', ' ');
+      await exec(`
+        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen)
+        VALUES(?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE
+          display_name=COALESCE(VALUES(display_name), server_players.display_name),
+          last_seen=VALUES(last_seen)
+      `,[serverIdNum,sid,display_name,seen,seen]);
+    },
+    async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, recorded_at=null }){
+      const serverIdNum = Number(server_id);
+      const playerCountNum = Number(player_count);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(playerCountNum)) return;
+      const maxPlayersNum = Number(max_players);
+      const queuedNum = Number(queued);
+      const sleepersNum = Number(sleepers);
+      let timestampDate = null;
+      if (recorded_at) {
+        const parsed = recorded_at instanceof Date ? recorded_at : new Date(recorded_at);
+        if (!Number.isNaN(parsed.getTime())) timestampDate = parsed;
+      }
+      if (!timestampDate) timestampDate = new Date();
+      const timestamp = timestampDate.toISOString().slice(0, 19).replace('T', ' ');
+      await exec(`
+        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, recorded_at)
+        VALUES(?,?,?,?,?,?)
+      `,[
+        serverIdNum,
+        Math.max(0, Math.trunc(playerCountNum)),
+        Number.isFinite(maxPlayersNum) ? Math.max(0, Math.trunc(maxPlayersNum)) : null,
+        Number.isFinite(queuedNum) ? Math.max(0, Math.trunc(queuedNum)) : null,
+        Number.isFinite(sleepersNum) ? Math.max(0, Math.trunc(sleepersNum)) : null,
+        timestamp
+      ]);
+    },
+    async listServerPlayers(serverId,{limit=100,offset=0}={}){
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      return await exec(`
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.first_seen, sp.last_seen,
+               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=?
+        ORDER BY sp.last_seen DESC
+        LIMIT ? OFFSET ?
+      `,[serverIdNum,limit,offset]);
+    },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
     async getUserSettings(userId){
