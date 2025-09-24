@@ -50,6 +50,24 @@ function createApi(dbh, dialect) {
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE SET NULL
       );
+      CREATE TABLE IF NOT EXISTS user_settings(
+        user_id INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT,
+        updated_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(user_id, key),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS server_maps(
+        server_id INTEGER PRIMARY KEY,
+        map_key TEXT,
+        data TEXT,
+        image_path TEXT,
+        custom INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
       `);
       const cols = await dbh.all("PRAGMA table_info('users')");
       if (!cols.some((c) => c.name === 'role')) {
@@ -96,5 +114,25 @@ function createApi(dbh, dialect) {
     async listPlayers({limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
     async addPlayerEvent(ev){ await dbh.run('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
+    async getUserSettings(userId){
+      const rows = await dbh.all('SELECT key,value FROM user_settings WHERE user_id=?',[userId]);
+      const out = {};
+      for (const row of rows) out[row.key] = row.value;
+      return out;
+    },
+    async getUserSetting(userId,key){
+      const row = await dbh.get('SELECT value FROM user_settings WHERE user_id=? AND key=?',[userId,key]);
+      return row ? row.value : null;
+    },
+    async setUserSetting(userId,key,value){
+      await dbh.run("INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",[userId,key,value]);
+    },
+    async deleteUserSetting(userId,key){ await dbh.run('DELETE FROM user_settings WHERE user_id=? AND key=?',[userId,key]); },
+    async getServerMap(serverId){ return await dbh.get('SELECT * FROM server_maps WHERE server_id=?',[serverId]); },
+    async listServerMaps(){ return await dbh.all('SELECT * FROM server_maps'); },
+    async saveServerMap(serverId,{ map_key=null,data=null,image_path=null,custom=0 }){
+      await dbh.run("INSERT INTO server_maps(server_id,map_key,data,image_path,custom,created_at,updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET map_key=excluded.map_key, data=excluded.data, image_path=excluded.image_path, custom=excluded.custom, updated_at=excluded.updated_at",[serverId,map_key,data,image_path,custom?1:0]);
+    },
+    async deleteServerMap(serverId){ await dbh.run('DELETE FROM server_maps WHERE server_id=?',[serverId]); },
   };
 }

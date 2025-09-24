@@ -3,10 +3,15 @@
 
   const serversEl = $('#servers');
   const consoleEl = $('#console');
-  const playersEl = $('#players');
+  const moduleColumn = $('#moduleColumn');
   const loginPanel = $('#loginPanel');
   const appPanel = $('#appPanel');
   const userBox = $('#userBox');
+  const mainNav = $('#mainNav');
+  const navDashboard = $('#navDashboard');
+  const navSettings = $('#navSettings');
+  const dashboardPanel = $('#dashboardPanel');
+  const settingsPanel = $('#settingsPanel');
   const loginError = $('#loginError');
   const registerInfo = $('#registerInfo');
   const registerForm = $('#registerForm');
@@ -16,7 +21,6 @@
   const userCard = $('#userCard');
   const userList = $('#userList');
   const userFeedback = $('#userFeedback');
-  const btnSyncPlayers = $('#btnSyncPlayers');
   const btnRefreshServers = $('#btnRefreshServers');
   const btnClearConsole = $('#btnClearConsole');
   const btnAddServer = $('#btnAddServer');
@@ -37,6 +41,10 @@
   const newUserPassword = $('#newUserPassword');
   const newUserRole = $('#newUserRole');
   const btnCreateUser = $('#btnCreateUser');
+  const quickCommandsEl = $('#quickCommands');
+  const rustMapsKeyInput = $('#rustMapsKey');
+  const btnSaveSettings = $('#btnSaveSettings');
+  const settingsStatus = $('#settingsStatus');
 
   const state = {
     API: '',
@@ -45,10 +53,141 @@
     currentServerId: null,
     serverItems: new Map(),
     allowRegistration: false,
-    statusTimer: null
+    statusTimer: null,
+    settings: {},
+    activePanel: 'dashboard'
   };
 
   let socket = null;
+
+  const moduleBus = (() => {
+    const listeners = new Map();
+    return {
+      on(event, handler) {
+        if (!event || typeof handler !== 'function') return () => {};
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        const set = listeners.get(event);
+        set.add(handler);
+        return () => set.delete(handler);
+      },
+      emit(event, payload) {
+        const set = listeners.get(event);
+        if (!set) return;
+        for (const fn of [...set]) {
+          try { fn(payload); }
+          catch (err) { console.error('Module handler error for', event, err); }
+        }
+      }
+    };
+  })();
+
+  const quickCommands = new Map();
+
+  function setQuickInput(value) {
+    if (!cmdInput) return;
+    cmdInput.value = value || '';
+    cmdInput.focus();
+  }
+
+  function renderQuickCommands() {
+    if (!quickCommandsEl) return;
+    quickCommandsEl.innerHTML = '';
+    const items = [...quickCommands.values()].sort((a, b) => {
+      const orderA = typeof a.order === 'number' ? a.order : 100;
+      const orderB = typeof b.order === 'number' ? b.order : 100;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.label || '').localeCompare(b.label || '');
+    });
+    for (const item of items) {
+      const btn = document.createElement('button');
+      btn.className = item.className || 'ghost';
+      btn.textContent = item.label || item.command || item.id;
+      if (item.description) btn.title = item.description;
+      btn.addEventListener('click', () => {
+        if (typeof item.onClick === 'function') {
+          item.onClick({
+            setInput: setQuickInput,
+            run: runRconCommand,
+            command: item.command,
+            send: runRconCommand
+          });
+        } else if (item.command) {
+          setQuickInput(item.command);
+        }
+      });
+      quickCommandsEl.appendChild(btn);
+    }
+  }
+
+  function registerQuickCommand(definition) {
+    if (!definition) return () => {};
+    const id = definition.id || definition.command || `cmd-${quickCommands.size + 1}`;
+    const normalized = {
+      id,
+      label: definition.label || definition.command || id,
+      command: definition.command || '',
+      description: definition.description || '',
+      order: typeof definition.order === 'number' ? definition.order : 100,
+      className: definition.className || 'ghost',
+      onClick: typeof definition.onClick === 'function' ? definition.onClick : null
+    };
+    quickCommands.set(id, normalized);
+    renderQuickCommands();
+    return () => {
+      quickCommands.delete(id);
+      renderQuickCommands();
+    };
+  }
+
+  registerQuickCommand({ id: 'cmd-status', label: 'status', command: 'status', order: 10 });
+  registerQuickCommand({ id: 'cmd-serverinfo', label: 'serverinfo', command: 'serverinfo', order: 20 });
+  registerQuickCommand({ id: 'cmd-say', label: 'say', command: 'say "Hello from panel"', order: 30 });
+  registerQuickCommand({ id: 'cmd-playerlist', label: 'playerlist', command: 'playerlist', order: 40 });
+
+  function switchPanel(panel = 'dashboard') {
+    state.activePanel = panel;
+    if (panel === 'settings') {
+      dashboardPanel?.classList.add('hidden');
+      settingsPanel?.classList.remove('hidden');
+      navSettings?.classList.add('active');
+      navDashboard?.classList.remove('active');
+    } else {
+      dashboardPanel?.classList.remove('hidden');
+      settingsPanel?.classList.add('hidden');
+      navDashboard?.classList.add('active');
+      navSettings?.classList.remove('active');
+    }
+    if (panel !== 'settings') hideNotice(settingsStatus);
+  }
+
+  function createModuleCard({ id, title, icon } = {}) {
+    if (!moduleColumn) throw new Error('Module mount element missing');
+    const card = document.createElement('div');
+    card.className = 'card module-card';
+    if (id) card.dataset.moduleId = id;
+    const header = document.createElement('div');
+    header.className = 'card-header';
+    const heading = document.createElement('h3');
+    heading.textContent = title || id || 'Module';
+    if (icon) heading.prepend(icon + ' ');
+    const actions = document.createElement('div');
+    actions.className = 'module-header-actions';
+    header.appendChild(heading);
+    header.appendChild(actions);
+    const body = document.createElement('div');
+    body.className = 'module-body';
+    card.appendChild(header);
+    card.appendChild(body);
+    moduleColumn.appendChild(card);
+    return {
+      card,
+      header,
+      body,
+      actions,
+      setTitle(value) { heading.textContent = value || ''; },
+      remove() { card.remove(); }
+    };
+  }
 
   const errorMessages = {
     invalid_login: 'Invalid username or password.',
@@ -62,7 +201,21 @@
     network_error: 'Unable to reach the server. Check the API URL and your connection.',
     unauthorized: 'Your session expired. Please sign in again.',
     last_admin: 'You cannot remove the final administrator.',
-    cannot_delete_self: 'You cannot remove your own account.'
+    cannot_delete_self: 'You cannot remove your own account.',
+    rustmaps_api_key_missing: 'Add your RustMaps API key in Settings to enable the live map.',
+    rustmaps_unauthorized: 'RustMaps rejected the configured API key. Double-check it in Settings.',
+    rustmaps_not_found: 'RustMaps has not published a generated map for this seed yet.',
+    rustmaps_error: 'RustMaps responded with an unexpected error.',
+    rustmaps_image_error: 'RustMaps returned an invalid map image.',
+    live_map_failed: 'Unable to load the live map right now.',
+    playerlist_failed: 'The server did not return a live player list.',
+    missing_command: 'Provide a command before sending.',
+    no_server_selected: 'Select a server before sending commands.',
+    invalid_payload: 'The request payload was not accepted.',
+    missing_image: 'Choose an image before uploading.',
+    invalid_image: 'The selected image could not be processed.',
+    image_too_large: 'The image is too large. Please upload a file under 20 MB.',
+    map_upload_failed: 'Uploading the map image failed. Please try again.'
   };
 
   function errorCode(err) {
@@ -160,7 +313,7 @@
     socket.on('console', (msg) => {
       if (msg?.Message) {
         ui.log(msg.Message.trim());
-        if (/SteamID|players connected|id :/.test(msg.Message)) rebuildPlayers(msg.Message);
+        moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
       }
     });
     socket.on('error', (err) => {
@@ -242,6 +395,7 @@
       details.textContent = parts.join(' · ');
       details.title = status?.details?.raw || status?.error || '';
     }
+    moduleBus.emit('server:status', { serverId: Number(id), status });
   }
 
   function applyStatusMap(map) {
@@ -321,6 +475,7 @@
         renderServer(server, status);
       }
       highlightSelectedServer();
+      moduleBus.emit('servers:updated', { servers: list });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         handleUnauthorized();
@@ -348,68 +503,25 @@
     if (sock && sock.connected) {
       sock.emit('join-server', numericId);
     }
-    loadPlayers().catch(() => {});
-  }
-
-  function rebuildPlayers(text) {
-    playersEl.innerHTML = '';
-    const lines = (text || '').split(/\r?\n/).filter(Boolean);
-    for (const ln of lines) {
-      const li = document.createElement('li');
-      li.textContent = ln.trim();
-      playersEl.appendChild(li);
+    if (previous != null && previous !== numericId) {
+      moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
     }
-  }
-
-  async function loadPlayers() {
-    try {
-      const list = await api('/api/players?limit=200');
-      playersEl.innerHTML = '';
-      for (const p of list) {
-        const li = document.createElement('li');
-        const left = document.createElement('div');
-        const name = document.createElement('strong');
-        name.textContent = p.persona || p.steamid;
-        left.appendChild(name);
-        const small = document.createElement('div');
-        small.className = 'muted small';
-        small.textContent = p.steamid;
-        left.appendChild(small);
-        const right = document.createElement('div');
-        right.className = 'server-actions';
-        if (p.country) {
-          const badge = document.createElement('span');
-          badge.className = 'badge';
-          badge.textContent = p.country;
-          right.appendChild(badge);
-        }
-        if (p.vac_banned) {
-          const badge = document.createElement('span');
-          badge.className = 'badge';
-          badge.textContent = 'VAC';
-          right.appendChild(badge);
-        }
-        li.appendChild(left);
-        li.appendChild(right);
-        playersEl.appendChild(li);
-      }
-    } catch (err) {
-      if (errorCode(err) === 'unauthorized') {
-        handleUnauthorized();
-      } else {
-        ui.log('Players load failed: ' + describeError(err));
-      }
-    }
+    moduleBus.emit('server:connected', { serverId: numericId, server: entry?.data || null });
+    moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
   }
 
   const ui = {
     showLogin() {
       loginPanel.classList.remove('hidden');
       appPanel.classList.add('hidden');
+      mainNav?.classList.add('hidden');
+      switchPanel('dashboard');
     },
     showApp() {
       loginPanel.classList.add('hidden');
       appPanel.classList.remove('hidden');
+      mainNav?.classList.remove('hidden');
+      switchPanel(state.activePanel || 'dashboard');
     },
     log(line) {
       const time = new Date().toLocaleTimeString();
@@ -441,22 +553,68 @@
     }
   };
 
+  function getServerList() {
+    return [...state.serverItems.values()].map((entry) => entry.data).filter(Boolean);
+  }
+
+  function getServerData(id) {
+    return state.serverItems.get(String(id))?.data || null;
+  }
+
+  const moduleHostContext = {
+    createCard: createModuleCard,
+    on: moduleBus.on,
+    emit: moduleBus.emit,
+    api,
+    publicJson,
+    log: (line) => ui.log(line),
+    describeError,
+    errorCode,
+    handleUnauthorized,
+    registerQuickCommand,
+    setQuickInput,
+    sendCommand: runRconCommand,
+    runCommand: runRconCommand,
+    getState: () => ({
+      API: state.API,
+      currentUser: state.currentUser,
+      currentServerId: state.currentServerId,
+      servers: getServerList()
+    }),
+    getServers: getServerList,
+    getServer: getServerData,
+    getSettings: () => ({ ...state.settings }),
+    openSettings: () => switchPanel('settings')
+  };
+
+  if (window.ModuleLoader?.init) {
+    window.ModuleLoader.init(moduleHostContext);
+  }
+
   function logout() {
+    const previousServer = state.currentServerId;
     state.TOKEN = '';
     state.currentUser = null;
-    state.currentServerId = null;
     stopStatusPolling();
     disconnectSocket();
     localStorage.removeItem('token');
     state.serverItems.clear();
+    state.settings = {};
+    state.activePanel = 'dashboard';
     serversEl.innerHTML = '';
-    playersEl.innerHTML = '';
     ui.clearConsole();
     ui.setUser(null);
     userCard.classList.add('hidden');
     hideNotice(userFeedback);
+    hideNotice(settingsStatus);
+    if (rustMapsKeyInput) rustMapsKeyInput.value = '';
     ui.showLogin();
     loadPublicConfig();
+    if (previousServer != null) moduleBus.emit('server:disconnected', { serverId: previousServer, reason: 'logout' });
+    state.currentServerId = null;
+    moduleBus.emit('auth:logout');
+    moduleBus.emit('settings:updated', { settings: {} });
+    mainNav?.classList.add('hidden');
   }
 
   function handleUnauthorized() {
@@ -608,6 +766,38 @@
     }
   }
 
+  async function loadSettings() {
+    if (!state.TOKEN) return;
+    hideNotice(settingsStatus);
+    try {
+      const data = await api('/api/me/settings');
+      state.settings = data || {};
+      if (rustMapsKeyInput) rustMapsKeyInput.value = state.settings.rustmaps_api_key || '';
+      moduleBus.emit('settings:updated', { settings: { ...state.settings } });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to load settings: ' + describeError(err));
+    }
+  }
+
+  async function saveSettings() {
+    if (!state.TOKEN) {
+      showNotice(settingsStatus, describeError('unauthorized'), 'error');
+      return;
+    }
+    hideNotice(settingsStatus);
+    const payload = { rustmaps_api_key: rustMapsKeyInput?.value?.trim() || '' };
+    try {
+      const data = await api('/api/me/settings', payload, 'POST');
+      state.settings = data || {};
+      showNotice(settingsStatus, 'Settings saved.', 'success');
+      moduleBus.emit('settings:updated', { settings: { ...state.settings } });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(settingsStatus, describeError(err), 'error');
+    }
+  }
+
   async function attemptSessionResume() {
     if (!state.TOKEN) {
       ui.showLogin();
@@ -616,11 +806,13 @@
     try {
       const me = await api('/api/me');
       state.currentUser = me;
+      await loadSettings();
       ui.setUser(me);
       ui.showApp();
       ensureSocket();
       await refreshServers();
-      await loadPlayers();
+      moduleBus.emit('auth:login', { user: state.currentUser, resume: true });
+      moduleBus.emit('players:refresh', { reason: 'session-resume' });
       toggleUserCard();
       startStatusPolling();
     } catch (err) {
@@ -648,11 +840,13 @@
       state.TOKEN = data.token;
       localStorage.setItem('token', state.TOKEN);
       state.currentUser = { id: data.id, username: data.username, role: data.role };
+      await loadSettings();
       ui.setUser(state.currentUser);
       ui.showApp();
       ensureSocket();
       await refreshServers();
-      await loadPlayers();
+      moduleBus.emit('auth:login', { user: state.currentUser, resume: false });
+      moduleBus.emit('players:refresh', { reason: 'login' });
       toggleUserCard();
       startStatusPolling();
     } catch (err) {
@@ -715,6 +909,13 @@
     }
   }
 
+  async function runRconCommand(command) {
+    const cmd = (command || '').toString().trim();
+    if (!cmd) throw new Error('missing_command');
+    if (state.currentServerId == null) throw new Error('no_server_selected');
+    return await api(`/api/rcon/${state.currentServerId}`, { cmd }, 'POST');
+  }
+
   async function sendCommand() {
     const cmd = cmdInput?.value.trim();
     if (!cmd) return;
@@ -723,42 +924,25 @@
       return;
     }
     try {
-      const reply = await api(`/api/rcon/${state.currentServerId}`, { cmd }, 'POST');
+      const reply = await runRconCommand(cmd);
       ui.log('> ' + cmd);
       if (reply?.Message) ui.log(reply.Message.trim());
       cmdInput.value = '';
     } catch (err) {
+      if (errorCode(err) === 'no_server_selected') {
+        ui.log('Select a server before sending commands.');
+        return;
+      }
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else ui.log('Command failed: ' + describeError(err));
     }
   }
 
-  async function syncFromSteam() {
-    const raw = prompt('Enter comma-separated Steam64 IDs to sync:');
-    if (!raw) return;
-    const steamids = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    if (steamids.length === 0) return;
-    try {
-      const res = await api('/api/steam/sync', { steamids }, 'POST');
-      ui.log('Synced ' + res.updated + ' players from Steam');
-      await loadPlayers();
-    } catch (err) {
-      if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else ui.log('Sync failed: ' + describeError(err));
-    }
-  }
-
-  function setupQuickButtons() {
-    document.querySelectorAll('[data-quick]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!cmdInput) return;
-        cmdInput.value = btn.getAttribute('data-quick') || '';
-        cmdInput.focus();
-      });
-    });
-  }
-
   function bindEvents() {
+    navDashboard?.addEventListener('click', () => switchPanel('dashboard'));
+    navSettings?.addEventListener('click', () => switchPanel('settings'));
+    btnSaveSettings?.addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
+    rustMapsKeyInput?.addEventListener('input', () => hideNotice(settingsStatus));
     $('#btnLogin')?.addEventListener('click', handleLogin);
     btnRegister?.addEventListener('click', handleRegister);
     btnAddServer?.addEventListener('click', addServer);
@@ -771,7 +955,6 @@
     });
     btnRefreshServers?.addEventListener('click', () => refreshServers());
     btnClearConsole?.addEventListener('click', () => ui.clearConsole());
-    btnSyncPlayers?.addEventListener('click', syncFromSteam);
     btnCreateUser?.addEventListener('click', async () => {
       if (state.currentUser?.role !== 'admin') return;
       hideNotice(userFeedback);
@@ -806,7 +989,6 @@
     const storedBase = localStorage.getItem('apiBase') || apiBaseInput?.value || 'http://localhost:8787';
     setApiBase(storedBase || 'http://localhost:8787');
     bindEvents();
-    setupQuickButtons();
     if (state.TOKEN) {
       await attemptSessionResume();
     } else {

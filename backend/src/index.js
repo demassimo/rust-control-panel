@@ -4,9 +4,17 @@ import cors from 'cors';
 import http from 'http';
 import { Server as IOServer } from 'socket.io';
 import bcrypt from 'bcrypt';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 import { RustWebRcon } from './rcon.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,16 +24,29 @@ const PORT = parseInt(process.env.PORT || '8787', 10);
 const BIND = process.env.BIND || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev';
 const ALLOW_REGISTRATION = (process.env.ALLOW_REGISTRATION || '').toLowerCase() === 'true';
-const MONITOR_INTERVAL = Math.max(parseInt(process.env.MONITOR_INTERVAL_MS || '60000', 10), 15000);
 
-app.use(express.json({ limit: '1mb' }));
+const toInt = (value, fallback) => {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const MONITOR_INTERVAL = Math.max(toInt(process.env.MONITOR_INTERVAL_MS || '60000', 60000), 15000);
+const DEFAULT_RUSTMAPS_API_KEY = process.env.RUSTMAPS_API_KEY || '';
+const SERVER_INFO_TTL = Math.max(toInt(process.env.SERVER_INFO_CACHE_MS, 60000), 10000);
+const ALLOWED_USER_SETTINGS = new Set(['rustmaps_api_key']);
+const MAP_PURGE_INTERVAL = Math.max(toInt(process.env.MAP_PURGE_INTERVAL_MS, 6 * 60 * 60 * 1000), 15 * 60 * 1000);
+
+app.use(express.json({ limit: '25mb' }));
 app.use(cors({ origin: (origin, cb) => cb(null, true), credentials: true }));
 
 await initDb();
+await fs.mkdir(MAP_STORAGE_DIR, { recursive: true });
+await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
 const auth = authMiddleware(JWT_SECRET);
 const rconMap = new Map();
 const statusMap = new Map();
+const serverInfoCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
 
@@ -98,6 +119,286 @@ function parseStatusMessage(message) {
   return info;
 }
 
+function parseServerInfoMessage(message) {
+  const info = {
+    raw: message,
+    mapName: null,
+    size: null,
+    seed: null
+  };
+  if (!message) return info;
+  const lines = message.split(/\r?\n/);
+  for (const line of lines) {
+    const parts = line.split(':');
+    if (parts.length < 2) continue;
+    const key = parts.shift().trim().toLowerCase();
+    const value = parts.join(':').trim();
+    if (!value) continue;
+    if (key.includes('map')) {
+      if (!key.includes('seed') && !key.includes('size')) info.mapName = value;
+    }
+    if (key.includes('world size') || key === 'worldsize' || key === 'size') {
+      const size = parseInt(value, 10);
+      if (Number.isFinite(size)) info.size = size;
+    }
+    if (key.includes('seed')) {
+      const seed = parseInt(value, 10);
+      if (Number.isFinite(seed)) info.seed = seed;
+    }
+  }
+  return info;
+}
+
+function parsePlayerListMessage(message) {
+  if (!message) return [];
+  let text = message.trim();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    if (start !== -1 && end !== -1) {
+      try { payload = JSON.parse(text.slice(start, end + 1)); } catch { /* ignore */ }
+    }
+  }
+  if (payload && Array.isArray(payload.Players)) payload = payload.Players;
+  if (!Array.isArray(payload)) return [];
+  return payload.map((entry) => ({
+    steamId: entry.SteamID || entry.steamId || entry.steamid || '',
+    ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
+    displayName: entry.DisplayName || entry.displayName || '',
+    ping: Number(entry.Ping ?? entry.ping ?? 0) || 0,
+    address: entry.Address || entry.address || '',
+    connectedSeconds: Number(entry.ConnectedSeconds ?? entry.connectedSeconds ?? 0) || 0,
+    violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
+    health: Number(entry.Health ?? entry.health ?? 0) || 0,
+    position: {
+      x: Number(entry.Position?.x ?? entry.position?.x ?? 0) || 0,
+      y: Number(entry.Position?.y ?? entry.position?.y ?? 0) || 0,
+      z: Number(entry.Position?.z ?? entry.position?.z ?? 0) || 0
+    },
+    teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
+    networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
+  }));
+}
+
+function getCachedServerInfo(id) {
+  const cached = serverInfoCache.get(id);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > SERVER_INFO_TTL) {
+    serverInfoCache.delete(id);
+    return null;
+  }
+  return cached.data;
+}
+
+function cacheServerInfo(id, info) {
+  serverInfoCache.set(id, { data: info, timestamp: Date.now() });
+}
+
+function firstThursdayOfMonth(date = new Date()) {
+  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+  const offset = (4 - first.getDay() + 7) % 7;
+  first.setDate(first.getDate() + offset);
+  first.setHours(0, 0, 0, 0);
+  return first;
+}
+
+function parseTimestamp(value) {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return null;
+  return new Date(ts);
+}
+
+function shouldResetMapRecord(record, now = new Date()) {
+  if (!record) return false;
+  const updated = parseTimestamp(record.updated_at || record.updatedAt || record.created_at || record.createdAt);
+  if (!updated) return false;
+  const first = firstThursdayOfMonth(now);
+  return now >= first && updated < first;
+}
+
+function sanitizeFilenameSegment(value) {
+  return (String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'map').slice(0, 80);
+}
+
+function mapImageFilePath(serverId, mapKey, extension = 'png') {
+  const safeKey = sanitizeFilenameSegment(mapKey || `server-${serverId}`);
+  return path.join(MAP_STORAGE_DIR, `server-${serverId}-${safeKey}.${extension}`);
+}
+
+function isWithinDir(targetPath, dir) {
+  if (!targetPath) return false;
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedDir = path.resolve(dir);
+  return resolvedTarget.startsWith(resolvedDir);
+}
+
+async function removeMapImage(record) {
+  if (!record?.image_path) return;
+  if (!isWithinDir(record.image_path, MAP_STORAGE_DIR)) return;
+  try {
+    await fs.unlink(record.image_path);
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.warn('Failed to remove cached map image', err);
+  }
+}
+
+async function purgeExpiredMapCaches(now = new Date()) {
+  if (typeof db.listServerMaps !== 'function') return;
+  let rows;
+  try {
+    rows = await db.listServerMaps();
+  } catch (err) {
+    console.error('map cache query failed', err);
+    return;
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  for (const row of rows) {
+    try {
+      if (!shouldResetMapRecord(row, now)) continue;
+      await removeMapImage(row);
+      const id = Number(row.server_id ?? row.serverId ?? row.id);
+      if (!Number.isFinite(id)) continue;
+      await db.deleteServerMap(id);
+    } catch (err) {
+      console.warn('map cache purge failed for server', row?.server_id ?? row?.serverId ?? row?.id, err);
+    }
+  }
+}
+
+function mapRecordToPayload(serverId, record) {
+  if (!record) return null;
+  let meta = {};
+  if (record.data) {
+    try { meta = JSON.parse(record.data); } catch { /* ignore parse errors */ }
+  }
+  const updatedAt = record.updated_at || record.updatedAt || record.created_at || record.createdAt || null;
+  const payload = {
+    ...meta,
+    mapKey: record.map_key || meta.mapKey || null,
+    cached: true,
+    cachedAt: updatedAt,
+    custom: !!record.custom
+  };
+  if (record.image_path) {
+    payload.imageUrl = `/api/servers/${serverId}/map-image?v=${encodeURIComponent(updatedAt || '')}`;
+    payload.localImage = true;
+  } else if (!payload.imageUrl) {
+    payload.imageUrl = null;
+  }
+  if (payload.custom && !payload.imageUrl) payload.needsUpload = true;
+  return payload;
+}
+
+function deriveMapKey(info = {}, metadata = null) {
+  const rawSize = Number(metadata?.size ?? info.size);
+  const rawSeed = Number(metadata?.seed ?? info.seed);
+  const saveVersion = metadata?.saveVersion || null;
+  const parts = [];
+  if (Number.isFinite(rawSize)) parts.push(`size${rawSize}`);
+  if (Number.isFinite(rawSeed)) parts.push(`seed${rawSeed}`);
+  if (saveVersion) parts.push(`v${saveVersion}`);
+  if (!parts.length && info.mapName) parts.push(`name-${info.mapName}`);
+  if (!parts.length && metadata?.id) parts.push(`id${metadata.id}`);
+  return parts.length ? parts.join(':') : null;
+}
+
+async function fetchRustMapMetadata(size, seed, apiKey) {
+  if (!size || !seed) return null;
+  if (!apiKey) {
+    const err = new Error('rustmaps_api_key_missing');
+    err.code = 'rustmaps_api_key_missing';
+    throw err;
+  }
+  const url = `https://api.rustmaps.com/v4/maps/${encodeURIComponent(size)}/${encodeURIComponent(seed)}?staging=false`;
+  const res = await fetch(url, { headers: { 'x-api-key': apiKey } });
+  if (res.status === 401 || res.status === 403) {
+    const err = new Error('rustmaps_unauthorized');
+    err.code = 'rustmaps_unauthorized';
+    throw err;
+  }
+  if (res.status === 404) {
+    const err = new Error('rustmaps_not_found');
+    err.code = 'rustmaps_not_found';
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error('rustmaps_error');
+    err.code = 'rustmaps_error';
+    err.status = res.status;
+    throw err;
+  }
+  const body = await res.json();
+  const data = body?.data;
+  if (!data) {
+    const err = new Error('rustmaps_error');
+    err.code = 'rustmaps_error';
+    throw err;
+  }
+  return {
+    id: data.id || null,
+    type: data.type || null,
+    seed: Number(data.seed ?? seed) || seed,
+    size: Number(data.size ?? size) || size,
+    saveVersion: data.saveVersion || null,
+    mapName: data.mapName || data.map || null,
+    imageUrl: data.imageUrl || data.rawImageUrl || null,
+    rawImageUrl: data.rawImageUrl || null,
+    thumbnailUrl: data.thumbnailUrl || null,
+    url: data.url || null,
+    isCustomMap: !!data.isCustomMap,
+    totalMonuments: data.totalMonuments || null
+  };
+}
+
+async function downloadRustMapImage(meta, apiKey) {
+  const imageUrl = meta?.imageUrl || meta?.rawImageUrl;
+  if (!imageUrl) return null;
+  const headers = apiKey ? { 'x-api-key': apiKey } : undefined;
+  const res = await fetch(imageUrl, { headers });
+  if (!res.ok) {
+    const err = new Error('rustmaps_image_error');
+    err.code = 'rustmaps_image_error';
+    err.status = res.status;
+    throw err;
+  }
+  const arrayBuffer = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const type = res.headers.get('content-type') || '';
+  let extension = 'jpg';
+  if (type.includes('png')) extension = 'png';
+  else if (type.includes('webp')) extension = 'webp';
+  return { buffer, extension, mime: type || 'image/jpeg' };
+}
+
+function decodeBase64Image(input) {
+  if (typeof input !== 'string' || !input) return null;
+  let data = input.trim();
+  let mime = 'application/octet-stream';
+  const match = data.match(/^data:(.+);base64,(.*)$/);
+  if (match) {
+    mime = match[1];
+    data = match[2];
+  }
+  try {
+    const buffer = Buffer.from(data, 'base64');
+    let extension = 'jpg';
+    if (mime.includes('png')) extension = 'png';
+    else if (mime.includes('webp')) extension = 'webp';
+    else if (mime.includes('jpeg')) extension = 'jpg';
+    return { buffer, mime, extension };
+  } catch {
+    return null;
+  }
+}
+
 async function monitorServers() {
   if (monitoring) return;
   monitoring = true;
@@ -151,6 +452,11 @@ const monitorHandle = setInterval(() => {
 if (monitorHandle.unref) monitorHandle.unref();
 monitorServers().catch((err) => console.error('initial monitor error', err));
 
+const mapPurgeHandle = setInterval(() => {
+  purgeExpiredMapCaches().catch((err) => console.error('scheduled map purge error', err));
+}, MAP_PURGE_INTERVAL);
+if (mapPurgeHandle.unref) mapPurgeHandle.unref();
+
 // --- Public metadata
 app.get('/api/public-config', (req, res) => {
   res.json({ allowRegistration: ALLOW_REGISTRATION });
@@ -195,6 +501,36 @@ app.get('/api/me', auth, async (req, res) => {
     if (!row) return res.status(404).json({ error: 'not_found' });
     res.json({ id: row.id, username: row.username, role: row.role, created_at: row.created_at });
   } catch (e) {
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/me/settings', auth, async (req, res) => {
+  try {
+    const settings = await db.getUserSettings(req.user.uid);
+    res.json(settings);
+  } catch {
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/settings', auth, async (req, res) => {
+  const payload = req.body;
+  if (!payload || typeof payload !== 'object') return res.status(400).json({ error: 'invalid_payload' });
+  try {
+    for (const [key, value] of Object.entries(payload)) {
+      if (!ALLOWED_USER_SETTINGS.has(key)) continue;
+      const normalized = typeof value === 'string' ? value.trim() : value;
+      if (normalized === '' || normalized === null || typeof normalized === 'undefined') {
+        await db.deleteUserSetting(req.user.uid, key);
+      } else {
+        await db.setUserSetting(req.user.uid, key, String(normalized));
+      }
+    }
+    const settings = await db.getUserSettings(req.user.uid);
+    res.json(settings);
+  } catch (err) {
+    console.error('settings update failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
@@ -335,6 +671,177 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
     res.json({ deleted });
   } catch {
     res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/live-map', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const client = getOrCreateRcon(server);
+    let info = getCachedServerInfo(id);
+    if (!info) {
+      try {
+        const reply = await client.command('serverinfo');
+        info = parseServerInfoMessage(reply?.Message || '');
+        cacheServerInfo(id, info);
+      } catch (err) {
+        info = { raw: null, mapName: null, size: null, seed: null };
+      }
+    }
+    let playerPayload = '';
+    try {
+      const reply = await client.command('playerlist');
+      playerPayload = reply?.Message || '';
+    } catch (err) {
+      console.error('playerlist command failed', err);
+      return res.status(502).json({ error: 'playerlist_failed' });
+    }
+    const players = parsePlayerListMessage(playerPayload);
+    const now = new Date();
+    let mapRecord = await db.getServerMap(id);
+    if (mapRecord && shouldResetMapRecord(mapRecord, now)) {
+      await removeMapImage(mapRecord);
+      await db.deleteServerMap(id);
+      mapRecord = null;
+    }
+    const infoMapKey = deriveMapKey(info) || null;
+    if (mapRecord && !mapRecord.custom && infoMapKey && mapRecord.map_key && mapRecord.map_key !== infoMapKey) {
+      await removeMapImage(mapRecord);
+      await db.deleteServerMap(id);
+      mapRecord = null;
+    }
+    let map = mapRecordToPayload(id, mapRecord);
+    if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
+    if (!map) {
+      if (info?.size && info?.seed) {
+        const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
+        const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
+        try {
+          let metadata = await fetchRustMapMetadata(info.size, info.seed, apiKey);
+          const finalKey = deriveMapKey(info, metadata) || infoMapKey;
+          const storedMeta = { ...metadata, mapKey: finalKey };
+          await removeMapImage(mapRecord);
+          let imagePath = null;
+          if (!metadata.isCustomMap) {
+            try {
+              const download = await downloadRustMapImage(metadata, apiKey);
+              if (download?.buffer) {
+                const filePath = mapImageFilePath(id, finalKey || infoMapKey || 'map', download.extension);
+                await fs.writeFile(filePath, download.buffer);
+                imagePath = filePath;
+              }
+            } catch (imageErr) {
+              console.warn('RustMaps image download failed', imageErr);
+            }
+          }
+          if (metadata.isCustomMap || imagePath) {
+            await db.saveServerMap(id, {
+              map_key: finalKey || infoMapKey,
+              data: JSON.stringify(storedMeta),
+              image_path: imagePath,
+              custom: metadata.isCustomMap ? 1 : 0
+            });
+            mapRecord = await db.getServerMap(id);
+            map = mapRecordToPayload(id, mapRecord);
+            if (map && !map.mapKey) map.mapKey = finalKey || infoMapKey;
+          } else {
+            map = { ...storedMeta, imageUrl: null, cached: false, custom: !!metadata.isCustomMap };
+          }
+        } catch (err) {
+          const code = err?.code || err?.message;
+          if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized') {
+            return res.status(400).json({ error: code });
+          }
+          if (code === 'rustmaps_not_found') {
+            map = {
+              mapKey: infoMapKey,
+              cached: false,
+              imageUrl: null,
+              custom: false,
+              notFound: true
+            };
+          } else if (code === 'rustmaps_image_error') {
+            console.warn('RustMaps image download error', err);
+            map = {
+              mapKey: infoMapKey,
+              cached: false,
+              imageUrl: null,
+              custom: false
+            };
+          } else {
+            console.error('RustMaps metadata fetch failed', err);
+            return res.status(502).json({ error: 'rustmaps_error' });
+          }
+        }
+      } else if (mapRecord) {
+        map = mapRecordToPayload(id, mapRecord);
+      }
+    }
+    if (map && map.custom && !map.imageUrl) map.needsUpload = true;
+    if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
+    if (map && typeof map.cached === 'undefined') map.cached = !!mapRecord;
+    res.json({ players, map, info, fetchedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('live-map route error', err);
+    res.status(500).json({ error: 'live_map_failed' });
+  }
+});
+
+app.post('/api/servers/:id/map-image', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const { image, mapKey } = req.body || {};
+  if (!image) return res.status(400).json({ error: 'missing_image' });
+  const decoded = decodeBase64Image(image);
+  if (!decoded?.buffer || decoded.buffer.length === 0) return res.status(400).json({ error: 'invalid_image' });
+  if (decoded.buffer.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'image_too_large' });
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    let record = await db.getServerMap(id);
+    const info = getCachedServerInfo(id) || {};
+    const derivedKey = deriveMapKey(info) || null;
+    const targetKey = mapKey || record?.map_key || derivedKey || `custom-${id}`;
+    if (record) await removeMapImage(record);
+    const filePath = mapImageFilePath(id, targetKey, decoded.extension);
+    await fs.writeFile(filePath, decoded.buffer);
+    let data = {};
+    if (record?.data) {
+      try { data = JSON.parse(record.data); } catch { data = {}; }
+    }
+    if (info?.size && !data.size) data.size = info.size;
+    if (info?.seed && !data.seed) data.seed = info.seed;
+    if (info?.mapName && !data.mapName) data.mapName = info.mapName;
+    data = { ...data, mapKey: targetKey, manualUpload: true };
+    await db.saveServerMap(id, {
+      map_key: targetKey,
+      data: JSON.stringify(data),
+      image_path: filePath,
+      custom: 1
+    });
+    record = await db.getServerMap(id);
+    const map = mapRecordToPayload(id, record);
+    res.json({ map, updatedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('map upload failed', err);
+    res.status(500).json({ error: 'map_upload_failed' });
+  }
+});
+
+app.get('/api/servers/:id/map-image', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  try {
+    const record = await db.getServerMap(id);
+    if (!record?.image_path) return res.status(404).json({ error: 'not_found' });
+    if (!isWithinDir(record.image_path, MAP_STORAGE_DIR)) return res.status(404).json({ error: 'not_found' });
+    await fs.stat(record.image_path);
+    res.sendFile(path.resolve(record.image_path));
+  } catch (err) {
+    res.status(404).json({ error: 'not_found' });
   }
 });
 
