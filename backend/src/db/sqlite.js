@@ -28,7 +28,9 @@ function createApi(dbh, dialect) {
         port INTEGER NOT NULL,
         password TEXT NOT NULL,
         tls INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
+        owner_id INTEGER,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE SET NULL
       );
       CREATE TABLE IF NOT EXISTS players(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,6 +75,10 @@ function createApi(dbh, dialect) {
       if (!cols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
       }
+      const serverCols = await dbh.all("PRAGMA table_info('servers')");
+      if (!serverCols.some((c) => c.name === 'owner_id')) {
+        await dbh.exec('ALTER TABLE servers ADD COLUMN owner_id INTEGER');
+      }
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
@@ -87,13 +93,25 @@ function createApi(dbh, dialect) {
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await dbh.run('UPDATE users SET role=? WHERE id=?',[role,id]); },
     async deleteUser(id){ const r = await dbh.run('DELETE FROM users WHERE id=?',[id]); return r.changes; },
-    async listServers(){ return await dbh.all('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
+    async listServers(){ return await dbh.all('SELECT id,name,host,port,tls,owner_id,created_at FROM servers ORDER BY id DESC'); },
     async getServer(id){ return await dbh.get('SELECT * FROM servers WHERE id=?',[id]); },
-    async createServer(s){ const r = await dbh.run('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.lastID; },
+    async createServer(s){
+      const ownerSource = Object.prototype.hasOwnProperty.call(s, 'owner_id') ? s.owner_id : s.ownerId;
+      const ownerCandidate = Number(ownerSource);
+      const ownerId = Number.isFinite(ownerCandidate) ? ownerCandidate : null;
+      const r = await dbh.run('INSERT INTO servers(name,host,port,password,tls,owner_id) VALUES(?,?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0,ownerId]);
+      return r.lastID;
+    },
     async updateServer(id,s){
       const cur = await dbh.get('SELECT * FROM servers WHERE id=?',[id]); if (!cur) return 0;
-      const next = { ...cur, ...s };
-      const r = await dbh.run('UPDATE servers SET name=?,host=?,port=?,password=?,tls=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,id]);
+      let ownerValue = cur.owner_id ?? null;
+      if (Object.prototype.hasOwnProperty.call(s, 'owner_id') || Object.prototype.hasOwnProperty.call(s, 'ownerId')) {
+        const raw = Object.prototype.hasOwnProperty.call(s, 'owner_id') ? s.owner_id : s.ownerId;
+        const candidate = Number(raw);
+        ownerValue = Number.isFinite(candidate) ? candidate : null;
+      }
+      const next = { ...cur, ...s, owner_id: ownerValue };
+      const r = await dbh.run('UPDATE servers SET name=?,host=?,port=?,password=?,tls=?,owner_id=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,next.owner_id ?? null,id]);
       return r.changes;
     },
     async deleteServer(id){ const r = await dbh.run('DELETE FROM servers WHERE id=?',[id]); return r.changes; },

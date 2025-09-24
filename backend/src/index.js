@@ -11,6 +11,7 @@ import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
 import { connectRcon, sendRconCommand, closeRcon as terminateRcon, subscribeToRcon } from './rcon.js';
+import { fetchRustMapMetadata, downloadRustMapImage } from './rustmaps.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -42,6 +43,8 @@ const MAP_CACHE_TZ_OFFSET_MINUTES = 120; // UTC+2
 const MAP_CACHE_RESET_HOUR = 20;
 const MAP_CACHE_RESET_MINUTE = 0;
 const KNOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
+const RUSTMAPS_GENERATION_POLL_INTERVAL = Math.max(toInt(process.env.RUSTMAPS_GENERATION_POLL_INTERVAL_MS, 10_000), 1_000);
+const RUSTMAPS_GENERATION_TIMEOUT = Math.max(toInt(process.env.RUSTMAPS_GENERATION_TIMEOUT_MS, 5 * 60 * 1000), 60_000);
 
 let lastGlobalMapCacheReset = null;
 
@@ -407,74 +410,6 @@ function deriveMapKey(info = {}, metadata = null) {
   return parts.length ? parts.join(':') : null;
 }
 
-async function fetchRustMapMetadata(size, seed, apiKey) {
-  if (!size || !seed) return null;
-  if (!apiKey) {
-    const err = new Error('rustmaps_api_key_missing');
-    err.code = 'rustmaps_api_key_missing';
-    throw err;
-  }
-  const url = `https://api.rustmaps.com/v4/maps/${encodeURIComponent(size)}/${encodeURIComponent(seed)}?staging=false`;
-  const res = await fetch(url, { headers: { 'x-api-key': apiKey } });
-  if (res.status === 401 || res.status === 403) {
-    const err = new Error('rustmaps_unauthorized');
-    err.code = 'rustmaps_unauthorized';
-    throw err;
-  }
-  if (res.status === 404) {
-    const err = new Error('rustmaps_not_found');
-    err.code = 'rustmaps_not_found';
-    throw err;
-  }
-  if (!res.ok) {
-    const err = new Error('rustmaps_error');
-    err.code = 'rustmaps_error';
-    err.status = res.status;
-    throw err;
-  }
-  const body = await res.json();
-  const data = body?.data;
-  if (!data) {
-    const err = new Error('rustmaps_error');
-    err.code = 'rustmaps_error';
-    throw err;
-  }
-  return {
-    id: data.id || null,
-    type: data.type || null,
-    seed: Number(data.seed ?? seed) || seed,
-    size: Number(data.size ?? size) || size,
-    saveVersion: data.saveVersion || null,
-    mapName: data.mapName || data.map || null,
-    imageUrl: data.imageUrl || data.rawImageUrl || null,
-    rawImageUrl: data.rawImageUrl || null,
-    thumbnailUrl: data.thumbnailUrl || null,
-    url: data.url || null,
-    isCustomMap: !!data.isCustomMap,
-    totalMonuments: data.totalMonuments || null
-  };
-}
-
-async function downloadRustMapImage(meta, apiKey) {
-  const imageUrl = meta?.imageUrl || meta?.rawImageUrl;
-  if (!imageUrl) return null;
-  const headers = apiKey ? { 'x-api-key': apiKey } : undefined;
-  const res = await fetch(imageUrl, { headers });
-  if (!res.ok) {
-    const err = new Error('rustmaps_image_error');
-    err.code = 'rustmaps_image_error';
-    err.status = res.status;
-    throw err;
-  }
-  const arrayBuffer = await res.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  const type = res.headers.get('content-type') || '';
-  let extension = 'jpg';
-  if (type.includes('png')) extension = 'png';
-  else if (type.includes('webp')) extension = 'webp';
-  return { buffer, extension, mime: type || 'image/jpeg' };
-}
-
 function decodeBase64Image(input) {
   if (typeof input !== 'string' || !input) return null;
   let data = input.trim();
@@ -734,7 +669,9 @@ app.post('/api/servers', auth, async (req, res) => {
   const { name, host, port, password, tls } = req.body || {};
   if (!name || !host || !port || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
-    const id = await db.createServer({ name, host, port: parseInt(port, 10), password, tls: tls ? 1 : 0 });
+    const ownerCandidate = Number(req.user?.uid);
+    const ownerId = Number.isFinite(ownerCandidate) ? ownerCandidate : null;
+    const id = await db.createServer({ name, host, port: parseInt(port, 10), password, tls: tls ? 1 : 0, owner_id: ownerId });
     triggerMonitorSoon();
     res.json({ id });
   } catch {
@@ -746,7 +683,21 @@ app.patch('/api/servers/:id', auth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   try {
-    const updated = await db.updateServer(id, req.body || {});
+    const payload = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(payload, 'ownerId') && !Object.prototype.hasOwnProperty.call(payload, 'owner_id')) {
+      payload.owner_id = payload.ownerId;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'owner_id')) {
+      const candidate = payload.owner_id;
+      if (candidate === null || candidate === '' || typeof candidate === 'undefined') {
+        payload.owner_id = null;
+      } else {
+        const parsed = Number(candidate);
+        payload.owner_id = Number.isFinite(parsed) ? parsed : null;
+      }
+    }
+    delete payload.ownerId;
+    const updated = await db.updateServer(id, payload || {});
     if (updated) {
       closeServerRcon(id);
       triggerMonitorSoon();
@@ -813,10 +764,16 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
       if (info?.size && info?.seed) {
-        const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
-        const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
+        const ownerRaw = typeof server?.owner_id !== 'undefined' ? server.owner_id : server?.ownerId;
+        const parsedOwner = Number(ownerRaw);
+        const ownerId = Number.isFinite(parsedOwner) ? parsedOwner : null;
+        const ownerKey = ownerId ? await db.getUserSetting(ownerId, 'rustmaps_api_key') : null;
+        const apiKey = ownerKey || DEFAULT_RUSTMAPS_API_KEY || '';
         try {
-          let metadata = await fetchRustMapMetadata(info.size, info.seed, apiKey);
+          let metadata = await fetchRustMapMetadata(info.size, info.seed, apiKey, {
+            pollIntervalMs: RUSTMAPS_GENERATION_POLL_INTERVAL,
+            generationTimeoutMs: RUSTMAPS_GENERATION_TIMEOUT
+          });
           const finalKey = deriveMapKey(info, metadata) || infoMapKey;
           const storedMeta = { ...metadata, mapKey: finalKey };
           await removeMapImage(mapRecord);
@@ -854,8 +811,14 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
           }
         } catch (err) {
           const code = err?.code || err?.message;
-          if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized') {
+          if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized' || code === 'rustmaps_invalid_request') {
             return res.status(400).json({ error: code });
+          }
+          if (code === 'rustmaps_rate_limited') {
+            return res.status(429).json({ error: code });
+          }
+          if (code === 'rustmaps_generation_timeout') {
+            return res.status(504).json({ error: code });
           }
           if (code === 'rustmaps_not_found') {
             map = {

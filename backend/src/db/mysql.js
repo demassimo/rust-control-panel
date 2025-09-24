@@ -34,8 +34,21 @@ function createApi(pool, dialect) {
         port INT NOT NULL,
         password VARCHAR(255) NOT NULL,
         tls TINYINT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        owner_id INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_server_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB;`);
+      try {
+        await exec('ALTER TABLE servers ADD COLUMN owner_id INT NULL');
+      } catch (e) {
+        if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+      }
+      try {
+        await exec('ALTER TABLE servers ADD CONSTRAINT fk_server_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL');
+      } catch (e) {
+        const ignorable = ['ER_DUP_KEYNAME', 'ER_CANT_CREATE_TABLE', 'ER_TABLE_EXISTS_ERROR', 'ER_FK_DUP_NAME', 'ER_DUP_KEY', 'ER_CANNOT_ADD_FOREIGN'];
+        if (!ignorable.includes(e?.code)) throw e;
+      }
       await exec(`CREATE TABLE IF NOT EXISTS players(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) UNIQUE NOT NULL,
@@ -89,13 +102,25 @@ function createApi(pool, dialect) {
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await exec('UPDATE users SET role=? WHERE id=?',[role,id]); },
     async deleteUser(id){ const r = await exec('DELETE FROM users WHERE id=?',[id]); return r.affectedRows||0; },
-    async listServers(){ return await exec('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
+    async listServers(){ return await exec('SELECT id,name,host,port,tls,owner_id,created_at FROM servers ORDER BY id DESC'); },
     async getServer(id){ const r = await exec('SELECT * FROM servers WHERE id=?',[id]); return r[0]||null; },
-    async createServer(s){ const r = await exec('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.insertId; },
+    async createServer(s){
+      const ownerSource = Object.prototype.hasOwnProperty.call(s, 'owner_id') ? s.owner_id : s.ownerId;
+      const ownerCandidate = Number(ownerSource);
+      const ownerId = Number.isFinite(ownerCandidate) ? ownerCandidate : null;
+      const r = await exec('INSERT INTO servers(name,host,port,password,tls,owner_id) VALUES(?,?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0,ownerId]);
+      return r.insertId;
+    },
     async updateServer(id,s){
       const cur = await this.getServer(id); if (!cur) return 0;
-      const next = { ...cur, ...s };
-      const r = await exec('UPDATE servers SET name=?,host=?,port=?,password=?,tls=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,id]);
+      let ownerValue = cur.owner_id ?? null;
+      if (Object.prototype.hasOwnProperty.call(s, 'owner_id') || Object.prototype.hasOwnProperty.call(s, 'ownerId')) {
+        const raw = Object.prototype.hasOwnProperty.call(s, 'owner_id') ? s.owner_id : s.ownerId;
+        const candidate = Number(raw);
+        ownerValue = Number.isFinite(candidate) ? candidate : null;
+      }
+      const next = { ...cur, ...s, owner_id: ownerValue };
+      const r = await exec('UPDATE servers SET name=?,host=?,port=?,password=?,tls=?,owner_id=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,next.owner_id ?? null,id]);
       return r.affectedRows||0;
     },
     async deleteServer(id){ const r = await exec('DELETE FROM servers WHERE id=?',[id]); return r.affectedRows||0; },
