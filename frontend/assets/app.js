@@ -512,7 +512,9 @@
       if (text) {
         ui.log(text);
       }
+
       moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
+
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
@@ -974,7 +976,7 @@
     highlightSelectedServer();
     ui.clearConsole();
     const name = entry?.data?.name || `Server #${numericId}`;
-    ui.log(`Connecting to ${name}…`);
+    ui.log(`Connecting to ${name}...`);
     const sock = ensureSocket();
     if (sock && sock.connected) {
       sock.emit('join-server', numericId);
