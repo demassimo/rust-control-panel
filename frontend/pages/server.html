@@ -1,13 +1,15 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Rust Control Panel – Server</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="/assets/css/dark-theme.css" />
-  <script defer src="/assets/modules/module-loader.js"></script>
-  <script defer src="/assets/js/panel-shell.js"></script>
-</head>
+  <head>
+    <meta charset="utf-8" />
+    <title>Rust Control Panel – Server</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/assets/css/dark-theme.css" />
+    <script defer src="/assets/modules/module-loader.js"></script>
+    <script defer src="/assets/modules/map.js"></script>
+    <script defer src="/assets/modules/live-players.js"></script>
+    <script defer src="/assets/js/panel-shell.js"></script>
+  </head>
 <body class="app">
   <header class="topbar">
     <a class="back" href="/servers">← Back to Servers</a>
@@ -46,19 +48,6 @@
         </div>
       </div>
 
-      <!-- Bottom: Player list (filters the map on click) -->
-      <div class="card list-card">
-        <div class="card-head">
-          <div class="card-title">Online Players <span id="player-count" class="muted">(0)</span></div>
-          <div class="card-tools">
-            <button class="btn ghost small" id="show-all">Show All</button>
-          </div>
-        </div>
-        <div class="card-body no-pad">
-          <div class="players-list" data-module="players-list"
-               data-props='{"serverId":"__SERVER_ID__"}'></div>
-        </div>
-      </div>
     </section>
 
     <!-- Right: Server/Player Info -->
@@ -75,6 +64,19 @@
         <button class="btn ghost" id="btn-saveworld">Save World</button>
       </div>
     </aside>
+
+    <section class="card players-card">
+      <div class="card-head">
+        <div class="card-title">Connected Players <span id="player-count" class="muted">(0)</span></div>
+        <div class="card-tools">
+          <button class="btn ghost small" id="show-all">Show everyone</button>
+        </div>
+      </div>
+      <div class="card-body no-pad">
+        <div class="live-players-board" data-module="live-players"
+             data-props='{"serverId":"__SERVER_ID__"}'></div>
+      </div>
+    </section>
   </main>
 </body>
 </html>

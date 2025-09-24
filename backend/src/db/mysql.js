@@ -44,9 +44,23 @@ function createApi(pool, dialect) {
         country VARCHAR(8),
         profileurl TEXT,
         vac_banned TINYINT DEFAULT 0,
+        game_bans INT DEFAULT 0,
+        last_ban_days INT NULL,
+        visibility INT NULL,
+        rust_playtime_minutes INT NULL,
+        playtime_updated_at TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB;`);
+      const ensureColumn = async (sql) => {
+        try { await exec(sql); }
+        catch (e) { if (e.code !== 'ER_DUP_FIELDNAME') throw e; }
+      };
+      await ensureColumn('ALTER TABLE players ADD COLUMN game_bans INT DEFAULT 0');
+      await ensureColumn('ALTER TABLE players ADD COLUMN last_ban_days INT NULL');
+      await ensureColumn('ALTER TABLE players ADD COLUMN visibility INT NULL');
+      await ensureColumn('ALTER TABLE players ADD COLUMN rust_playtime_minutes INT NULL');
+      await ensureColumn('ALTER TABLE players ADD COLUMN playtime_updated_at TIMESTAMP NULL');
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -100,13 +114,16 @@ function createApi(pool, dialect) {
     },
     async deleteServer(id){ const r = await exec('DELETE FROM servers WHERE id=?',[id]); return r.affectedRows||0; },
     async upsertPlayer(p){
-      await exec(`INSERT INTO players(steamid,persona,avatar,country,profileurl,vac_banned)
-                  VALUES(?,?,?,?,?,?)
+      await exec(`INSERT INTO players(steamid,persona,avatar,country,profileurl,vac_banned,game_bans,last_ban_days,visibility,rust_playtime_minutes,playtime_updated_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?)
                   ON DUPLICATE KEY UPDATE persona=VALUES(persona), avatar=VALUES(avatar),
-                    country=VALUES(country), profileurl=VALUES(profileurl), vac_banned=VALUES(vac_banned)`,
-                  [p.steamid,p.persona,p.avatar,p.country,p.profileurl,p.vac_banned?1:0]);
+                    country=VALUES(country), profileurl=VALUES(profileurl), vac_banned=VALUES(vac_banned),
+                    game_bans=VALUES(game_bans), last_ban_days=VALUES(last_ban_days), visibility=VALUES(visibility),
+                    rust_playtime_minutes=VALUES(rust_playtime_minutes), playtime_updated_at=VALUES(playtime_updated_at)`,
+                  [p.steamid,p.persona,p.avatar,p.country,p.profileurl,p.vac_banned?1:0,p.game_bans??0,p.last_ban_days??null,p.visibility??null,p.rust_playtime_minutes??null,p.playtime_updated_at??null]);
     },
     async getPlayer(steamid){ const r = await exec('SELECT * FROM players WHERE steamid=?',[steamid]); return r[0]||null; },
+    async getPlayersBySteamIds(steamids=[]){ if (!Array.isArray(steamids) || steamids.length === 0) return []; const placeholders = steamids.map(()=>'?' ).join(','); return await exec(`SELECT * FROM players WHERE steamid IN (${placeholders})`, steamids); },
     async listPlayers({limit=100,offset=0}={}){ return await exec('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },

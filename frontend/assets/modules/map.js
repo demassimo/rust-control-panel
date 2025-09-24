@@ -452,22 +452,55 @@
         clearBtn.disabled = !state.selectedSolo && !state.selectedTeam;
       }
 
+      function broadcastPlayers() {
+        const payload = { players: [...state.players], serverId: state.serverId };
+        ctx.emit?.('live-players:data', payload);
+        ctx.emit?.('players:list', { players: [...state.players] });
+        window.dispatchEvent(new CustomEvent('players:list', { detail: { players: [...state.players] } }));
+      }
+
       function clearSelection() {
         state.selectedTeam = null;
         state.selectedSolo = null;
         renderAll();
+        ctx.emit?.('live-players:highlight', { steamId: null });
+        window.dispatchEvent(new CustomEvent('team:clear'));
       }
 
       function selectPlayer(player) {
         const key = teamKey(player);
+        let highlightSteam = null;
+        let broadcastPlayer = null;
         if (key > 0) {
-          state.selectedTeam = state.selectedTeam === key ? null : key;
-          state.selectedSolo = null;
+          const sameTeam = !state.selectedSolo && state.selectedTeam === key;
+          if (sameTeam) {
+            state.selectedTeam = null;
+            highlightSteam = null;
+          } else {
+            state.selectedTeam = key;
+            state.selectedSolo = null;
+            highlightSteam = player.steamId;
+            broadcastPlayer = player;
+          }
         } else {
-          state.selectedSolo = state.selectedSolo === player.steamId ? null : player.steamId;
-          state.selectedTeam = null;
+          const samePlayer = state.selectedSolo === player.steamId;
+          if (samePlayer) {
+            state.selectedSolo = null;
+            highlightSteam = null;
+          } else {
+            state.selectedSolo = player.steamId;
+            state.selectedTeam = null;
+            highlightSteam = player.steamId;
+            broadcastPlayer = player;
+          }
         }
         renderAll();
+        ctx.emit?.('live-players:highlight', { steamId: highlightSteam });
+        if (broadcastPlayer) {
+          window.dispatchEvent(new CustomEvent('player:selected', { detail: { player: broadcastPlayer, teamKey: teamKey(broadcastPlayer) } }));
+        } else {
+          window.dispatchEvent(new CustomEvent('team:clear'));
+        }
       }
 
       clearBtn.addEventListener('click', () => clearSelection());
@@ -483,6 +516,7 @@
           state.mapMeta = data?.map || null;
           state.serverInfo = data?.info || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
+          broadcastPlayers();
           updateUploadSection();
           if (!state.mapMeta) {
             setMessage('Waiting for map metadata…');
@@ -552,6 +586,7 @@
           renderTeamInfo();
           updateUploadSection();
           hideUploadNotice();
+          broadcastPlayers();
           setMessage('Connect to a server to load the live map.');
         }
       });
@@ -571,7 +606,22 @@
         renderTeamInfo();
         updateUploadSection();
         hideUploadNotice();
+        broadcastPlayers();
         setMessage('Sign in and connect to a server to view the live map.');
+      });
+
+      const offFocus = ctx.on?.('live-players:focus', ({ steamId }) => {
+        if (!steamId) {
+          clearSelection();
+          return;
+        }
+        const target = state.players.find((p) => p.steamId === steamId);
+        if (!target) return;
+        state.selectedSolo = steamId;
+        state.selectedTeam = Number(target.teamId) > 0 ? Number(target.teamId) : null;
+        renderAll();
+        ctx.emit?.('live-players:highlight', { steamId });
+        window.dispatchEvent(new CustomEvent('player:selected', { detail: { player: target, teamKey: teamKey(target) } }));
       });
 
       const offSettingsUpdate = ctx.on?.('settings:updated', () => {
@@ -584,6 +634,7 @@
       ctx.onCleanup?.(() => offDisconnect?.());
       ctx.onCleanup?.(() => offLogout?.());
       ctx.onCleanup?.(() => offSettingsUpdate?.());
+      ctx.onCleanup?.(() => offFocus?.());
       ctx.onCleanup?.(() => stopPolling());
 
       setMessage('Connect to a server to load the live map.');
