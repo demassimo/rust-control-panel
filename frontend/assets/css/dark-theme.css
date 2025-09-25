@@ -110,8 +110,13 @@ main.grid{
 .players-directory{padding:0}
 .players-directory .module-message{padding:24px; text-align:center}
 .player-directory{
-  list-style:none; margin:0; padding:0; display:flex; flex-direction:column;
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
 }
+.player-directory .player-name-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .player-directory li{
   display:flex; justify-content:space-between; gap:18px; align-items:flex-start;
   padding:16px 18px; border-bottom:1px solid var(--border);
@@ -282,8 +287,8 @@ main.grid{
   position:fixed; inset:0; z-index:90;
   background:rgba(6,9,15,.72);
   backdrop-filter:blur(12px);
-  display:flex; align-items:flex-start; justify-content:center;
-  padding:60px 16px 30px; overflow:auto;
+  display:flex; align-items:center; justify-content:center;
+  padding:40px 16px; overflow:auto;
 }
 .player-modal-backdrop.hidden{display:none}
 .player-modal{

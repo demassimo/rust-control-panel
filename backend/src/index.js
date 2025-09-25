@@ -439,9 +439,16 @@ function normaliseServerPlayer(row) {
     : (typeof row.lastIp === 'string' && row.lastIp ? row.lastIp : null);
   const portRaw = row.last_port ?? row.lastPort;
   const portNum = Number(portRaw);
+  const forced = typeof row.forced_display_name === 'string' && row.forced_display_name
+    ? row.forced_display_name
+    : (typeof row.forcedDisplayName === 'string' && row.forcedDisplayName ? row.forcedDisplayName : null);
+  const rawDisplay = row.display_name || row.displayName || base.persona || base.steamid || '';
+  const effectiveName = forced || rawDisplay || '';
   return {
     server_id: Number.isFinite(serverId) ? serverId : null,
-    display_name: row.display_name || row.displayName || base.persona || base.steamid || '',
+    display_name: effectiveName,
+    raw_display_name: rawDisplay || null,
+    forced_display_name: forced || null,
     first_seen: toIso(row.first_seen || row.firstSeen),
     last_seen: toIso(row.last_seen || row.lastSeen),
     last_ip: ip || null,
@@ -1489,6 +1496,30 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
     res.json(payload);
   } catch (err) {
     console.error('listServerPlayers failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.patch('/api/servers/:serverId/players/:steamid', auth, async (req, res) => {
+  if (typeof db.setServerPlayerDisplayName !== 'function') {
+    return res.status(400).json({ error: 'unsupported' });
+  }
+  const serverId = Number(req.params.serverId);
+  if (!Number.isFinite(serverId)) return res.status(400).json({ error: 'invalid_server_id' });
+  const steamid = String(req.params.steamid || '').trim();
+  if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+  const { display_name } = req.body || {};
+  if (typeof display_name !== 'undefined' && display_name !== null && typeof display_name !== 'string') {
+    return res.status(400).json({ error: 'invalid_display_name' });
+  }
+  const trimmed = typeof display_name === 'string' ? display_name.trim().slice(0, 190) : null;
+  const payload = trimmed ? trimmed : null;
+  try {
+    const updated = await db.setServerPlayerDisplayName({ server_id: serverId, steamid, display_name: payload });
+    if (!updated) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true, forced_display_name: payload });
+  } catch (err) {
+    console.error('setServerPlayerDisplayName failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
