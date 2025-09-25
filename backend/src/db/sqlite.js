@@ -97,6 +97,15 @@ function createApi(dbh, dialect) {
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS server_discord_integrations(
+        server_id INTEGER PRIMARY KEY,
+        bot_token TEXT,
+        guild_id TEXT,
+        channel_id TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
       `);
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
@@ -270,6 +279,19 @@ function createApi(dbh, dialect) {
       }
       const row = await dbh.get('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
       return row?.c ? Number(row.c) : 0;
+    },
+    async getServerDiscordIntegration(serverId){
+      return await dbh.get('SELECT * FROM server_discord_integrations WHERE server_id=?',[serverId]);
+    },
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
+      await dbh.run(
+        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,created_at,updated_at) VALUES(?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, updated_at=excluded.updated_at",
+        [serverId, bot_token, guild_id, channel_id]
+      );
+    },
+    async deleteServerDiscordIntegration(serverId){
+      const result = await dbh.run('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
+      return result?.changes ? Number(result.changes) : 0;
     }
   };
 }
