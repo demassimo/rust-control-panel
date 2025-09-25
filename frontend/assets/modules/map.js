@@ -207,15 +207,20 @@
         return `hsl(${hue}, 12%, 72%)`;
       }
 
+      function hasMapImage(meta) {
+        if (!meta || typeof meta !== 'object') return false;
+        return !!meta.imageUrl;
+      }
+
       function mapReady() {
-        if (!state.mapMeta || !state.mapMeta.imageUrl) return false;
+        if (!state.mapMeta || !hasMapImage(state.mapMeta)) return false;
         const size = Number(state.mapMeta.size ?? state.serverInfo?.size);
         return Number.isFinite(size) && size > 0;
       }
 
       function updateUploadSection() {
         if (!uploadWrap) return;
-        const needsUpload = !!(state.mapMeta && state.mapMeta.custom && !state.mapMeta.imageUrl);
+        const needsUpload = !!(state.mapMeta && state.mapMeta.custom && !hasMapImage(state.mapMeta));
         if (needsUpload) {
           uploadWrap.classList.remove('hidden');
         } else {
@@ -280,11 +285,11 @@
       }
 
       function updateMapImage(meta) {
-        if (!meta?.imageUrl && !meta?.rawImageUrl) {
+        if (!hasMapImage(meta)) {
           mapImage.removeAttribute('src');
           return;
         }
-        const next = meta.imageUrl || meta.rawImageUrl;
+        const next = meta.imageUrl;
         if (mapImage.getAttribute('src') !== next) {
           mapImage.src = next;
         }
@@ -448,7 +453,7 @@
           const cachedTs = new Date(state.mapMeta.cachedAt);
           metaLines.push({ label: 'Cached', value: cachedTs.toLocaleString() });
         }
-        if (state.mapMeta?.imageUrl) {
+        if (hasMapImage(state.mapMeta)) {
           const source = state.mapMeta.custom ? 'Uploaded image' : state.mapMeta.localImage ? 'Cached copy' : 'RustMaps';
           metaLines.push({ label: 'Source', value: source });
         }
@@ -586,14 +591,17 @@
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
           broadcastPlayers();
           updateUploadSection();
+          const hasImage = hasMapImage(state.mapMeta);
           if (!state.mapMeta) {
             setMessage('Waiting for map metadata…');
           } else if (state.mapMeta?.notFound) {
             const wrap = document.createElement('span');
             wrap.textContent = 'RustMaps has not published imagery for this seed yet. Try again shortly or upload your render below.';
             setMessage(wrap);
-          } else if (state.mapMeta?.custom && !state.mapMeta?.imageUrl) {
+          } else if (state.mapMeta?.custom && !hasImage) {
             setMessage('Upload your rendered map image to enable the live map.');
+          } else if (!hasImage) {
+            setMessage('Map imagery is still being prepared. Try again shortly.');
           } else if (!mapReady()) {
             setMessage('Map metadata is incomplete. Try again shortly.');
           } else {
