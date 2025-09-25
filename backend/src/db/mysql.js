@@ -57,6 +57,7 @@ function createApi(pool, dialect) {
         server_id INT NOT NULL,
         steamid VARCHAR(32) NOT NULL,
         display_name VARCHAR(190) NULL,
+        forced_display_name VARCHAR(190) NULL,
         first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_ip VARCHAR(128) NULL,
@@ -76,6 +77,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE players ADD COLUMN playtime_updated_at TIMESTAMP NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_ip VARCHAR(128) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
+      await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -173,14 +175,14 @@ function createApi(pool, dialect) {
       const portNum = Number(port);
       const portValue = Number.isFinite(portNum) ? Math.max(0, Math.trunc(portNum)) : null;
       await exec(`
-        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen, last_ip, last_port)
-        VALUES(?,?,?,?,?,?,?)
+        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port)
+        VALUES(?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
           display_name=COALESCE(VALUES(display_name), server_players.display_name),
           last_seen=VALUES(last_seen),
           last_ip=COALESCE(VALUES(last_ip), server_players.last_ip),
           last_port=COALESCE(VALUES(last_port), server_players.last_port)
-      `,[serverIdNum,sid,display_name,seen,seen,ipValue,portValue]);
+      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
     },
     async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, recorded_at=null }){
       const serverIdNum = Number(server_id);
@@ -208,11 +210,53 @@ function createApi(pool, dialect) {
         timestamp
       ]);
     },
+    async listServerPlayerCounts(serverId, { since = null, until = null, limit = 5000 } = {}){
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const conditions = ['server_id=?'];
+      const params = [serverIdNum];
+
+      const normalise = (value) => {
+        if (!value) return null;
+        if (value instanceof Date) {
+          return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 19).replace('T', ' ');
+        }
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return parsed.toISOString().slice(0, 19).replace('T', ' ');
+      };
+
+      const sinceSql = normalise(since);
+      const untilSql = normalise(until);
+      if (sinceSql) {
+        conditions.push('recorded_at >= ?');
+        params.push(sinceSql);
+      }
+      if (untilSql) {
+        conditions.push('recorded_at <= ?');
+        params.push(untilSql);
+      }
+
+      let sql = `
+        SELECT server_id, player_count, max_players, queued, sleepers, recorded_at
+        FROM server_player_counts
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY recorded_at ASC
+      `;
+
+      const maxRows = Number(limit);
+      if (Number.isFinite(maxRows) && maxRows > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.floor(maxRows));
+      }
+
+      return await exec(sql, params);
+    },
     async listServerPlayers(serverId,{limit=100,offset=0}={}){
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];
       return await exec(`
-        SELECT sp.server_id, sp.steamid, sp.display_name, sp.first_seen, sp.last_seen,
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
                sp.last_ip, sp.last_port,
                p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
                p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
@@ -222,6 +266,21 @@ function createApi(pool, dialect) {
         ORDER BY sp.last_seen DESC
         LIMIT ? OFFSET ?
       `,[serverIdNum,limit,offset]);
+    },
+    async setServerPlayerDisplayName({ server_id, steamid, display_name = null }){
+      const serverIdNum = Number(server_id);
+      if (!Number.isFinite(serverIdNum)) return 0;
+      const sid = String(steamid || '').trim();
+      if (!sid) return 0;
+      const value = typeof display_name === 'string' && display_name.trim()
+        ? display_name.trim().slice(0, 190)
+        : null;
+      const result = await exec(`
+        UPDATE server_players
+        SET forced_display_name=?
+        WHERE server_id=? AND steamid=?
+      `,[value,serverIdNum,sid]);
+      return result.affectedRows || 0;
     },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },

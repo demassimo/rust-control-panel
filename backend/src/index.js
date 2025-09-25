@@ -56,6 +56,174 @@ const STEAM_PROFILE_REFRESH_INTERVAL = Math.max(toInt(process.env.STEAM_PROFILE_
 const STEAM_PLAYTIME_REFRESH_INTERVAL = Math.max(toInt(process.env.STEAM_PLAYTIME_REFRESH_MS || '21600000', 21600000), 3600000);
 const RUST_STEAM_APP_ID = 252490;
 
+const MIN_PLAYER_HISTORY_RANGE_MS = 60 * 60 * 1000; // 1 hour
+const MAX_PLAYER_HISTORY_RANGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const MIN_PLAYER_HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_PLAYER_HISTORY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PLAYER_HISTORY_MAX_BUCKETS = 2000;
+
+const DEFAULT_RANGE_INTERVALS = [
+  { maxRange: 6 * 60 * 60 * 1000, interval: 15 * 60 * 1000 },
+  { maxRange: 24 * 60 * 60 * 1000, interval: 60 * 60 * 1000 },
+  { maxRange: 3 * 24 * 60 * 60 * 1000, interval: 3 * 60 * 60 * 1000 },
+  { maxRange: 7 * 24 * 60 * 60 * 1000, interval: 6 * 60 * 60 * 1000 },
+  { maxRange: MAX_PLAYER_HISTORY_RANGE_MS + 1, interval: 24 * 60 * 60 * 1000 }
+];
+
+function clamp(value, min, max) {
+  if (Number.isNaN(value) || !Number.isFinite(value)) return min;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function parseDurationMs(value, fallback) {
+  if (value == null) return fallback;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  const str = String(value).trim();
+  if (!str) return fallback;
+  const match = str.match(/^(-?\d+(?:\.\d+)?)(ms|s|m|h|d)?$/i);
+  if (!match) return fallback;
+  const numeric = Number(match[1]);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  const unit = (match[2] || 'ms').toLowerCase();
+  switch (unit) {
+    case 'ms': return numeric;
+    case 's': return numeric * 1000;
+    case 'm': return numeric * 60 * 1000;
+    case 'h': return numeric * 60 * 60 * 1000;
+    case 'd': return numeric * 24 * 60 * 60 * 1000;
+    default: return fallback;
+  }
+}
+
+function pickDefaultInterval(rangeMs) {
+  for (const entry of DEFAULT_RANGE_INTERVALS) {
+    if (rangeMs <= entry.maxRange) return entry.interval;
+  }
+  return DEFAULT_RANGE_INTERVALS[DEFAULT_RANGE_INTERVALS.length - 1].interval;
+}
+
+function parseTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.getTime();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.getTime();
+}
+
+function alignTimestamp(ms, intervalMs, direction = 'floor') {
+  if (!Number.isFinite(ms) || !Number.isFinite(intervalMs) || intervalMs <= 0) return ms;
+  if (direction === 'ceil') {
+    return Math.ceil(ms / intervalMs) * intervalMs;
+  }
+  return Math.floor(ms / intervalMs) * intervalMs;
+}
+
+function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
+  const bucketMap = new Map();
+  let latestSample = null;
+
+  for (const row of rows) {
+    const timestamp = parseTimestamp(row?.recorded_at ?? row?.recordedAt);
+    if (!Number.isFinite(timestamp)) continue;
+    if (timestamp < startMs || timestamp > endMs) continue;
+    const playerValueRaw = Number(row?.player_count ?? row?.playerCount);
+    const maxPlayersRaw = Number(row?.max_players ?? row?.maxPlayers);
+
+    if (!latestSample || timestamp > latestSample.ts) {
+      latestSample = {
+        ts: timestamp,
+        playerCount: Number.isFinite(playerValueRaw) ? Math.max(0, Math.trunc(playerValueRaw)) : null,
+        maxPlayers: Number.isFinite(maxPlayersRaw) ? Math.max(0, Math.trunc(maxPlayersRaw)) : null
+      };
+    }
+
+    const adjustedTs = timestamp === endMs ? timestamp - 1 : timestamp;
+    const bucketStart = alignTimestamp(adjustedTs, intervalMs, 'floor');
+    if (bucketStart < startMs || bucketStart >= endMs) continue;
+    let bucket = bucketMap.get(bucketStart);
+    if (!bucket) {
+      bucket = { sum: 0, samples: 0, peak: null, maxPlayers: null, queuedMax: null, sleepersMax: null };
+      bucketMap.set(bucketStart, bucket);
+    }
+    if (Number.isFinite(playerValueRaw)) {
+      const playerValue = Math.max(0, playerValueRaw);
+      bucket.sum += playerValue;
+      bucket.samples += 1;
+      bucket.peak = bucket.peak != null ? Math.max(bucket.peak, playerValue) : playerValue;
+    }
+    if (Number.isFinite(maxPlayersRaw)) {
+      const maxValue = Math.max(0, Math.trunc(maxPlayersRaw));
+      bucket.maxPlayers = bucket.maxPlayers != null ? Math.max(bucket.maxPlayers, maxValue) : maxValue;
+    }
+    const queuedRaw = Number(row?.queued ?? row?.queuedPlayers);
+    if (Number.isFinite(queuedRaw)) {
+      const queuedValue = Math.max(0, Math.trunc(queuedRaw));
+      bucket.queuedMax = bucket.queuedMax != null ? Math.max(bucket.queuedMax, queuedValue) : queuedValue;
+    }
+    const sleepersRaw = Number(row?.sleepers ?? row?.sleepersPlayers);
+    if (Number.isFinite(sleepersRaw)) {
+      const sleepersValue = Math.max(0, Math.trunc(sleepersRaw));
+      bucket.sleepersMax = bucket.sleepersMax != null ? Math.max(bucket.sleepersMax, sleepersValue) : sleepersValue;
+    }
+  }
+
+  const buckets = [];
+  let totalSamples = 0;
+  let totalPlayers = 0;
+  let peakPlayers = 0;
+
+  for (let cursor = startMs; cursor < endMs; cursor += intervalMs) {
+    const bucket = bucketMap.get(cursor) || null;
+    let average = null;
+    let samples = 0;
+    let maxPlayers = null;
+    let queued = null;
+    let sleepers = null;
+    if (bucket && bucket.samples > 0) {
+      samples = bucket.samples;
+      average = bucket.sum / bucket.samples;
+      totalSamples += bucket.samples;
+      totalPlayers += bucket.sum;
+      if (bucket.peak != null && bucket.peak > peakPlayers) peakPlayers = bucket.peak;
+      if (bucket.maxPlayers != null) maxPlayers = bucket.maxPlayers;
+      if (bucket.queuedMax != null) queued = bucket.queuedMax;
+      if (bucket.sleepersMax != null) sleepers = bucket.sleepersMax;
+    }
+    buckets.push({
+      timestamp: new Date(cursor).toISOString(),
+      playerCount: Number.isFinite(average) ? Math.round(average * 10) / 10 : null,
+      maxPlayers,
+      queued,
+      sleepers,
+      samples
+    });
+  }
+
+  const summary = {
+    peakPlayers: peakPlayers || null,
+    averagePlayers: totalSamples > 0 ? Math.round((totalPlayers / totalSamples) * 100) / 100 : null,
+    sampleCount: totalSamples,
+    latest: latestSample
+      ? {
+          timestamp: new Date(latestSample.ts).toISOString(),
+          playerCount: latestSample.playerCount,
+          maxPlayers: latestSample.maxPlayers
+        }
+      : null
+  };
+
+  return { buckets, summary };
+}
+
 let lastGlobalMapCacheReset = null;
 
 app.use(express.json({ limit: '25mb' }));
@@ -439,9 +607,16 @@ function normaliseServerPlayer(row) {
     : (typeof row.lastIp === 'string' && row.lastIp ? row.lastIp : null);
   const portRaw = row.last_port ?? row.lastPort;
   const portNum = Number(portRaw);
+  const forced = typeof row.forced_display_name === 'string' && row.forced_display_name
+    ? row.forced_display_name
+    : (typeof row.forcedDisplayName === 'string' && row.forcedDisplayName ? row.forcedDisplayName : null);
+  const rawDisplay = row.display_name || row.displayName || base.persona || base.steamid || '';
+  const effectiveName = forced || rawDisplay || '';
   return {
     server_id: Number.isFinite(serverId) ? serverId : null,
-    display_name: row.display_name || row.displayName || base.persona || base.steamid || '',
+    display_name: effectiveName,
+    raw_display_name: rawDisplay || null,
+    forced_display_name: forced || null,
     first_seen: toIso(row.first_seen || row.firstSeen),
     last_seen: toIso(row.last_seen || row.lastSeen),
     last_ip: ip || null,
@@ -706,6 +881,28 @@ function cacheServerInfo(id, info) {
   serverInfoCache.set(id, { data: info, timestamp: Date.now() });
 }
 
+async function fetchSizeAndSeedViaRcon(server) {
+  const out = { size: null, seed: null };
+
+  try {
+    const res = await sendRconCommand(server, 'server.worldsize');
+    const m = String(res?.Message || '').match(/worldsize\s*[:=]\s*(\d+)/i);
+    if (m) out.size = parseInt(m[1], 10);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const res = await sendRconCommand(server, 'server.seed');
+    const m = String(res?.Message || '').match(/seed\s*[:=]\s*(\d+)/i);
+    if (m) out.seed = parseInt(m[1], 10);
+  } catch {
+    // ignore
+  }
+
+  return out;
+}
+
 function firstThursdayResetTime(now = new Date()) {
   const tzAdjusted = new Date(now.getTime() + MAP_CACHE_TZ_OFFSET_MINUTES * 60000);
   const year = tzAdjusted.getUTCFullYear();
@@ -718,16 +915,11 @@ function firstThursdayResetTime(now = new Date()) {
   return new Date(Date.UTC(year, month, day, hourUtc, minuteUtc, 0, 0));
 }
 
-function parseTimestamp(value) {
-  if (!value) return null;
-  const ts = Date.parse(value);
-  if (Number.isNaN(ts)) return null;
-  return new Date(ts);
-}
-
 function shouldResetMapRecord(record, now = new Date(), resetPoint = firstThursdayResetTime(now)) {
   if (!record) return false;
-  const updated = parseTimestamp(record.updated_at || record.updatedAt || record.created_at || record.createdAt);
+  const updated = parseDateLike(
+    record.updated_at || record.updatedAt || record.created_at || record.createdAt
+  );
   if (!updated) return false;
   return now >= resetPoint && updated < resetPoint;
 }
@@ -1418,6 +1610,16 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         info = { raw: null, mapName: null, size: null, seed: null };
       }
     }
+    if (!info?.size || !info?.seed) {
+      try {
+        const { size, seed } = await fetchSizeAndSeedViaRcon(server);
+        if (!info.size && Number.isFinite(size)) info.size = size;
+        if (!info.seed && Number.isFinite(seed)) info.seed = seed;
+        cacheServerInfo(id, info);
+      } catch {
+        // leave info as-is if lookups fail
+      }
+    }
     let playerPayload = '';
     try {
       const reply = await sendRconCommand(server, 'playerlist');
@@ -1625,6 +1827,103 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
     res.json(payload);
   } catch (err) {
     console.error('listServerPlayers failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+// --- Player history: /api/servers/:id/player-counts
+app.get('/api/servers/:id/player-counts', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+
+  const now = Date.now();
+  const explicitTo = parseTimestamp(req.query.to) ?? now;
+  let endMs = Number.isFinite(explicitTo) ? explicitTo : now;
+
+  const rangeMsRaw = parseDurationMs(req.query.range, 24 * 60 * 60 * 1000);
+  let startMs = parseTimestamp(req.query.from);
+
+  const clampedRange = clamp(rangeMsRaw, MIN_PLAYER_HISTORY_RANGE_MS, MAX_PLAYER_HISTORY_RANGE_MS);
+  if (!Number.isFinite(startMs)) startMs = endMs - clampedRange;
+
+  if (endMs - startMs < MIN_PLAYER_HISTORY_RANGE_MS) startMs = endMs - MIN_PLAYER_HISTORY_RANGE_MS;
+  if (endMs <= startMs) endMs = startMs + MIN_PLAYER_HISTORY_RANGE_MS;
+  if (endMs - startMs > MAX_PLAYER_HISTORY_RANGE_MS) startMs = endMs - MAX_PLAYER_HISTORY_RANGE_MS;
+
+  let intervalMs = parseDurationMs(req.query.interval, null);
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) intervalMs = pickDefaultInterval(endMs - startMs);
+  intervalMs = clamp(intervalMs, MIN_PLAYER_HISTORY_INTERVAL_MS, MAX_PLAYER_HISTORY_INTERVAL_MS);
+
+  let alignedStart = alignTimestamp(startMs, intervalMs, 'floor');
+  let alignedEnd = alignTimestamp(endMs, intervalMs, 'ceil');
+  if (alignedEnd <= alignedStart) alignedEnd = alignedStart + intervalMs;
+
+  const span = alignedEnd - alignedStart;
+  if (span <= 0) {
+    return res.json({
+      serverId: id,
+      from: new Date(alignedStart).toISOString(),
+      to: new Date(alignedEnd).toISOString(),
+      intervalSeconds: Math.round(intervalMs / 1000),
+      buckets: [],
+      summary: { peakPlayers: null, averagePlayers: null, sampleCount: 0, latest: null }
+    });
+  }
+
+  let bucketCount = Math.ceil(span / intervalMs);
+  if (bucketCount > PLAYER_HISTORY_MAX_BUCKETS) {
+    const multiplier = Math.ceil(bucketCount / PLAYER_HISTORY_MAX_BUCKETS);
+    intervalMs = clamp(intervalMs * multiplier, MIN_PLAYER_HISTORY_INTERVAL_MS, MAX_PLAYER_HISTORY_INTERVAL_MS);
+    alignedStart = alignTimestamp(startMs, intervalMs, 'floor');
+    alignedEnd = alignTimestamp(endMs, intervalMs, 'ceil');
+    if (alignedEnd <= alignedStart) alignedEnd = alignedStart + intervalMs;
+  }
+
+  try {
+    const rows = await db.listServerPlayerCounts(id, {
+      since: new Date(alignedStart),
+      until: new Date(alignedEnd),
+      limit: PLAYER_HISTORY_MAX_BUCKETS * 4
+    });
+    const { buckets, summary } = buildPlayerHistoryBuckets(rows, alignedStart, alignedEnd, intervalMs);
+    res.json({
+      serverId: id,
+      from: new Date(alignedStart).toISOString(),
+      to: new Date(alignedEnd).toISOString(),
+      intervalSeconds: Math.round(intervalMs / 1000),
+      buckets,
+      summary
+    });
+  } catch (err) {
+    console.error('player history fetch failed', err);
+    res.status(500).json({ error: 'player_history_failed' });
+  }
+});
+
+// --- Forced display name: /api/servers/:serverId/players/:steamid
+app.patch('/api/servers/:serverId/players/:steamid', auth, async (req, res) => {
+  if (typeof db.setServerPlayerDisplayName !== 'function') {
+    return res.status(400).json({ error: 'unsupported' });
+  }
+  const serverId = Number(req.params.serverId);
+  if (!Number.isFinite(serverId)) return res.status(400).json({ error: 'invalid_server_id' });
+
+  const steamid = String(req.params.steamid || '').trim();
+  if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+
+  const { display_name } = req.body || {};
+  if (typeof display_name !== 'undefined' && display_name !== null && typeof display_name !== 'string') {
+    return res.status(400).json({ error: 'invalid_display_name' });
+  }
+  const trimmed = typeof display_name === 'string' ? display_name.trim().slice(0, 190) : null;
+  const payload = trimmed ? trimmed : null;
+
+  try {
+    const updated = await db.setServerPlayerDisplayName({ server_id: serverId, steamid, display_name: payload });
+    if (!updated) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true, forced_display_name: payload });
+  } catch (err) {
+    console.error('setServerPlayerDisplayName failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });

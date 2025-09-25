@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/assets/css/dark-theme.css" />
     <script defer src="/assets/modules/module-loader.js"></script>
+    <script defer src="/assets/modules/players-graph.js"></script>
     <script defer src="/assets/modules/live-console.js"></script>
     <script defer src="/assets/modules/map.js"></script>
     <script defer src="/assets/modules/live-players.js"></script>
@@ -35,6 +36,16 @@
     </nav>
 
     <section class="view-panel active" data-view="players">
+      <div class="card full-width">
+        <div class="card-head">
+          <div class="card-title">Player History</div>
+        </div>
+        <div class="card-body players-graph-body">
+          <div class="players-graph" data-module="players-graph"
+               data-props='{"serverId":"__SERVER_ID__"}'></div>
+        </div>
+      </div>
+
       <div class="card full-width">
         <div class="card-head">
           <div class="card-title">Current Players <span id="player-count" class="muted">(0)</span></div>

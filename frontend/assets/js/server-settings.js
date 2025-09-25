@@ -1,6 +1,9 @@
+<script>
 (() => {
   const settingsRoot = document.getElementById('discord-settings');
   if (!settingsRoot) return;
+
+  const serverIdFromDataset = document.body?.dataset?.serverId || null;
 
   const badgeEl = document.getElementById('discord-bot-status');
   const playersEl = document.getElementById('discord-current-players');
@@ -14,6 +17,7 @@
   const removeBtn = document.getElementById('discord-remove');
   const noticeEl = document.getElementById('discord-notice');
 
+  // Preserve existing non-status classes on the badge, while letting us toggle status styles.
   const badgeBaseClasses = badgeEl
     ? Array.from(badgeEl.classList).filter((cls) => !['online', 'offline', 'degraded', 'success'].includes(cls))
     : ['status-pill'];
@@ -51,7 +55,7 @@
       clearNotice();
       return;
     }
-    noticeEl.textContent = message;
+    noticeEl.textContent = message || '';
     noticeEl.classList.remove('hidden', 'error', 'success');
     if (variant === 'error') noticeEl.classList.add('error');
     else if (variant === 'success') noticeEl.classList.add('success');
@@ -87,16 +91,13 @@
     const players = Number(status?.players?.current);
     const maxPlayers = Number(status?.players?.max);
     const joining = Number(status?.joining);
-    if (playersEl) {
-      playersEl.textContent = Number.isFinite(players) && players >= 0 ? String(players) : '0';
-    }
-    if (maxPlayersEl) {
-      maxPlayersEl.textContent = Number.isFinite(maxPlayers) && maxPlayers >= 0 ? String(maxPlayers) : '—';
-    }
-    if (joiningEl) {
-      joiningEl.textContent = Number.isFinite(joining) && joining >= 0 ? String(joining) : '0';
-    }
+
+    if (playersEl) playersEl.textContent = Number.isFinite(players) && players >= 0 ? String(players) : '0';
+    if (maxPlayersEl) maxPlayersEl.textContent = Number.isFinite(maxPlayers) && maxPlayers >= 0 ? String(maxPlayers) : '—';
+    if (joiningEl) joiningEl.textContent = Number.isFinite(joining) && joining >= 0 ? String(joining) : '0';
+
     updateBadge(status?.presenceLabel, status?.presence);
+
     if (lastCheckEl) {
       const value = status?.lastCheck ? new Date(status.lastCheck) : null;
       if (value && !Number.isNaN(value.getTime())) {
@@ -150,35 +151,34 @@
 
   async function apiRequest(method = 'GET', body = null) {
     const token = localStorage.getItem('token');
-    if (!token) {
-      throw buildError('unauthorized', 'unauthorized');
-    }
-    if (!state.serverId) {
-      throw buildError('missing_server', 'missing_server');
-    }
+    if (!token) throw buildError('unauthorized', 'unauthorized');
+    if (!state.serverId) throw buildError('missing_server', 'missing_server');
+
     const base = ensureApiBase();
-    if (!base) {
-      throw buildError('network_error', 'network_error');
-    }
+    if (!base) throw buildError('network_error', 'network_error');
+
     const endpoint = `${base}/api/servers/${encodeURIComponent(state.serverId)}/discord`;
     const headers = { Authorization: 'Bearer ' + token };
     const options = { method, headers };
+
     if (body !== null && body !== undefined) {
       headers['Content-Type'] = 'application/json';
       options.body = JSON.stringify(body);
     }
+
     let response;
     try {
       response = await fetch(endpoint, options);
     } catch {
       throw buildError('network_error', 'network_error');
     }
+
     let payload = null;
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      try { payload = await response.json(); }
-      catch { payload = null; }
+      try { payload = await response.json(); } catch { payload = null; }
     }
+
     if (response.status === 401) {
       throw buildError('unauthorized', 'unauthorized');
     }
@@ -194,12 +194,7 @@
 
   function handleError(err, { silent = false } = {}) {
     const code = err?.code || err?.message || 'api_error';
-    if (code === 'unauthorized') {
-      disableForm(true);
-      if (!silent) setNotice(describeError(code), 'error');
-      return;
-    }
-    if (code === 'missing_server') {
+    if (code === 'unauthorized' || code === 'missing_server') {
       disableForm(true);
       if (!silent) setNotice(describeError(code), 'error');
       return;
@@ -229,14 +224,18 @@
 
   async function refresh(options = {}) {
     const { silent = false } = options;
+
     if (!state.serverId) {
       handleError(buildError('missing_server', 'missing_server'), { silent });
       return;
     }
+
     const activeServer = state.serverId;
     const token = ++state.refreshToken;
+
     if (!silent) setNotice('Loading Discord integration…');
     disableForm(true);
+
     try {
       const data = await apiRequest('GET');
       if (state.serverId !== activeServer || state.refreshToken !== token) return;
@@ -258,13 +257,16 @@
       setNotice(describeError('missing_server'), 'error');
       return;
     }
+
     const payload = {
       botToken: tokenInput?.value?.trim() || '',
       guildId: guildInput?.value?.trim() || '',
       channelId: channelInput?.value?.trim() || ''
     };
+
     disableForm(true);
     setNotice('Saving Discord integration…');
+
     try {
       const data = await apiRequest('POST', payload);
       applyIntegration(data.integration || null);
@@ -287,8 +289,10 @@
       setNotice('No Discord integration is configured for this server.', 'error');
       return;
     }
+
     disableForm(true);
     setNotice('Removing Discord integration…');
+
     try {
       const data = await apiRequest('DELETE');
       applyIntegration(null);
@@ -315,12 +319,14 @@
     state.serverId = normalized;
     state.integration = null;
     stopPolling();
+
     if (!normalized) {
       disableForm(true);
       resetView();
       setNotice(describeError('missing_server'));
       return;
     }
+
     resetView();
     disableForm(true);
     setNotice('Loading Discord integration…');
@@ -331,10 +337,12 @@
 
   if (form) form.addEventListener('submit', saveIntegration);
   if (removeBtn) removeBtn.addEventListener('click', removeIntegration);
+
   window.addEventListener('beforeunload', () => {
     stopPolling();
   });
 
+  // Workspace integration: react to server selection / status pushes / API base changes.
   window.addEventListener('workspace:server-selected', (event) => {
     const id = event?.detail?.serverId;
     if (typeof id === 'number' || typeof id === 'string') {
@@ -361,13 +369,15 @@
     }
   });
 
-  if (typeof window !== 'undefined' && typeof window.__workspaceSelectedServer !== 'undefined') {
+  // Initial selection priority: dataset -> preselected global -> missing_server
+  if (serverIdFromDataset) {
+    selectServer(serverIdFromDataset);
+  } else if (typeof window !== 'undefined' && typeof window.__workspaceSelectedServer !== 'undefined') {
     selectServer(window.__workspaceSelectedServer);
-  }
-
-  if (!state.serverId) {
+  } else {
     disableForm(true);
     resetView();
     setNotice(describeError('missing_server'));
   }
 })();
+</script>
