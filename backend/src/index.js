@@ -1489,6 +1489,8 @@ io.on('connection', (socket) => {
     try {
       ensureRconBinding(row);
       await connectRcon(row);
+      sendRconCommand(row, 'console.tail 1000').catch(() => {});
+      sendRconCommand(row, 'chat.tail 100').catch(() => {});
       sendRconCommand(row, 'status').catch(() => {});
     } catch (e) {
       socket.emit('error', e.message || String(e));
