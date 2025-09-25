@@ -31,6 +31,12 @@
     title: 'Connected Players',
     order: 30,
     setup(ctx){
+      const moduleId = 'live-players';
+      const sharedSearchKey = '__playerSearchQuery';
+      if (typeof window !== 'undefined' && typeof window[sharedSearchKey] !== 'string') {
+        window[sharedSearchKey] = '';
+      }
+
       ctx.root?.classList.add('module-card', 'live-players-card');
 
       const message = document.createElement('p');
@@ -41,11 +47,83 @@
       list.className = 'live-players-list';
       ctx.body?.appendChild(list);
 
+      let searchInput = null;
+      if (ctx.actions) {
+        ctx.actions.classList.add('module-header-actions');
+        const searchWrap = document.createElement('div');
+        searchWrap.className = 'module-search';
+        searchInput = document.createElement('input');
+        searchInput.type = 'search';
+        searchInput.placeholder = 'Search players';
+        searchInput.autocomplete = 'off';
+        searchInput.setAttribute('aria-label', 'Search connected players');
+        searchWrap.appendChild(searchInput);
+        ctx.actions.appendChild(searchWrap);
+      }
+
+      function normalizeQuery(value) {
+        return String(value || '').trim().toLowerCase();
+      }
+
+      function includesQuery(value, query) {
+        if (value == null) return false;
+        return String(value).toLowerCase().includes(query);
+      }
+
+      function readSharedQuery() {
+        if (typeof window === 'undefined') return '';
+        const current = window[sharedSearchKey];
+        return typeof current === 'string' ? current : '';
+      }
+
+      function writeSharedQuery(value) {
+        if (typeof window === 'undefined') return;
+        window[sharedSearchKey] = value;
+      }
+
+      function broadcastSearch(value) {
+        if (typeof window === 'undefined') return;
+        const raw = typeof value === 'string' ? value : '';
+        if (readSharedQuery() === raw) return;
+        writeSharedQuery(raw);
+        try {
+          window.dispatchEvent(new CustomEvent('players:search', { detail: { query: raw, source: moduleId } }));
+        } catch { /* ignore */ }
+      }
+
       const state = {
         serverId: null,
         players: [],
-        selected: null
+        selected: null,
+        rawQuery: '',
+        query: ''
       };
+
+      function getFilteredPlayers() {
+        if (!state.query) return [...state.players];
+        const query = state.query;
+        return state.players.filter((player) => matchesQuery(player, query));
+      }
+
+      function matchesQuery(player, query) {
+        if (!query) return true;
+        const profile = player?.steamProfile || {};
+        const values = [
+          player?.displayName,
+          profile.persona,
+          profile.personaName,
+          profile.realName,
+          player?.steamId,
+          profile.steamId,
+          player?.ip,
+          player?.clanTag,
+          player?.teamName,
+          profile.country
+        ];
+        if (values.some((value) => includesQuery(value, query))) return true;
+        if (player?.port != null && String(player.port).includes(query)) return true;
+        return false;
+      }
 
       function setMessage(text, variant = 'info') {
         if (!message) return;
@@ -61,10 +139,51 @@
         message.removeAttribute('data-variant');
       }
 
-      function updateCount() {
+      function updateCount(filtered = null, total = null) {
         const badge = document.getElementById('player-count');
         if (!badge) return;
-        badge.textContent = `(${state.players.length})`;
+        const totalCount = Number.isFinite(Number(total)) ? Math.max(0, Math.round(Number(total))) : state.players.length;
+        const filteredCount = Number.isFinite(Number(filtered))
+          ? Math.max(0, Math.round(Number(filtered)))
+          : (state.query ? getFilteredPlayers().length : totalCount);
+        if (state.query && filteredCount !== totalCount) {
+          badge.textContent = `(${filteredCount}/${totalCount})`;
+        } else {
+          badge.textContent = `(${filteredCount})`;
+        }
+      }
+
+      function setSearch(value, { skipBroadcast = false } = {}) {
+        const raw = typeof value === 'string' ? value : '';
+        if (state.rawQuery === raw) return;
+        state.rawQuery = raw;
+        state.query = normalizeQuery(raw);
+        if (searchInput && searchInput.value !== raw) searchInput.value = raw;
+        if (!skipBroadcast) broadcastSearch(raw);
+        if (state.serverId || state.players.length) {
+          render();
+        } else {
+          updateCount(0, 0);
+        }
+      }
+
+      const initialSearch = readSharedQuery();
+      state.rawQuery = initialSearch;
+      state.query = normalizeQuery(initialSearch);
+      if (searchInput) {
+        searchInput.value = state.rawQuery;
+        searchInput.addEventListener('input', (ev) => setSearch(ev.target.value));
+      }
+
+      let searchListener = null;
+      if (typeof window !== 'undefined') {
+        searchListener = (event) => {
+          if (!event) return;
+          const source = event.detail?.source;
+          if (source === moduleId) return;
+          setSearch(event.detail?.query || '', { skipBroadcast: true });
+        };
+        window.addEventListener('players:search', searchListener);
       }
 
       function highlightRows() {
@@ -80,14 +199,20 @@
       }
 
       function render() {
-        updateCount();
+        const total = state.players.length;
+        const filtered = getFilteredPlayers();
+        updateCount(filtered.length, total);
         list.innerHTML = '';
         if (!state.serverId) {
           setMessage('Connect to a server to view connected players.');
           return;
         }
-        if (state.players.length === 0) {
+        if (total === 0) {
           setMessage('No players connected right now.');
+          return;
+        }
+        if (filtered.length === 0) {
+          setMessage('No players match your search.');
           return;
         }
         clearMessage();
@@ -96,7 +221,7 @@
           ctx.emit?.('live-players:focus', { steamId: null });
           window.dispatchEvent(new CustomEvent('team:clear'));
         }
-        for (const player of state.players) {
+        for (const player of filtered) {
           const row = document.createElement('article');
           row.className = 'live-player-row';
           row.dataset.steamid = player.steamId || '';
@@ -278,6 +403,9 @@
       ctx.onCleanup?.(() => offData?.());
       ctx.onCleanup?.(() => offHighlight?.());
       ctx.onCleanup?.(() => window.removeEventListener('team:clear', onTeamClear));
+      ctx.onCleanup?.(() => {
+        if (searchListener) window.removeEventListener('players:search', searchListener);
+      });
 
       setMessage('Connect to a server to view connected players.');
     }

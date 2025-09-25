@@ -6,6 +6,12 @@
     title: 'All Players',
     order: 10,
     setup(ctx){
+      const moduleId = 'players-directory';
+      const sharedSearchKey = '__playerSearchQuery';
+      if (typeof window !== 'undefined' && typeof window[sharedSearchKey] !== 'string') {
+        window[sharedSearchKey] = '';
+      }
+
       const list = document.createElement('ul');
       list.className = 'player-directory';
       const message = document.createElement('p');
@@ -14,8 +20,18 @@
       ctx.body?.appendChild(list);
       ctx.body?.appendChild(message);
 
+      let searchInput = null;
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
+        const searchWrap = document.createElement('div');
+        searchWrap.className = 'module-search';
+        searchInput = document.createElement('input');
+        searchInput.type = 'search';
+        searchInput.placeholder = 'Search players';
+        searchInput.autocomplete = 'off';
+        searchInput.setAttribute('aria-label', 'Search players');
+        searchWrap.appendChild(searchInput);
+        ctx.actions.appendChild(searchWrap);
       }
 
       function setMessage(text, variant = 'info') {
@@ -30,6 +46,57 @@
         message?.removeAttribute('data-variant');
       }
 
+      const directoryCount = document.getElementById('player-directory-count');
+
+      function normalizeQuery(value) {
+        return String(value || '').trim().toLowerCase();
+      }
+
+      function includesQuery(value, query) {
+        if (value == null) return false;
+        return String(value).toLowerCase().includes(query);
+      }
+
+      function readSharedQuery() {
+        if (typeof window === 'undefined') return '';
+        const current = window[sharedSearchKey];
+        return typeof current === 'string' ? current : '';
+      }
+
+      function writeSharedQuery(value) {
+        if (typeof window === 'undefined') return;
+        window[sharedSearchKey] = value;
+      }
+
+      function broadcastSearch(value) {
+        if (typeof window === 'undefined') return;
+        const raw = typeof value === 'string' ? value : '';
+        if (readSharedQuery() === raw) return;
+        writeSharedQuery(raw);
+        try {
+          window.dispatchEvent(new CustomEvent('players:search', { detail: { query: raw, source: moduleId } }));
+        } catch { /* ignore */ }
+      }
+
+      function updateCount(filtered, total) {
+        if (!directoryCount) return;
+        if (filtered == null && total == null) {
+          directoryCount.textContent = '(—)';
+          return;
+        }
+        const filteredNumber = Number(filtered);
+        const totalNumber = Number(total);
+        const safeFiltered = Number.isFinite(filteredNumber) ? Math.max(0, Math.round(filteredNumber)) : 0;
+        if (Number.isFinite(totalNumber) && totalNumber >= 0) {
+          const safeTotal = Math.max(0, Math.round(totalNumber));
+          directoryCount.textContent = safeTotal !== safeFiltered
+            ? `(${safeFiltered}/${safeTotal})`
+            : `(${safeFiltered})`;
+          return;
+        }
+        directoryCount.textContent = `(${safeFiltered})`;
+      }
+
       const modalState = {
         open: false,
         steamid: null,
@@ -42,24 +109,67 @@
       const modal = createPlayerModal();
 
       function render(players) {
-        list.innerHTML = '';
         state.players = Array.isArray(players) ? players : [];
+        state.mode = 'ready';
         window.dispatchEvent?.(new CustomEvent('players:list', { detail: { players: state.players } }));
-        if (!Array.isArray(players) || players.length === 0) {
+        renderList();
+        if (modalState.open && modalState.steamid) {
+          const updated = state.players.find((player) => String(player.steamid || '') === modalState.steamid);
+          if (updated) renderModal(updated, null);
+        }
+      }
+
+      function getFilteredPlayers() {
+        if (!state.search) return [...state.players];
+        const query = state.search;
+        return state.players.filter((player) => matchesQuery(player, query));
+      }
+
+      function renderList() {
+        if (state.mode !== 'ready') return;
+        list.innerHTML = '';
+        const total = state.players.length;
+        const filtered = getFilteredPlayers();
+        updateCount(filtered.length, total);
+        if (total === 0) {
           setMessage('No tracked players for this server yet. Import Steam profiles or let players connect to populate this list.');
           return;
         }
+        if (filtered.length === 0) {
+          setMessage('No players match your search.');
+          return;
+        }
         clearMessage();
-        for (const p of players) {
+        for (const p of filtered) {
           const li = document.createElement('li');
           li.dataset.steamid = p.steamid || '';
           li.tabIndex = 0;
           li.setAttribute('role', 'button');
-          const left = document.createElement('div');
+
+          const identity = document.createElement('div');
+          identity.className = 'player-directory-identity';
+
+          const avatarWrap = document.createElement('div');
+          avatarWrap.className = 'player-directory-avatar';
+          const avatarUrl = p.avatar || p.avatarfull || p.avatar_full || p.avatarFull || p.avatar_medium || p.avatarMedium || p.avatarUrl;
+          const displayLabel = p.display_name || p.persona || p.steamid || 'Player';
+          if (avatarUrl) {
+            const img = document.createElement('img');
+            img.src = avatarUrl;
+            img.alt = `${displayLabel} avatar`;
+            img.loading = 'lazy';
+            avatarWrap.appendChild(img);
+          } else {
+            avatarWrap.classList.add('placeholder');
+            avatarWrap.textContent = avatarInitial(displayLabel);
+          }
+
+          const info = document.createElement('div');
+          info.className = 'player-directory-info';
+
           const nameRow = document.createElement('div');
-          nameRow.className = 'player-name-row';
+          nameRow.className = 'player-directory-name';
           const strong = document.createElement('strong');
-          const displayLabel = p.display_name || p.persona || p.steamid;
           strong.textContent = displayLabel;
           nameRow.appendChild(strong);
           if (p.forced_display_name) {
@@ -68,9 +178,10 @@
             forcedBadge.textContent = 'Forced';
             nameRow.appendChild(forcedBadge);
           }
-          left.appendChild(nameRow);
+          info.appendChild(nameRow);
+
           const meta = document.createElement('div');
-          meta.className = 'muted small';
+          meta.className = 'player-directory-meta muted small';
           const lastSeen = formatTimestamp(p.last_seen);
           const parts = [];
           parts.push(p.steamid || '—');
@@ -80,7 +191,12 @@
           }
           if (lastSeen) parts.push(`Last seen ${lastSeen}`);
           meta.textContent = parts.join(' · ');
-          left.appendChild(meta);
+          info.appendChild(meta);
+
+          identity.appendChild(avatarWrap);
+          identity.appendChild(info);
+          li.appendChild(identity);
+
           const right = document.createElement('div');
           right.className = 'server-actions';
           if (p.country) {
@@ -95,8 +211,8 @@
             badge.textContent = 'VAC';
             right.appendChild(badge);
           }
-          li.appendChild(left);
           li.appendChild(right);
+
           const openDetails = () => openModal(p);
           li.addEventListener('click', openDetails);
           li.addEventListener('keydown', (ev) => {
@@ -107,17 +223,69 @@
           });
           list.appendChild(li);
         }
-        if (modalState.open && modalState.steamid) {
-          const updated = state.players.find((player) => String(player.steamid || '') === modalState.steamid);
-          if (updated) renderModal(updated, null);
+      }
+
+      function matchesQuery(player, query) {
+        if (!query) return true;
+        const values = [
+          player?.display_name,
+          player?.raw_display_name,
+          player?.forced_display_name,
+          player?.persona,
+          player?.steamid,
+          player?.last_ip,
+          player?.country,
+          player?.profileurl,
+          player?.profile_url,
+          player?.notes
+        ];
+        const profile = player?.steam_profile || player?.steamProfile;
+        if (profile) {
+          values.push(profile.persona, profile.personaName, profile.steamId, profile.country);
         }
+        if (values.some((value) => includesQuery(value, query))) return true;
+        if (player?.last_port != null && String(player.last_port).includes(query)) return true;
+        if (player?.steamid && String(player.steamid).includes(query)) return true;
+        return false;
       }
 
       const state = {
         serverId: null,
         isLoading: false,
-        players: []
+        players: [],
+        searchRaw: '',
+        search: '',
+        mode: 'idle'
       };
+
+      function setSearch(value, { skipBroadcast = false } = {}) {
+        const raw = typeof value === 'string' ? value : '';
+        if (state.searchRaw === raw) return;
+        state.searchRaw = raw;
+        state.search = normalizeQuery(raw);
+        if (searchInput && searchInput.value !== raw) searchInput.value = raw;
+        if (!skipBroadcast) broadcastSearch(raw);
+        if (state.mode === 'ready') renderList();
+      }
+
+      const initialSearch = readSharedQuery();
+      state.searchRaw = initialSearch;
+      state.search = normalizeQuery(initialSearch);
+      if (searchInput) {
+        searchInput.value = state.searchRaw;
+        searchInput.addEventListener('input', (ev) => setSearch(ev.target.value));
+      }
+
+      let searchListener = null;
+      if (typeof window !== 'undefined') {
+        searchListener = (event) => {
+          if (!event) return;
+          const source = event.detail?.source;
+          if (source === moduleId) return;
+          setSearch(event.detail?.query || '', { skipBroadcast: true });
+        };
+        window.addEventListener('players:search', searchListener);
+      }
 
       async function refresh(reason, serverIdOverride){
         if (state.isLoading) return;
@@ -125,6 +293,9 @@
         if (!globalState?.currentUser) {
           list.innerHTML = '';
           setMessage('Sign in to view player directory.');
+          state.players = [];
+          state.mode = 'idle';
+          updateCount(null, null);
           return;
         }
         const serverId = Number(serverIdOverride ?? state.serverId ?? globalState.currentServerId);
@@ -132,11 +303,16 @@
           state.serverId = null;
           list.innerHTML = '';
           setMessage('Select a server to view player directory.');
+          state.players = [];
+          state.mode = 'idle';
+          updateCount(null, null);
           return;
         }
         state.serverId = serverId;
         state.isLoading = true;
+        state.mode = 'loading';
         setMessage('Loading players…');
+        updateCount(null, null);
         try {
           const players = await ctx.api(`/api/servers/${serverId}/players?limit=200`);
           render(players);
@@ -146,6 +322,10 @@
           } else {
             setMessage('Unable to load players: ' + (ctx.describeError?.(err) || err?.message || 'Unknown error'));
             ctx.log?.('Players module error: ' + (err?.message || err));
+            if (!state.players.length) {
+              state.mode = 'error';
+              updateCount(null, null);
+            }
           }
         } finally {
           state.isLoading = false;
@@ -666,6 +846,9 @@
           state.serverId = null;
           list.innerHTML = '';
           setMessage('Select a server to view player directory.');
+          state.players = [];
+          state.mode = 'idle';
+          updateCount(null, null);
         }
       });
       const offRefresh = ctx.on?.('players:refresh', (payload) => {
@@ -676,6 +859,9 @@
         list.innerHTML = '';
         setMessage('Sign in to view player directory.');
         state.serverId = null;
+        state.players = [];
+        state.mode = 'idle';
+        updateCount(null, null);
       });
 
       ctx.onCleanup?.(() => offLogin?.());
@@ -685,8 +871,12 @@
       ctx.onCleanup?.(() => offLogout?.());
       ctx.onCleanup?.(() => modal?.destroy?.());
       ctx.onCleanup?.(() => closeModal());
+      ctx.onCleanup?.(() => {
+        if (searchListener) window.removeEventListener('players:search', searchListener);
+      });
 
       // Initial state when module mounts
+      updateCount(null, null);
       refresh('init');
     }
   });
