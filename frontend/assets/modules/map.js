@@ -114,9 +114,9 @@
         pollTimer: null
       };
 
-      function showUploadNotice(message, variant = 'error') {
+      function showUploadNotice(msg, variant = 'error') {
         if (!uploadStatus) return;
-        uploadStatus.textContent = message;
+        uploadStatus.textContent = msg;
         uploadStatus.className = 'notice ' + (variant === 'success' ? 'success' : 'error');
       }
 
@@ -297,7 +297,7 @@
       function isPlayerFocused(player) {
         if (state.selectedSolo) return player.steamId === state.selectedSolo;
         if (state.selectedTeam) return Number(player.teamId) === state.selectedTeam;
-        return false;
+        return true;
       }
 
       function renderMarkers() {
@@ -323,32 +323,106 @@
         }
       }
 
+      // ---- CONFLICT-FIXED: main version of renderPlayerList ----
       function renderPlayerList() {
         listWrap.innerHTML = '';
-        const players = [...state.players];
-        if (players.length === 0) {
+
+        const hasServer = !!state.serverId;
+        if (!hasServer) {
           const empty = document.createElement('p');
           empty.className = 'module-message';
-          empty.textContent = state.serverId ? 'No players connected right now.' : 'Connect to a server to view live positions.';
+          empty.textContent = 'Connect to a server to view live positions.';
           listWrap.appendChild(empty);
           return;
         }
-        for (const player of players) {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.textContent = player.displayName || player.persona || player.steamId;
-          const tag = document.createElement('span');
-          tag.className = 'map-player-tag';
-          tag.innerHTML = `<span>${formatPing(player.ping)}</span><span>${formatHealth(player.health)} hp</span>`;
-          btn.appendChild(tag);
+
+        if (state.players.length === 0) {
+          const empty = document.createElement('p');
+          empty.className = 'module-message';
+          empty.textContent = 'No players online right now.';
+          listWrap.appendChild(empty);
+          return;
+        }
+
+        const hasSelection = selectionActive();
+        const matches = state.players.filter((p) => isPlayerFocused(p));
+
+        const table = document.createElement('table');
+        table.className = 'map-player-table';
+
+        const head = document.createElement('thead');
+        head.innerHTML = '<tr><th>Player</th><th>Team</th><th>Ping</th><th>Health</th><th>Connected</th></tr>';
+        table.appendChild(head);
+
+        const body = document.createElement('tbody');
+        for (const player of state.players) {
+          const row = document.createElement('tr');
+          row.dataset.steamid = player.steamId || '';
+
           const focused = isPlayerFocused(player);
-          if (focused) btn.classList.add('active');
-          else if (selectionActive()) btn.classList.add('dimmed');
-          btn.style.borderLeft = `4px solid ${colorForPlayer(player)}`;
-          btn.addEventListener('click', () => selectPlayer(player));
-          listWrap.appendChild(btn);
+          if (focused) row.classList.add('active');
+          else if (hasSelection) row.classList.add('dimmed');
+
+          const nameCell = document.createElement('td');
+          nameCell.className = 'map-player-name-cell';
+          const nameRow = document.createElement('div');
+          nameRow.className = 'map-player-name';
+          const swatch = document.createElement('span');
+          swatch.className = 'map-player-color';
+          swatch.style.background = colorForPlayer(player);
+          nameRow.appendChild(swatch);
+          const label = document.createElement('span');
+          label.textContent = player.displayName || player.persona || player.steamId;
+          nameRow.appendChild(label);
+          nameCell.appendChild(nameRow);
+          const sub = document.createElement('div');
+          sub.className = 'map-player-sub';
+          const details = [];
+          const persona = player.persona && player.persona !== label.textContent ? player.persona : null;
+          if (persona) details.push(persona);
+          if (player.steamId) details.push(player.steamId);
+          sub.textContent = details.join(' · ') || '—';
+          nameCell.appendChild(sub);
+          row.appendChild(nameCell);
+
+          const teamCell = document.createElement('td');
+          teamCell.className = 'map-player-team';
+          const team = teamKey(player);
+          teamCell.textContent = team > 0 ? `Team ${team}` : 'Solo';
+          row.appendChild(teamCell);
+
+          const pingCell = document.createElement('td');
+          pingCell.className = 'map-player-stat';
+          pingCell.textContent = formatPing(player.ping);
+          row.appendChild(pingCell);
+
+          const healthCell = document.createElement('td');
+          healthCell.className = 'map-player-stat';
+          const hp = formatHealth(player.health);
+          healthCell.textContent = hp === '—' ? '—' : `${hp} hp`;
+          row.appendChild(healthCell);
+
+          const connectedCell = document.createElement('td');
+          connectedCell.className = 'map-player-stat';
+          connectedCell.textContent = formatDuration(player.connectedSeconds);
+          row.appendChild(connectedCell);
+
+          row.addEventListener('click', () => selectPlayer(player));
+          body.appendChild(row);
+        }
+        table.appendChild(body);
+        listWrap.appendChild(table);
+
+        if (hasSelection) {
+          const note = document.createElement('p');
+          note.className = 'map-filter-note muted small';
+          note.textContent = matches.length > 0
+            ? 'Players outside your selection are dimmed.'
+            : 'No players match the current selection.';
+          listWrap.appendChild(note);
         }
       }
+      // ---------------------------------------------------------
 
       function renderSummary() {
         summary.innerHTML = '';

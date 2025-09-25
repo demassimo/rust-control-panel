@@ -566,7 +566,7 @@ async function _ensureBinding(row) {
     const unsub = subscribeToRcon(id, {
       rcon_error: (err) => emitScoped('monitor_error', id, err),
       close: () => emitScoped('monitor_error', id, new Error('connection_closed')),
-    });
+    }, { replace: false });
     _monitor.subs.set(id, unsub);
   }
   await client.ensure();

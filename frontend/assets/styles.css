@@ -1138,23 +1138,92 @@ button.menu-tab.active {
 .map-sidebar .row { justify-content: flex-end; }
 
 .map-player-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  overflow-x: auto;
 }
 
-.map-player-list button {
-  padding: 6px 12px;
+.map-player-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.map-player-table thead th {
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.map-player-table tbody td {
+  padding: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.map-player-table tbody tr {
+  transition: background 0.15s ease, color 0.15s ease;
+  cursor: pointer;
+}
+
+.map-player-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.map-player-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.map-player-table tbody tr.active {
+  background: rgba(244, 63, 94, 0.18);
+  color: var(--accent-strong);
+}
+
+.map-player-table tbody tr.dimmed {
+  opacity: 0.45;
+}
+
+.map-player-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.map-player-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.map-player-color {
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+}
+
+.map-player-sub {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.map-player-team {
+  white-space: nowrap;
+  font-size: 0.85rem;
   color: var(--muted-strong);
 }
 
-.map-player-list button.active {
-  background: rgba(244, 63, 94, 0.18);
-  border-color: rgba(244, 63, 94, 0.45);
-  color: var(--accent-strong);
+.map-player-stat {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-filter-note {
+  margin-top: 8px;
 }
 
 .map-player-list button.dimmed {
