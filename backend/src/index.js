@@ -713,6 +713,28 @@ function cacheServerInfo(id, info) {
   serverInfoCache.set(id, { data: info, timestamp: Date.now() });
 }
 
+async function fetchSizeAndSeedViaRcon(server) {
+  const out = { size: null, seed: null };
+
+  try {
+    const res = await sendRconCommand(server, 'server.worldsize');
+    const m = String(res?.Message || '').match(/worldsize\s*[:=]\s*(\d+)/i);
+    if (m) out.size = parseInt(m[1], 10);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const res = await sendRconCommand(server, 'server.seed');
+    const m = String(res?.Message || '').match(/seed\s*[:=]\s*(\d+)/i);
+    if (m) out.seed = parseInt(m[1], 10);
+  } catch {
+    // ignore
+  }
+
+  return out;
+}
+
 function firstThursdayResetTime(now = new Date()) {
   const tzAdjusted = new Date(now.getTime() + MAP_CACHE_TZ_OFFSET_MINUTES * 60000);
   const year = tzAdjusted.getUTCFullYear();
@@ -1423,6 +1445,16 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         cacheServerInfo(id, info);
       } catch (err) {
         info = { raw: null, mapName: null, size: null, seed: null };
+      }
+    }
+    if (!info?.size || !info?.seed) {
+      try {
+        const { size, seed } = await fetchSizeAndSeedViaRcon(server);
+        if (!info.size && Number.isFinite(size)) info.size = size;
+        if (!info.seed && Number.isFinite(seed)) info.seed = seed;
+        cacheServerInfo(id, info);
+      } catch {
+        // leave info as-is if lookups fail
       }
     }
     let playerPayload = '';
