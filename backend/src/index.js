@@ -509,15 +509,20 @@ function formatSteamProfilePayload(profile) {
     const num = Number(val);
     return Number.isFinite(num) ? num : null;
   };
+  const vacBanned = !!(Number(profile.vac_banned) || profile.vac_banned === true);
+  const gameBans = toNumber(profile.game_bans) || 0;
+  const rawBanDays = toNumber(profile.last_ban_days);
+  const hasBanHistory = vacBanned || gameBans > 0;
+  const daysSinceLastBan = hasBanHistory && Number.isFinite(rawBanDays) ? rawBanDays : null;
   const minutes = toNumber(profile.rust_playtime_minutes);
   return {
     persona: profile.persona || null,
     avatar: profile.avatar || null,
     country: profile.country || null,
     profileUrl: profile.profileurl || null,
-    vacBanned: !!(Number(profile.vac_banned) || profile.vac_banned === true),
-    gameBans: Number(profile.game_bans) || 0,
-    daysSinceLastBan: toNumber(profile.last_ban_days),
+    vacBanned,
+    gameBans,
+    daysSinceLastBan,
     visibility: toNumber(profile.visibility),
     rustPlaytimeMinutes: minutes,
     updatedAt: profile.updated_at || null,
@@ -645,6 +650,9 @@ async function syncServerPlayerDirectory(serverId, players) {
     if (typeof db.upsertPlayer === 'function') {
       const profile = player.steamProfile || null;
       if (profile) {
+        const gameBans = toNumber(profile.gameBans);
+        const lastBanDays = toNumber(profile.daysSinceLastBan);
+        const hasBanHistory = (profile.vacBanned ? 1 : 0) || Number(gameBans) > 0;
         const payload = {
           steamid: steamId,
           persona: profile.persona || displayName || null,
@@ -652,8 +660,8 @@ async function syncServerPlayerDirectory(serverId, players) {
           country: profile.country || null,
           profileurl: profile.profileUrl || null,
           vac_banned: profile.vacBanned ? 1 : 0,
-          game_bans: toNumber(profile.gameBans),
-          last_ban_days: toNumber(profile.daysSinceLastBan),
+          game_bans: gameBans,
+          last_ban_days: hasBanHistory && lastBanDays !== null ? lastBanDays : null,
           visibility: toNumber(profile.visibility),
           rust_playtime_minutes: toNumber(profile.rustPlaytimeMinutes),
           playtime_updated_at: profile.playtimeUpdatedAt || null
@@ -1532,10 +1540,14 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
   if (rb.ok) {
     const jb = await rb.json();
     for (const b of jb?.players || []) {
+      const vacBanned = b.VACBanned ? 1 : 0;
+      const gameBans = Number(b.NumberOfGameBans) || 0;
+      const banDays = Number.isFinite(Number(b.DaysSinceLastBan)) ? Number(b.DaysSinceLastBan) : null;
+      const hasBanHistory = vacBanned || gameBans > 0;
       banMap.set(String(b.SteamId), {
-        vac_banned: b.VACBanned ? 1 : 0,
-        game_bans: Number(b.NumberOfGameBans) || 0,
-        last_ban_days: Number.isFinite(Number(b.DaysSinceLastBan)) ? Number(b.DaysSinceLastBan) : null
+        vac_banned: vacBanned,
+        game_bans: gameBans,
+        last_ban_days: hasBanHistory && banDays !== null ? banDays : null
       });
     }
   }
@@ -1564,6 +1576,8 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
     const sid = String(player?.steamid || '');
     if (!sid) continue;
     const ban = banMap.get(sid) || {};
+    const banDays = Number.isFinite(Number(ban.last_ban_days)) ? Number(ban.last_ban_days) : null;
+    const hasBanHistory = (ban.vac_banned ? 1 : 0) || Number(ban.game_bans) > 0;
     const visibility = Number.isFinite(Number(player.communityvisibilitystate)) ? Number(player.communityvisibilitystate) : null;
     const playtime = playtimeMap.has(sid) ? playtimeMap.get(sid) : null;
     out.push({
@@ -1574,7 +1588,7 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
       profileurl: player.profileurl || null,
       vac_banned: ban.vac_banned ? 1 : 0,
       game_bans: Number(ban.game_bans) || 0,
-      last_ban_days: Number.isFinite(Number(ban.last_ban_days)) ? Number(ban.last_ban_days) : null,
+      last_ban_days: hasBanHistory && banDays !== null ? banDays : null,
       visibility,
       rust_playtime_minutes: typeof playtime === 'number' ? playtime : null,
       playtime_updated_at: includePlaytime ? nowIso : null
