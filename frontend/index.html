@@ -136,6 +136,51 @@
         </aside>
       </main>
 
+      <div id="userDetailsOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
+      <aside
+        id="userDetailsPanel"
+        class="user-details-panel hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="userDetailsName"
+        tabindex="-1"
+      >
+        <div class="user-details-head">
+          <div>
+            <p id="userDetailsSubtitle" class="muted small">Team member details</p>
+            <h3 id="userDetailsName"></h3>
+          </div>
+          <button id="userDetailsClose" type="button" class="ghost icon" aria-label="Close user details">✕</button>
+        </div>
+        <div class="user-details-body">
+          <div class="user-details-badges">
+            <span id="userDetailsRoleBadge" class="badge">Role</span>
+          </div>
+          <dl class="user-details-meta">
+            <div>
+              <dt>Role</dt>
+              <dd id="userDetailsRole">—</dd>
+            </div>
+            <div>
+              <dt>Joined</dt>
+              <dd id="userDetailsCreated">—</dd>
+            </div>
+            <div>
+              <dt>User ID</dt>
+              <dd id="userDetailsId">—</dd>
+            </div>
+          </dl>
+          <p id="userDetailsSelfNotice" class="notice small hidden">
+            This is your account. Role changes and removal are disabled here.
+          </p>
+          <div class="user-details-actions">
+            <button id="userDetailsToggleRole" type="button" class="ghost">Promote to admin</button>
+            <button id="userDetailsResetPassword" type="button" class="ghost">Reset password</button>
+            <button id="userDetailsDelete" type="button" class="ghost danger">Remove user</button>
+          </div>
+        </div>
+      </aside>
+
       <section id="workspacePanel" class="workspace hidden">
         <div class="workspace-header">
           <button id="btnBackToDashboard" class="ghost small">← Back to Dashboard</button>
