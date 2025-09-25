@@ -607,9 +607,16 @@ function normaliseServerPlayer(row) {
     : (typeof row.lastIp === 'string' && row.lastIp ? row.lastIp : null);
   const portRaw = row.last_port ?? row.lastPort;
   const portNum = Number(portRaw);
+  const forced = typeof row.forced_display_name === 'string' && row.forced_display_name
+    ? row.forced_display_name
+    : (typeof row.forcedDisplayName === 'string' && row.forcedDisplayName ? row.forcedDisplayName : null);
+  const rawDisplay = row.display_name || row.displayName || base.persona || base.steamid || '';
+  const effectiveName = forced || rawDisplay || '';
   return {
     server_id: Number.isFinite(serverId) ? serverId : null,
-    display_name: row.display_name || row.displayName || base.persona || base.steamid || '',
+    display_name: effectiveName,
+    raw_display_name: rawDisplay || null,
+    forced_display_name: forced || null,
     first_seen: toIso(row.first_seen || row.firstSeen),
     last_seen: toIso(row.last_seen || row.lastSeen),
     last_ip: ip || null,
@@ -677,15 +684,20 @@ function formatSteamProfilePayload(profile) {
     const num = Number(val);
     return Number.isFinite(num) ? num : null;
   };
+  const vacBanned = !!(Number(profile.vac_banned) || profile.vac_banned === true);
+  const gameBans = toNumber(profile.game_bans) || 0;
+  const rawBanDays = toNumber(profile.last_ban_days);
+  const hasBanHistory = vacBanned || gameBans > 0;
+  const daysSinceLastBan = hasBanHistory && Number.isFinite(rawBanDays) ? rawBanDays : null;
   const minutes = toNumber(profile.rust_playtime_minutes);
   return {
     persona: profile.persona || null,
     avatar: profile.avatar || null,
     country: profile.country || null,
     profileUrl: profile.profileurl || null,
-    vacBanned: !!(Number(profile.vac_banned) || profile.vac_banned === true),
-    gameBans: Number(profile.game_bans) || 0,
-    daysSinceLastBan: toNumber(profile.last_ban_days),
+    vacBanned,
+    gameBans,
+    daysSinceLastBan,
     visibility: toNumber(profile.visibility),
     rustPlaytimeMinutes: minutes,
     updatedAt: profile.updated_at || null,
@@ -813,6 +825,9 @@ async function syncServerPlayerDirectory(serverId, players) {
     if (typeof db.upsertPlayer === 'function') {
       const profile = player.steamProfile || null;
       if (profile) {
+        const gameBans = toNumber(profile.gameBans);
+        const lastBanDays = toNumber(profile.daysSinceLastBan);
+        const hasBanHistory = (profile.vacBanned ? 1 : 0) || Number(gameBans) > 0;
         const payload = {
           steamid: steamId,
           persona: profile.persona || displayName || null,
@@ -820,8 +835,8 @@ async function syncServerPlayerDirectory(serverId, players) {
           country: profile.country || null,
           profileurl: profile.profileUrl || null,
           vac_banned: profile.vacBanned ? 1 : 0,
-          game_bans: toNumber(profile.gameBans),
-          last_ban_days: toNumber(profile.daysSinceLastBan),
+          game_bans: gameBans,
+          last_ban_days: hasBanHistory && lastBanDays !== null ? lastBanDays : null,
           visibility: toNumber(profile.visibility),
           rust_playtime_minutes: toNumber(profile.rustPlaytimeMinutes),
           playtime_updated_at: profile.playtimeUpdatedAt || null
@@ -866,6 +881,28 @@ function cacheServerInfo(id, info) {
   serverInfoCache.set(id, { data: info, timestamp: Date.now() });
 }
 
+async function fetchSizeAndSeedViaRcon(server) {
+  const out = { size: null, seed: null };
+
+  try {
+    const res = await sendRconCommand(server, 'server.worldsize');
+    const m = String(res?.Message || '').match(/worldsize\s*[:=]\s*(\d+)/i);
+    if (m) out.size = parseInt(m[1], 10);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const res = await sendRconCommand(server, 'server.seed');
+    const m = String(res?.Message || '').match(/seed\s*[:=]\s*(\d+)/i);
+    if (m) out.seed = parseInt(m[1], 10);
+  } catch {
+    // ignore
+  }
+
+  return out;
+}
+
 function firstThursdayResetTime(now = new Date()) {
   const tzAdjusted = new Date(now.getTime() + MAP_CACHE_TZ_OFFSET_MINUTES * 60000);
   const year = tzAdjusted.getUTCFullYear();
@@ -878,16 +915,11 @@ function firstThursdayResetTime(now = new Date()) {
   return new Date(Date.UTC(year, month, day, hourUtc, minuteUtc, 0, 0));
 }
 
-function parseTimestamp(value) {
-  if (!value) return null;
-  const ts = Date.parse(value);
-  if (Number.isNaN(ts)) return null;
-  return new Date(ts);
-}
-
 function shouldResetMapRecord(record, now = new Date(), resetPoint = firstThursdayResetTime(now)) {
   if (!record) return false;
-  const updated = parseTimestamp(record.updated_at || record.updatedAt || record.created_at || record.createdAt);
+  const updated = parseDateLike(
+    record.updated_at || record.updatedAt || record.created_at || record.createdAt
+  );
   if (!updated) return false;
   return now >= resetPoint && updated < resetPoint;
 }
@@ -1069,6 +1101,56 @@ function decodeBase64Image(input) {
 function toServerId(value) {
   const id = Number(value);
   return Number.isFinite(id) ? id : null;
+}
+
+function sanitizeDiscordToken(value, maxLength = 256) {
+  if (value == null) return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return text;
+  return text.slice(0, maxLength);
+}
+
+function sanitizeDiscordSnowflake(value, maxLength = 64) {
+  if (value == null) return '';
+  const digits = String(value).replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return digits;
+  return digits.slice(0, maxLength);
+}
+
+function projectDiscordIntegration(row) {
+  if (!row || typeof row !== 'object') return null;
+  const serverId = Number(row.server_id ?? row.serverId);
+  return {
+    serverId: Number.isFinite(serverId) ? serverId : null,
+    guildId: row.guild_id || row.guildId || null,
+    channelId: row.channel_id || row.channelId || null,
+    createdAt: row.created_at || row.createdAt || null,
+    updatedAt: row.updated_at || row.updatedAt || null,
+    hasToken: Boolean(row.bot_token)
+  };
+}
+
+function describeDiscordStatus(serverId) {
+  const numericId = Number(serverId);
+  const status = Number.isFinite(numericId) ? statusMap.get(numericId) : null;
+  const details = status?.details || {};
+  const playersOnline = Number(details?.players?.online);
+  const maxPlayers = Number(details?.players?.max);
+  const joiningRaw = Number(details?.joining);
+  const serverOnline = Boolean(status?.ok);
+  return {
+    serverOnline,
+    players: {
+      current: Number.isFinite(playersOnline) ? playersOnline : 0,
+      max: Number.isFinite(maxPlayers) ? maxPlayers : null
+    },
+    joining: Number.isFinite(joiningRaw) ? Math.max(0, joiningRaw) : 0,
+    presence: serverOnline ? 'online' : 'dnd',
+    presenceLabel: serverOnline ? 'Online' : 'Do Not Disturb',
+    lastCheck: status?.lastCheck || null
+  };
 }
 
 rconEventBus.on('monitor_status', (serverId, payload) => {
@@ -1392,6 +1474,84 @@ app.get('/api/servers/:id/status', auth, (req, res) => {
   res.json(status);
 });
 
+app.get('/api/servers/:id/discord', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (typeof db.getServerDiscordIntegration !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const integration = await db.getServerDiscordIntegration(id);
+    res.json({
+      integration: projectDiscordIntegration(integration),
+      status: describeDiscordStatus(id)
+    });
+  } catch (err) {
+    console.error('failed to load discord integration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/servers/:id/discord', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (typeof db.saveServerDiscordIntegration !== 'function' || typeof db.getServerDiscordIntegration !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const existing = await db.getServerDiscordIntegration(id);
+    const body = req.body || {};
+    const guildId = sanitizeDiscordSnowflake(body.guildId ?? body.guild_id);
+    const channelId = sanitizeDiscordSnowflake(body.channelId ?? body.channel_id);
+    const tokenInput = sanitizeDiscordToken(body.botToken ?? body.bot_token);
+    if (!guildId || !channelId) return res.status(400).json({ error: 'missing_fields' });
+    let botToken = tokenInput;
+    if (!botToken) {
+      const existingToken = existing?.bot_token;
+      if (existingToken) botToken = existingToken;
+      else return res.status(400).json({ error: 'missing_bot_token' });
+    }
+    await db.saveServerDiscordIntegration(id, {
+      bot_token: botToken,
+      guild_id: guildId,
+      channel_id: channelId
+    });
+    const integration = await db.getServerDiscordIntegration(id);
+    res.json({
+      integration: projectDiscordIntegration(integration),
+      status: describeDiscordStatus(id)
+    });
+  } catch (err) {
+    console.error('failed to save discord integration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/servers/:id/discord', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (typeof db.deleteServerDiscordIntegration !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const removed = await db.deleteServerDiscordIntegration(id);
+    res.json({
+      removed: Number(removed) > 0,
+      integration: null,
+      status: describeDiscordStatus(id)
+    });
+  } catch (err) {
+    console.error('failed to delete discord integration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 app.post('/api/servers', auth, async (req, res) => {
   const { name, host, port, password, tls } = req.body || {};
   if (!name || !host || !port || !password) return res.status(400).json({ error: 'missing_fields' });
@@ -1448,6 +1608,16 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         cacheServerInfo(id, info);
       } catch (err) {
         info = { raw: null, mapName: null, size: null, seed: null };
+      }
+    }
+    if (!info?.size || !info?.seed) {
+      try {
+        const { size, seed } = await fetchSizeAndSeedViaRcon(server);
+        if (!info.size && Number.isFinite(size)) info.size = size;
+        if (!info.seed && Number.isFinite(seed)) info.seed = seed;
+        cacheServerInfo(id, info);
+      } catch {
+        // leave info as-is if lookups fail
       }
     }
     let playerPayload = '';
@@ -1661,33 +1831,27 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
   }
 });
 
+// --- Player history: /api/servers/:id/player-counts
 app.get('/api/servers/:id/player-counts', auth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
 
   const now = Date.now();
   const explicitTo = parseTimestamp(req.query.to) ?? now;
-  const rangeMsRaw = parseDurationMs(req.query.range, 24 * 60 * 60 * 1000);
   let endMs = Number.isFinite(explicitTo) ? explicitTo : now;
+
+  const rangeMsRaw = parseDurationMs(req.query.range, 24 * 60 * 60 * 1000);
   let startMs = parseTimestamp(req.query.from);
 
   const clampedRange = clamp(rangeMsRaw, MIN_PLAYER_HISTORY_RANGE_MS, MAX_PLAYER_HISTORY_RANGE_MS);
   if (!Number.isFinite(startMs)) startMs = endMs - clampedRange;
 
-  if (endMs - startMs < MIN_PLAYER_HISTORY_RANGE_MS) {
-    startMs = endMs - MIN_PLAYER_HISTORY_RANGE_MS;
-  }
-  if (endMs <= startMs) {
-    endMs = startMs + MIN_PLAYER_HISTORY_RANGE_MS;
-  }
-  if (endMs - startMs > MAX_PLAYER_HISTORY_RANGE_MS) {
-    startMs = endMs - MAX_PLAYER_HISTORY_RANGE_MS;
-  }
+  if (endMs - startMs < MIN_PLAYER_HISTORY_RANGE_MS) startMs = endMs - MIN_PLAYER_HISTORY_RANGE_MS;
+  if (endMs <= startMs) endMs = startMs + MIN_PLAYER_HISTORY_RANGE_MS;
+  if (endMs - startMs > MAX_PLAYER_HISTORY_RANGE_MS) startMs = endMs - MAX_PLAYER_HISTORY_RANGE_MS;
 
   let intervalMs = parseDurationMs(req.query.interval, null);
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-    intervalMs = pickDefaultInterval(endMs - startMs);
-  }
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) intervalMs = pickDefaultInterval(endMs - startMs);
   intervalMs = clamp(intervalMs, MIN_PLAYER_HISTORY_INTERVAL_MS, MAX_PLAYER_HISTORY_INTERVAL_MS);
 
   let alignedStart = alignTimestamp(startMs, intervalMs, 'floor');
@@ -1736,6 +1900,34 @@ app.get('/api/servers/:id/player-counts', auth, async (req, res) => {
   }
 });
 
+// --- Forced display name: /api/servers/:serverId/players/:steamid
+app.patch('/api/servers/:serverId/players/:steamid', auth, async (req, res) => {
+  if (typeof db.setServerPlayerDisplayName !== 'function') {
+    return res.status(400).json({ error: 'unsupported' });
+  }
+  const serverId = Number(req.params.serverId);
+  if (!Number.isFinite(serverId)) return res.status(400).json({ error: 'invalid_server_id' });
+
+  const steamid = String(req.params.steamid || '').trim();
+  if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+
+  const { display_name } = req.body || {};
+  if (typeof display_name !== 'undefined' && display_name !== null && typeof display_name !== 'string') {
+    return res.status(400).json({ error: 'invalid_display_name' });
+  }
+  const trimmed = typeof display_name === 'string' ? display_name.trim().slice(0, 190) : null;
+  const payload = trimmed ? trimmed : null;
+
+  try {
+    const updated = await db.setServerPlayerDisplayName({ server_id: serverId, steamid, display_name: payload });
+    if (!updated) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true, forced_display_name: payload });
+  } catch (err) {
+    console.error('setServerPlayerDisplayName failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 app.get('/api/players/:steamid', auth, async (req, res) => {
   try {
     const p = await db.getPlayer(req.params.steamid);
@@ -1775,10 +1967,14 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
   if (rb.ok) {
     const jb = await rb.json();
     for (const b of jb?.players || []) {
+      const vacBanned = b.VACBanned ? 1 : 0;
+      const gameBans = Number(b.NumberOfGameBans) || 0;
+      const banDays = Number.isFinite(Number(b.DaysSinceLastBan)) ? Number(b.DaysSinceLastBan) : null;
+      const hasBanHistory = vacBanned || gameBans > 0;
       banMap.set(String(b.SteamId), {
-        vac_banned: b.VACBanned ? 1 : 0,
-        game_bans: Number(b.NumberOfGameBans) || 0,
-        last_ban_days: Number.isFinite(Number(b.DaysSinceLastBan)) ? Number(b.DaysSinceLastBan) : null
+        vac_banned: vacBanned,
+        game_bans: gameBans,
+        last_ban_days: hasBanHistory && banDays !== null ? banDays : null
       });
     }
   }
@@ -1807,6 +2003,8 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
     const sid = String(player?.steamid || '');
     if (!sid) continue;
     const ban = banMap.get(sid) || {};
+    const banDays = Number.isFinite(Number(ban.last_ban_days)) ? Number(ban.last_ban_days) : null;
+    const hasBanHistory = (ban.vac_banned ? 1 : 0) || Number(ban.game_bans) > 0;
     const visibility = Number.isFinite(Number(player.communityvisibilitystate)) ? Number(player.communityvisibilitystate) : null;
     const playtime = playtimeMap.has(sid) ? playtimeMap.get(sid) : null;
     out.push({
@@ -1817,7 +2015,7 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
       profileurl: player.profileurl || null,
       vac_banned: ban.vac_banned ? 1 : 0,
       game_bans: Number(ban.game_bans) || 0,
-      last_ban_days: Number.isFinite(Number(ban.last_ban_days)) ? Number(ban.last_ban_days) : null,
+      last_ban_days: hasBanHistory && banDays !== null ? banDays : null,
       visibility,
       rust_playtime_minutes: typeof playtime === 'number' ? playtime : null,
       playtime_updated_at: includePlaytime ? nowIso : null

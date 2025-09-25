@@ -35,7 +35,8 @@
         steamid: null,
         base: null,
         details: null,
-        refreshing: false
+        refreshing: false,
+        updatingName: false
       };
 
       const modal = createPlayerModal();
@@ -55,9 +56,19 @@
           li.tabIndex = 0;
           li.setAttribute('role', 'button');
           const left = document.createElement('div');
+          const nameRow = document.createElement('div');
+          nameRow.className = 'player-name-row';
           const strong = document.createElement('strong');
-          strong.textContent = p.display_name || p.persona || p.steamid;
-          left.appendChild(strong);
+          const displayLabel = p.display_name || p.persona || p.steamid;
+          strong.textContent = displayLabel;
+          nameRow.appendChild(strong);
+          if (p.forced_display_name) {
+            const forcedBadge = document.createElement('span');
+            forcedBadge.className = 'badge warn';
+            forcedBadge.textContent = 'Forced';
+            nameRow.appendChild(forcedBadge);
+          }
+          left.appendChild(nameRow);
           const meta = document.createElement('div');
           meta.className = 'muted small';
           const lastSeen = formatTimestamp(p.last_seen);
@@ -191,6 +202,7 @@
         const steamid = String(player.steamid || '').trim();
         modalState.open = true;
         modalState.steamid = steamid || null;
+        modalState.updatingName = false;
         renderModal(player, null);
         setModalStatus('');
         setModalLoading(false);
@@ -209,6 +221,7 @@
         modalState.base = null;
         modalState.details = null;
         modalState.refreshing = false;
+        modalState.updatingName = false;
         setModalStatus('');
         setModalLoading(false);
         modal.hide();
@@ -221,8 +234,16 @@
         const base = modalState.base || {};
         const detail = modalState.details || {};
         const combined = { ...base, ...detail };
-        const displayName = combined.display_name || combined.persona || combined.steamid || 'Unknown player';
-        const persona = combined.persona || '—';
+        const forcedName = typeof combined.forced_display_name === 'string' && combined.forced_display_name
+          ? combined.forced_display_name
+          : null;
+        const fallbackName = combined.persona || combined.steamid || 'Unknown player';
+        const displayName = (combined.display_name && String(combined.display_name).trim())
+          ? combined.display_name
+          : fallbackName;
+        const rawDisplay = combined.raw_display_name || (forcedName ? fallbackName : displayName) || '';
+        const personaValue = combined.persona || '';
+        const personaLabel = personaValue && personaValue !== displayName ? personaValue : '';
         const steamid = combined.steamid || '—';
         const country = combined.country || '';
         const nameBadge = modal.elements.name;
@@ -264,25 +285,34 @@
             badge.textContent = `${gameBans} game ban${gameBans === 1 ? '' : 's'}`;
             modal.elements.badges.appendChild(badge);
           }
+          if (forcedName) {
+            const forcedBadge = document.createElement('span');
+            forcedBadge.className = 'badge warn';
+            forcedBadge.textContent = 'Forced';
+            modal.elements.badges.appendChild(forcedBadge);
+          }
         }
-        if (modal.elements.persona) modal.elements.persona.textContent = persona && persona !== displayName ? persona : '';
+        if (modal.elements.persona) modal.elements.persona.textContent = personaLabel;
         if (modal.elements.details) {
-          const entries = [
-            ['Display name', combined.display_name || '—'],
-            ['Persona', persona],
-            ['Steam ID', steamid],
-            ['Country', country || '—'],
-            ['First seen', formatTimestamp(combined.first_seen) || '—'],
-            ['Last seen', formatTimestamp(combined.last_seen) || '—'],
-            ['Last address', combined.last_ip ? `${combined.last_ip}${combined.last_port ? ':' + combined.last_port : ''}` : '—'],
-            ['Rust playtime', formatPlaytime(combined.rust_playtime_minutes, combined.visibility)],
-            ['Profile visibility', formatVisibility(combined.visibility)],
-            ['VAC ban', Number(combined.vac_banned) > 0 ? 'Yes' : 'No'],
-            ['Game bans', `${Number(combined.game_bans || 0) || 0}`],
-            ['Last ban', formatLastBan(combined.last_ban_days)],
-            ['Profile updated', formatTimestamp(combined.updated_at) || '—'],
-            ['Playtime updated', formatTimestamp(combined.playtime_updated_at) || '—']
-          ];
+          const entries = [];
+          entries.push(['Display name', displayName || '—']);
+          if (forcedName) entries.push(['Forced name', forcedName]);
+          if (forcedName && rawDisplay && rawDisplay !== forcedName) {
+            entries.push(['Last known name', rawDisplay]);
+          }
+          entries.push(['Steam persona', personaValue || '—']);
+          entries.push(['Steam ID', steamid]);
+          entries.push(['Country', country || '—']);
+          entries.push(['First seen', formatTimestamp(combined.first_seen) || '—']);
+          entries.push(['Last seen', formatTimestamp(combined.last_seen) || '—']);
+          entries.push(['Last address', combined.last_ip ? `${combined.last_ip}${combined.last_port ? ':' + combined.last_port : ''}` : '—']);
+          entries.push(['Rust playtime', formatPlaytime(combined.rust_playtime_minutes, combined.visibility)]);
+          entries.push(['Profile visibility', formatVisibility(combined.visibility)]);
+          entries.push(['VAC ban', Number(combined.vac_banned) > 0 ? 'Yes' : 'No']);
+          entries.push(['Game bans', `${Number(combined.game_bans || 0) || 0}`]);
+          entries.push(['Last ban', formatLastBan(combined.last_ban_days)]);
+          entries.push(['Profile updated', formatTimestamp(combined.updated_at) || '—']);
+          entries.push(['Playtime updated', formatTimestamp(combined.playtime_updated_at) || '—']);
           modal.elements.details.innerHTML = '';
           for (const [label, value] of entries) {
             const dt = document.createElement('dt');
@@ -339,8 +369,23 @@
         }
         if (modal.elements.refreshBtn) {
           const hasSteam = Boolean(combined.steamid);
-          modal.elements.refreshBtn.disabled = modalState.refreshing || !hasSteam;
+          const busy = modalState.refreshing || modalState.updatingName;
+          modal.elements.refreshBtn.disabled = busy || !hasSteam;
           modal.elements.refreshBtn.textContent = modalState.refreshing ? 'Refreshing…' : 'Force Steam Refresh';
+        }
+        if (modal.elements.forceNameBtn) {
+          const globalState = ctx.getState?.();
+          const serverId = Number(state.serverId ?? globalState?.currentServerId);
+          const hasSteam = Boolean(combined.steamid);
+          const busy = modalState.refreshing || modalState.updatingName;
+          if (modalState.updatingName) {
+            modal.elements.forceNameBtn.textContent = 'Saving…';
+          } else if (combined.forced_display_name) {
+            modal.elements.forceNameBtn.textContent = 'Clear forced name';
+          } else {
+            modal.elements.forceNameBtn.textContent = 'Force display name';
+          }
+          modal.elements.forceNameBtn.disabled = busy || !hasSteam || !Number.isFinite(serverId);
         }
       }
 
@@ -386,7 +431,7 @@
       }
 
       async function forceSteamRefresh() {
-        if (!modalState.open || !modalState.steamid || modalState.refreshing) return;
+        if (!modalState.open || !modalState.steamid || modalState.refreshing || modalState.updatingName) return;
         modalState.refreshing = true;
         renderModal(null, null);
         setModalStatus('Requesting fresh Steam profile…');
@@ -406,6 +451,49 @@
           setModalStatus('Failed to refresh Steam profile: ' + (ctx.describeError?.(err) || err?.message || 'Unknown error'), 'error');
         } finally {
           modalState.refreshing = false;
+          renderModal(null, null);
+        }
+      }
+
+      async function forceDisplayName() {
+        if (!modalState.open || !modalState.steamid || modalState.refreshing || modalState.updatingName) return;
+        const globalState = ctx.getState?.();
+        const serverId = Number(state.serverId ?? globalState?.currentServerId);
+        if (!Number.isFinite(serverId)) {
+          setModalStatus('Select a server to change display names.', 'warn');
+          return;
+        }
+        const combined = { ...(modalState.base || {}), ...(modalState.details || {}) };
+        const forced = typeof combined.forced_display_name === 'string' && combined.forced_display_name
+          ? combined.forced_display_name
+          : '';
+        const raw = combined.raw_display_name || combined.display_name || combined.persona || combined.steamid || '';
+        const initial = forced || raw || '';
+        const input = window.prompt('Enter a display name for this server. Leave blank to restore the live name.', initial);
+        if (input === null) return;
+        const trimmedInput = input.trim();
+        const next = trimmedInput.slice(0, 190);
+        if (!next && !forced) return;
+        if (next && next === forced) return;
+        const clearing = next.length === 0;
+        modalState.updatingName = true;
+        renderModal(null, null);
+        setModalStatus(clearing ? 'Clearing forced display name…' : 'Saving display name…');
+        try {
+          await ctx.api(`/api/servers/${serverId}/players/${modalState.steamid}`, { display_name: clearing ? null : next }, 'PATCH');
+          setModalStatus(clearing ? 'Forced name cleared.' : 'Display name saved.', 'success');
+          await refresh('display-name-change', serverId);
+          const updated = state.players.find((player) => String(player.steamid || '') === modalState.steamid);
+          if (updated) renderModal(updated, null);
+        } catch (err) {
+          if (ctx.errorCode?.(err) === 'unauthorized') {
+            ctx.handleUnauthorized?.();
+            closeModal();
+            return;
+          }
+          setModalStatus('Failed to update display name: ' + (ctx.describeError?.(err) || err?.message || 'Unknown error'), 'error');
+        } finally {
+          modalState.updatingName = false;
           renderModal(null, null);
         }
       }
@@ -493,6 +581,11 @@
 
         const actions = document.createElement('div');
         actions.className = 'player-modal-actions';
+        const forceNameBtn = document.createElement('button');
+        forceNameBtn.type = 'button';
+        forceNameBtn.className = 'btn ghost small';
+        forceNameBtn.textContent = 'Force display name';
+        actions.appendChild(forceNameBtn);
         const refreshBtn = document.createElement('button');
         refreshBtn.type = 'button';
         refreshBtn.className = 'btn small';
@@ -520,12 +613,14 @@
         dialog.addEventListener('click', (ev) => ev.stopPropagation());
         closeBtn.addEventListener('click', hide);
         refreshBtn.addEventListener('click', forceSteamRefresh);
+        forceNameBtn.addEventListener('click', forceDisplayName);
 
         return {
           show() {
             overlay.classList.remove('hidden');
             overlay.setAttribute('aria-hidden', 'false');
             document.body.classList.add('modal-open');
+            overlay.scrollTop = 0;
             document.addEventListener('keydown', onKeyDown);
             setTimeout(() => closeBtn.focus(), 50);
           },
@@ -545,6 +640,7 @@
             events: eventsList,
             status,
             refreshBtn,
+            forceNameBtn,
             profileLink,
             loading
           },
@@ -554,6 +650,7 @@
             overlay.removeEventListener('click', onBackdrop);
             closeBtn.removeEventListener('click', hide);
             refreshBtn.removeEventListener('click', forceSteamRefresh);
+            forceNameBtn.removeEventListener('click', forceDisplayName);
             overlay.remove();
           }
         };

@@ -51,6 +51,7 @@ function createApi(dbh, dialect) {
         server_id INTEGER NOT NULL,
         steamid TEXT NOT NULL,
         display_name TEXT,
+        forced_display_name TEXT,
         first_seen TEXT DEFAULT (datetime('now')),
         last_seen TEXT DEFAULT (datetime('now')),
         last_ip TEXT,
@@ -97,6 +98,15 @@ function createApi(dbh, dialect) {
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS server_discord_integrations(
+        server_id INTEGER PRIMARY KEY,
+        bot_token TEXT,
+        guild_id TEXT,
+        channel_id TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
       `);
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
@@ -121,6 +131,7 @@ function createApi(dbh, dialect) {
       };
       await ensureServerPlayerColumn('last_ip', 'last_ip TEXT');
       await ensureServerPlayerColumn('last_port', 'last_port INTEGER');
+      await ensureServerPlayerColumn('forced_display_name', 'forced_display_name TEXT');
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
@@ -191,14 +202,14 @@ function createApi(dbh, dialect) {
       const portNum = Number(port);
       const portValue = Number.isFinite(portNum) ? portNum : null;
       await dbh.run(`
-        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen, last_ip, last_port)
-        VALUES(?,?,?,?,?,?,?)
+        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port)
+        VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(server_id, steamid) DO UPDATE SET
           display_name=COALESCE(excluded.display_name, server_players.display_name),
           last_seen=excluded.last_seen,
           last_ip=COALESCE(excluded.last_ip, server_players.last_ip),
           last_port=COALESCE(excluded.last_port, server_players.last_port)
-      `,[serverIdNum,sid,display_name,seen,seen,ipValue,portValue]);
+      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
     },
     async recordServerPlayerCount({ server_id, player_count, max_players = null, queued = null, sleepers = null, recorded_at = null }){
       const serverIdNum = Number(server_id);
@@ -270,16 +281,27 @@ function createApi(dbh, dialect) {
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];
       return await dbh.all(`
-        SELECT sp.server_id, sp.steamid, sp.display_name, sp.first_seen, sp.last_seen,
-               sp.last_ip, sp.last_port,
-               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
-               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
+                sp.last_ip, sp.last_port,
+                p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+                p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
         FROM server_players sp
         LEFT JOIN players p ON p.steamid = sp.steamid
         WHERE sp.server_id=?
         ORDER BY sp.last_seen DESC
         LIMIT ? OFFSET ?
       `,[serverIdNum,limit,offset]);
+    },
+    async setServerPlayerDisplayName({ server_id, steamid, display_name = null }){
+      const serverIdNum = Number(server_id);
+      if (!Number.isFinite(serverIdNum)) return 0;
+      const sid = String(steamid || '').trim();
+      if (!sid) return 0;
+      const value = typeof display_name === 'string' && display_name.trim()
+        ? display_name.trim().slice(0, 190)
+        : null;
+      const result = await dbh.run('UPDATE server_players SET forced_display_name=? WHERE server_id=? AND steamid=?',[value,serverIdNum,sid]);
+      return result.changes || 0;
     },
     async addPlayerEvent(ev){ await dbh.run('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
@@ -311,6 +333,19 @@ function createApi(dbh, dialect) {
       }
       const row = await dbh.get('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
       return row?.c ? Number(row.c) : 0;
+    },
+    async getServerDiscordIntegration(serverId){
+      return await dbh.get('SELECT * FROM server_discord_integrations WHERE server_id=?',[serverId]);
+    },
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
+      await dbh.run(
+        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,created_at,updated_at) VALUES(?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, updated_at=excluded.updated_at",
+        [serverId, bot_token, guild_id, channel_id]
+      );
+    },
+    async deleteServerDiscordIntegration(serverId){
+      const result = await dbh.run('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
+      return result?.changes ? Number(result.changes) : 0;
     }
   };
 }

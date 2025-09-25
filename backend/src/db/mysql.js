@@ -57,6 +57,7 @@ function createApi(pool, dialect) {
         server_id INT NOT NULL,
         steamid VARCHAR(32) NOT NULL,
         display_name VARCHAR(190) NULL,
+        forced_display_name VARCHAR(190) NULL,
         first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_ip VARCHAR(128) NULL,
@@ -76,6 +77,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE players ADD COLUMN playtime_updated_at TIMESTAMP NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_ip VARCHAR(128) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
+      await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -114,6 +116,15 @@ function createApi(pool, dialect) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_maps FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS server_discord_integrations(
+        server_id INT PRIMARY KEY,
+        bot_token TEXT NULL,
+        guild_id VARCHAR(64) NULL,
+        channel_id VARCHAR(64) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_server_discord FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
@@ -164,14 +175,14 @@ function createApi(pool, dialect) {
       const portNum = Number(port);
       const portValue = Number.isFinite(portNum) ? Math.max(0, Math.trunc(portNum)) : null;
       await exec(`
-        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen, last_ip, last_port)
-        VALUES(?,?,?,?,?,?,?)
+        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port)
+        VALUES(?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
           display_name=COALESCE(VALUES(display_name), server_players.display_name),
           last_seen=VALUES(last_seen),
           last_ip=COALESCE(VALUES(last_ip), server_players.last_ip),
           last_port=COALESCE(VALUES(last_port), server_players.last_port)
-      `,[serverIdNum,sid,display_name,seen,seen,ipValue,portValue]);
+      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
     },
     async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, recorded_at=null }){
       const serverIdNum = Number(server_id);
@@ -245,7 +256,7 @@ function createApi(pool, dialect) {
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];
       return await exec(`
-        SELECT sp.server_id, sp.steamid, sp.display_name, sp.first_seen, sp.last_seen,
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
                sp.last_ip, sp.last_port,
                p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
                p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
@@ -255,6 +266,21 @@ function createApi(pool, dialect) {
         ORDER BY sp.last_seen DESC
         LIMIT ? OFFSET ?
       `,[serverIdNum,limit,offset]);
+    },
+    async setServerPlayerDisplayName({ server_id, steamid, display_name = null }){
+      const serverIdNum = Number(server_id);
+      if (!Number.isFinite(serverIdNum)) return 0;
+      const sid = String(steamid || '').trim();
+      if (!sid) return 0;
+      const value = typeof display_name === 'string' && display_name.trim()
+        ? display_name.trim().slice(0, 190)
+        : null;
+      const result = await exec(`
+        UPDATE server_players
+        SET forced_display_name=?
+        WHERE server_id=? AND steamid=?
+      `,[value,serverIdNum,sid]);
+      return result.affectedRows || 0;
     },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
@@ -286,6 +312,27 @@ function createApi(pool, dialect) {
       }
       const rows = await exec('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
       return rows?.[0]?.c ? Number(rows[0].c) : 0;
+    },
+    async getServerDiscordIntegration(serverId){
+      const rows = await exec('SELECT * FROM server_discord_integrations WHERE server_id=?',[serverId]);
+      return rows?.[0] ?? null;
+    },
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
+      await exec(`
+        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id)
+        VALUES(?,?,?,?)
+        ON DUPLICATE KEY UPDATE
+          bot_token=VALUES(bot_token),
+          guild_id=VALUES(guild_id),
+          channel_id=VALUES(channel_id)
+      `,[serverId, bot_token, guild_id, channel_id]);
+    },
+    async deleteServerDiscordIntegration(serverId){
+      const result = await exec('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
+      if (result == null) return 0;
+      if (typeof result.affectedRows === 'number') return result.affectedRows;
+      if (Array.isArray(result) && typeof result[0]?.affectedRows === 'number') return result[0].affectedRows;
+      return 0;
     }
   };
 }
