@@ -99,6 +99,201 @@
         query: ''
       };
 
+      let profileMenu = null;
+      let profileMenuElements = null;
+      const profileMenuState = { open: false, row: null, player: null };
+
+      function ensureProfileMenu() {
+        if (profileMenuElements) return profileMenuElements;
+        const menu = document.createElement('div');
+        menu.className = 'player-profile-menu hidden';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-hidden', 'true');
+
+        const header = document.createElement('div');
+        header.className = 'player-profile-menu-header';
+        menu.appendChild(header);
+
+        const avatar = document.createElement('div');
+        avatar.className = 'player-profile-menu-avatar';
+        header.appendChild(avatar);
+
+        const text = document.createElement('div');
+        text.className = 'player-profile-menu-text';
+        header.appendChild(text);
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'player-profile-menu-name';
+        text.appendChild(nameEl);
+
+        const personaEl = document.createElement('div');
+        personaEl.className = 'player-profile-menu-sub muted';
+        text.appendChild(personaEl);
+
+        const metaList = document.createElement('div');
+        metaList.className = 'player-profile-menu-meta';
+        menu.appendChild(metaList);
+
+        function createMetaRow(labelText) {
+          const row = document.createElement('div');
+          row.className = 'player-profile-menu-meta-row';
+          const label = document.createElement('span');
+          label.className = 'label';
+          label.textContent = labelText;
+          const value = document.createElement('span');
+          value.className = 'value';
+          row.appendChild(label);
+          row.appendChild(value);
+          metaList.appendChild(row);
+          return value;
+        }
+
+        const steamIdValue = createMetaRow('Steam ID');
+        const addressValue = createMetaRow('Address');
+        const connectedValue = createMetaRow('Connected');
+
+        const actions = document.createElement('div');
+        actions.className = 'player-profile-menu-actions';
+        const steamButton = document.createElement('a');
+        steamButton.className = 'menu-item menu-link';
+        steamButton.textContent = 'Open Steam Profile';
+        steamButton.target = '_blank';
+        steamButton.rel = 'noreferrer noopener';
+        actions.appendChild(steamButton);
+        menu.appendChild(actions);
+
+        document.body.appendChild(menu);
+
+        profileMenu = menu;
+        profileMenuElements = {
+          root: menu,
+          avatar,
+          name: nameEl,
+          persona: personaEl,
+          steamId: steamIdValue,
+          address: addressValue,
+          connected: connectedValue,
+          steamButton
+        };
+        return profileMenuElements;
+      }
+
+      function closeProfileMenu() {
+        if (profileMenu) {
+          profileMenu.classList.add('hidden');
+          profileMenu.setAttribute('aria-hidden', 'true');
+          profileMenu.style.visibility = '';
+        }
+        profileMenuState.open = false;
+        profileMenuState.row = null;
+        profileMenuState.player = null;
+        document.removeEventListener('click', handleMenuOutsideClick);
+        document.removeEventListener('keydown', handleMenuKeydown);
+        window.removeEventListener('resize', handleMenuResize);
+        window.removeEventListener('scroll', handleMenuScroll, true);
+      }
+
+      function handleMenuOutsideClick(event) {
+        if (!profileMenuState.open) return;
+        const target = event.target;
+        if (profileMenu?.contains(target)) return;
+        if (profileMenuState.row?.contains(target)) return;
+        closeProfileMenu();
+      }
+
+      function handleMenuKeydown(event) {
+        if (event.key === 'Escape') closeProfileMenu();
+      }
+
+      function handleMenuResize() {
+        closeProfileMenu();
+      }
+
+      function handleMenuScroll() {
+        closeProfileMenu();
+      }
+
+      function openProfileMenu(row, player) {
+        if (!row || !player) return;
+        const elements = ensureProfileMenu();
+        closeProfileMenu();
+
+        const profile = player.steamProfile || {};
+        const displayName = player.displayName || profile.persona || player.steamId || 'Unknown player';
+
+        if (elements.avatar) {
+          elements.avatar.innerHTML = '';
+          elements.avatar.classList.remove('placeholder');
+          if (profile.avatar) {
+            const img = document.createElement('img');
+            img.src = profile.avatar;
+            img.alt = `${displayName} avatar`;
+            img.loading = 'lazy';
+            elements.avatar.appendChild(img);
+          } else {
+            elements.avatar.classList.add('placeholder');
+            elements.avatar.textContent = avatarInitial(displayName);
+          }
+        }
+
+        if (elements.name) elements.name.textContent = displayName;
+        if (elements.persona) {
+          const personaText = profile.persona || profile.personaName || '';
+          elements.persona.textContent = personaText;
+          elements.persona.classList.toggle('hidden', !personaText);
+        }
+
+        if (elements.steamId) elements.steamId.textContent = player.steamId || '—';
+        if (elements.address) {
+          const address = player.ip ? `${player.ip}${player.port ? ':' + player.port : ''}` : 'Hidden';
+          elements.address.textContent = address;
+        }
+        if (elements.connected) {
+          elements.connected.textContent = formatDuration(player.connectedSeconds);
+        }
+
+        const steamUrl = profile.profileUrl || (player.steamId ? `https://steamcommunity.com/profiles/${player.steamId}` : '');
+        if (elements.steamButton) {
+          if (steamUrl) {
+            elements.steamButton.classList.remove('hidden');
+            elements.steamButton.href = steamUrl;
+          } else {
+            elements.steamButton.classList.add('hidden');
+            elements.steamButton.removeAttribute('href');
+          }
+        }
+
+        if (!profileMenu) return;
+
+        profileMenu.classList.remove('hidden');
+        profileMenu.setAttribute('aria-hidden', 'false');
+        profileMenu.style.visibility = 'hidden';
+        profileMenu.style.top = '0px';
+        profileMenu.style.left = '0px';
+
+        const rect = row.getBoundingClientRect();
+        const menuRect = profileMenu.getBoundingClientRect();
+        const menuWidth = menuRect.width;
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        let left = window.scrollX + rect.left;
+        if (Number.isFinite(menuWidth) && left + menuWidth > window.scrollX + viewportWidth - 16) {
+          left = Math.max(window.scrollX + 16, window.scrollX + rect.right - menuWidth);
+        }
+        const top = window.scrollY + rect.bottom + 8;
+        profileMenu.style.left = `${Math.max(window.scrollX + 16, left)}px`;
+        profileMenu.style.top = `${Math.max(window.scrollY + 16, top)}px`;
+        profileMenu.style.visibility = '';
+
+        profileMenuState.open = true;
+        profileMenuState.row = row;
+        profileMenuState.player = player;
+
+        document.addEventListener('click', handleMenuOutsideClick);
+        document.addEventListener('keydown', handleMenuKeydown);
+        window.addEventListener('resize', handleMenuResize);
+        window.addEventListener('scroll', handleMenuScroll, true);
+      }
+
       function getFilteredPlayers() {
         if (!state.query) return [...state.players];
         const query = state.query;
@@ -202,6 +397,7 @@
         const total = state.players.length;
         const filtered = getFilteredPlayers();
         updateCount(filtered.length, total);
+        closeProfileMenu();
         list.innerHTML = '';
         if (!state.serverId) {
           setMessage('Connect to a server to view connected players.');
@@ -220,6 +416,7 @@
           state.selected = null;
           ctx.emit?.('live-players:focus', { steamId: null });
           window.dispatchEvent(new CustomEvent('team:clear'));
+          closeProfileMenu();
         }
         for (const player of filtered) {
           const row = document.createElement('article');
@@ -339,15 +536,19 @@
           row.addEventListener('click', () => {
             const steamId = player.steamId || null;
             const sameSelection = state.selected && steamId && state.selected === steamId;
-            state.selected = sameSelection ? null : steamId;
-            highlightRows();
-            if (state.selected) {
-              ctx.emit?.('live-players:focus', { steamId: player.steamId, player });
-              window.dispatchEvent(new CustomEvent('player:selected', { detail: { player } }));
-            } else {
+            if (sameSelection) {
+              state.selected = null;
+              highlightRows();
               ctx.emit?.('live-players:focus', { steamId: null });
               window.dispatchEvent(new CustomEvent('team:clear'));
+              closeProfileMenu();
+              return;
             }
+            state.selected = steamId || null;
+            highlightRows();
+            ctx.emit?.('live-players:focus', { steamId: player.steamId, player });
+            window.dispatchEvent(new CustomEvent('player:selected', { detail: { player } }));
+            openProfileMenu(row, player);
           });
 
           list.appendChild(row);
@@ -366,6 +567,7 @@
           state.players = [];
           state.selected = null;
           list.innerHTML = '';
+          closeProfileMenu();
           setMessage('Connect to a server to view connected players.');
           updateCount();
         }
@@ -376,6 +578,7 @@
         state.players = [];
         state.selected = null;
         list.innerHTML = '';
+        closeProfileMenu();
         setMessage('Sign in to view connected players.');
         updateCount();
       });
@@ -389,11 +592,13 @@
       const offHighlight = ctx.on?.('live-players:highlight', ({ steamId }) => {
         state.selected = steamId || null;
         highlightRows();
+        closeProfileMenu();
       });
 
       const onTeamClear = () => {
         state.selected = null;
         highlightRows();
+        closeProfileMenu();
       };
       window.addEventListener('team:clear', onTeamClear);
 
@@ -405,6 +610,12 @@
       ctx.onCleanup?.(() => window.removeEventListener('team:clear', onTeamClear));
       ctx.onCleanup?.(() => {
         if (searchListener) window.removeEventListener('players:search', searchListener);
+      });
+      ctx.onCleanup?.(() => {
+        closeProfileMenu();
+        if (profileMenu?.parentNode) profileMenu.parentNode.removeChild(profileMenu);
+        profileMenu = null;
+        profileMenuElements = null;
       });
 
       setMessage('Connect to a server to view connected players.');
