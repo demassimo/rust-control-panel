@@ -227,34 +227,89 @@ function parseStatusMessage(message) {
   return info;
 }
 
+function extractInteger(value) {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  const match = String(value).match(/-?\d+/);
+  if (!match) return null;
+  const num = parseInt(match[0], 10);
+  return Number.isFinite(num) ? num : null;
+}
+
 function parseServerInfoMessage(message) {
-  const info = {
-    raw: message,
-    mapName: null,
-    size: null,
-    seed: null
+  const result = { raw: message, mapName: null, size: null, seed: null };
+  if (!message) return { ...result };
+
+  const trimmed = typeof message === 'string' ? message.trim() : '';
+  const fields = {};
+
+  const assign = (key, value) => {
+    const keyText = String(key ?? '').trim();
+    if (!keyText) return;
+    const trimmedValue = typeof value === 'string' ? value.trim() : value;
+    fields[keyText] = trimmedValue;
+
+    const lower = keyText.toLowerCase();
+    if (trimmedValue == null || trimmedValue === '') return;
+
+    if (lower.includes('map') && !lower.includes('seed') && !lower.includes('size') && !lower.includes('url')) {
+      if (!result.mapName) result.mapName = String(trimmedValue);
+    }
+
+    if (lower.includes('size')) {
+      const size = extractInteger(trimmedValue);
+      if (size != null) result.size = size;
+    }
+
+    if (lower.includes('seed')) {
+      const seed = extractInteger(trimmedValue);
+      if (seed != null) result.seed = seed;
+    }
   };
-  if (!message) return info;
-  const lines = message.split(/\r?\n/);
-  for (const line of lines) {
-    const parts = line.split(':');
-    if (parts.length < 2) continue;
-    const key = parts.shift().trim().toLowerCase();
-    const value = parts.join(':').trim();
-    if (!value) continue;
-    if (key.includes('map')) {
-      if (!key.includes('seed') && !key.includes('size')) info.mapName = value;
-    }
-    if (key.includes('world size') || key === 'worldsize' || key === 'size') {
-      const size = parseInt(value, 10);
-      if (Number.isFinite(size)) info.size = size;
-    }
-    if (key.includes('seed')) {
-      const seed = parseInt(value, 10);
-      if (Number.isFinite(seed)) info.seed = seed;
+
+  let parsedJson = false;
+  if (trimmed.startsWith('{')) {
+    try {
+      const data = JSON.parse(trimmed);
+      if (data && typeof data === 'object') {
+        for (const [key, value] of Object.entries(data)) assign(key, value);
+        parsedJson = true;
+      }
+    } catch {
+      /* ignore JSON parse errors */
     }
   }
-  return info;
+
+  if (!parsedJson) {
+    const lines = trimmed.split(/\r?\n/);
+    for (const line of lines) {
+      const parts = line.split(':');
+      if (parts.length < 2) continue;
+      const key = parts.shift();
+      const value = parts.join(':');
+      assign(key, value);
+    }
+  }
+
+  if (result.mapName == null) {
+    const directMap = fields.Map ?? fields.map ?? null;
+    if (typeof directMap === 'string' && directMap.trim()) result.mapName = directMap.trim();
+  }
+
+  if (result.mapName && result.size == null) {
+    const size = extractInteger(result.mapName);
+    if (size != null) result.size = size;
+  }
+
+  const output = { ...fields, ...result };
+  if (!output.mapName && typeof output.Map === 'string' && output.Map.trim()) output.mapName = output.Map.trim();
+  if (!output.mapName && typeof output.map === 'string' && output.map.trim()) output.mapName = output.map.trim();
+  if (output.size == null) {
+    const mapSize = extractInteger(output.Map ?? output.map ?? null);
+    if (mapSize != null) output.size = mapSize;
+  }
+
+  return output;
 }
 
 function parsePlayerListMessage(message) {
@@ -804,6 +859,23 @@ rconEventBus.on('monitor_status', (serverId, payload) => {
   const statusReply = findReply('status') || payload?.reply || null;
   const statusMessage = statusReply?.Message || statusReply?.message || '';
   const details = parseStatusMessage(statusMessage);
+
+  const serverInfoReply = findReply('serverinfo');
+  const serverInfoMessage = serverInfoReply?.Message || serverInfoReply?.message || '';
+  if (serverInfoMessage) {
+    try {
+      const info = parseServerInfoMessage(serverInfoMessage);
+      if (info) {
+        cacheServerInfo(id, info);
+        details.serverInfo = info;
+        details.serverinfo = info;
+        details.serverInfoRaw = serverInfoMessage;
+      }
+    } catch (err) {
+      console.warn('Failed to parse serverinfo response', err);
+    }
+  }
+
   recordStatus(id, {
     ok: true,
     lastCheck: new Date().toISOString(),
@@ -880,7 +952,7 @@ async function refreshMonitoredServers() {
         monitorController = startAutoMonitor(list, {
           intervalMs: MONITOR_INTERVAL,
           timeoutMs: MONITOR_TIMEOUT,
-          commands: ['status', 'playerlist']
+          commands: ['status', 'playerlist', 'serverinfo']
         });
       } else {
         monitorController.update(list);
