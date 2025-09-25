@@ -706,6 +706,57 @@ function cacheServerInfo(id, info) {
   serverInfoCache.set(id, { data: info, timestamp: Date.now() });
 }
 
+function normalizeServerInfoNumbers(info) {
+  if (!info || typeof info !== 'object') return false;
+  let changed = false;
+
+  if ('size' in info || typeof info.size !== 'undefined') {
+    const normalizedSize = extractInteger(info.size);
+    if (info.size !== normalizedSize) {
+      info.size = normalizedSize;
+      changed = true;
+    }
+  }
+
+  if ('seed' in info || typeof info.seed !== 'undefined') {
+    const normalizedSeed = extractInteger(info.seed);
+    if (info.seed !== normalizedSeed) {
+      info.seed = normalizedSeed;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+async function fetchSizeAndSeedViaRcon(server) {
+  const out = { size: null, seed: null };
+
+  const parseReplyNumber = (reply) => {
+    const message = reply?.Message ?? reply?.message ?? reply ?? '';
+    const value = extractInteger(message);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  try {
+    const res = await sendRconCommand(server, 'server.worldsize');
+    const size = parseReplyNumber(res);
+    if (size !== null) out.size = size;
+  } catch {
+    // ignore
+  }
+
+  try {
+    const res = await sendRconCommand(server, 'server.seed');
+    const seed = parseReplyNumber(res);
+    if (seed !== null) out.seed = seed;
+  } catch {
+    // ignore
+  }
+
+  return out;
+}
+
 function firstThursdayResetTime(now = new Date()) {
   const tzAdjusted = new Date(now.getTime() + MAP_CACHE_TZ_OFFSET_MINUTES * 60000);
   const year = tzAdjusted.getUTCFullYear();
@@ -1281,21 +1332,46 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (!server) return res.status(404).json({ error: 'not_found' });
     ensureRconBinding(server);
     let info = getCachedServerInfo(id);
+    let infoChanged = false;
     if (!info) {
       try {
         const reply = await sendRconCommand(server, 'serverinfo');
         info = parseServerInfoMessage(reply?.Message || '');
+        infoChanged = normalizeServerInfoNumbers(info) || infoChanged;
         cacheServerInfo(id, info);
       } catch (err) {
         info = { raw: null, mapName: null, size: null, seed: null };
+      }
+    } else {
+      infoChanged = normalizeServerInfoNumbers(info) || infoChanged;
+    }
+
+    let hasSize = Number.isFinite(info?.size);
+    let hasSeed = Number.isFinite(info?.seed);
+    if (!hasSize || !hasSeed) {
+      try {
+        const { size, seed } = await fetchSizeAndSeedViaRcon(server);
+        if (!hasSize && Number.isFinite(size)) {
+          info.size = size;
+          hasSize = true;
+          infoChanged = true;
+        }
+        if (!hasSeed && Number.isFinite(seed)) {
+          info.seed = seed;
+          hasSeed = true;
+          infoChanged = true;
+        }
+      } catch {
+        // leave info as-is if lookups fail
       }
     }
     let playerPayload = '';
     try {
       const reply = await sendRconCommand(server, 'playerlist');
-      playerPayload = reply?.Message || '';
+      playerPayload = reply?.Message ?? reply?.message ?? '';
     } catch (err) {
       console.error('playerlist command failed', err);
+      if (info && infoChanged) cacheServerInfo(id, info);
       return res.status(502).json({ error: 'playerlist_failed' });
     }
     let players = parsePlayerListMessage(playerPayload);
@@ -1317,11 +1393,21 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     let map = mapRecordToPayload(id, mapRecord);
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
-      if (info?.size && info?.seed) {
+      const lookupSize = Number.isFinite(info?.size) ? info.size : null;
+      const lookupSeed = Number.isFinite(info?.seed) ? info.seed : null;
+      if (lookupSize != null && lookupSeed != null) {
         const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
         const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
         try {
-          let metadata = await fetchRustMapMetadata(info.size, info.seed, apiKey);
+          let metadata = await fetchRustMapMetadata(lookupSize, lookupSeed, apiKey);
+          if (!Number.isFinite(info.size)) {
+            info.size = metadata?.size ?? info.size;
+            if (Number.isFinite(info.size)) infoChanged = true;
+          }
+          if (!Number.isFinite(info.seed)) {
+            info.seed = metadata?.seed ?? info.seed;
+            if (Number.isFinite(info.seed)) infoChanged = true;
+          }
           const finalKey = deriveMapKey(info, metadata) || infoMapKey;
           const storedMeta = { ...metadata, mapKey: finalKey };
           await removeMapImage(mapRecord);
@@ -1360,12 +1446,15 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         } catch (err) {
           const code = err?.code || err?.message;
           if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized' || code === 'rustmaps_invalid_parameters') {
+            if (info && infoChanged) cacheServerInfo(id, info);
             return res.status(400).json({ error: code });
           }
           if (code === 'rustmaps_generation_timeout') {
+            if (info && infoChanged) cacheServerInfo(id, info);
             return res.status(504).json({ error: code });
           }
           if (code === 'rustmaps_generation_pending') {
+            if (info && infoChanged) cacheServerInfo(id, info);
             return res.status(202).json({ error: code });
           }
           if (code === 'rustmaps_not_found') {
@@ -1386,6 +1475,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
             };
           } else {
             console.error('RustMaps metadata fetch failed', err);
+            if (info && infoChanged) cacheServerInfo(id, info);
             return res.status(502).json({ error: 'rustmaps_error' });
           }
         }
@@ -1396,6 +1486,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (map && typeof map.cached === 'undefined') map.cached = !!mapRecord;
+    if (info && infoChanged) cacheServerInfo(id, info);
     res.json({ players, map, info, fetchedAt: new Date().toISOString() });
   } catch (err) {
     console.error('live-map route error', err);
