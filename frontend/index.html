@@ -316,15 +316,18 @@
             </div>
             <div class="profile-card-body">
               <label>Current Password
-                <input type="password" id="currentPassword" placeholder="••••••••" disabled>
+                <input type="password" id="currentPassword" placeholder="Enter current password" autocomplete="current-password">
               </label>
               <label>New Password
-                <input type="password" id="newPassword" placeholder="Minimum 8 characters" disabled>
+                <input type="password" id="newPassword" placeholder="Minimum 8 characters" autocomplete="new-password">
               </label>
               <label>Confirm Password
-                <input type="password" id="confirmPassword" placeholder="Minimum 8 characters" disabled>
+                <input type="password" id="confirmPassword" placeholder="Repeat new password" autocomplete="new-password">
               </label>
-              <p class="muted small">Password changes are managed from the server CLI in this build.</p>
+              <div class="row">
+                <button id="btnChangePassword" class="accent">Update password</button>
+              </div>
+              <p id="passwordStatus" class="notice hidden"></p>
             </div>
           </div>
 

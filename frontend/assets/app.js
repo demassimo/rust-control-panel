@@ -46,6 +46,11 @@
   const rustMapsKeyInput = $('#rustMapsKey');
   const btnSaveSettings = $('#btnSaveSettings');
   const settingsStatus = $('#settingsStatus');
+  const currentPasswordInput = $('#currentPassword');
+  const newPasswordInput = $('#newPassword');
+  const confirmPasswordInput = $('#confirmPassword');
+  const btnChangePassword = $('#btnChangePassword');
+  const passwordStatus = $('#passwordStatus');
   const serversEmpty = $('#serversEmpty');
   const addServerCard = $('#addServerCard');
   const welcomeName = $('#welcomeName');
@@ -260,7 +265,10 @@
       navDashboard?.classList.add('active');
       navSettings?.classList.remove('active');
     }
-    if (panel !== 'settings') hideNotice(settingsStatus);
+    if (panel !== 'settings') {
+      hideNotice(settingsStatus);
+      hideNotice(passwordStatus);
+    }
   }
 
   function createModuleCard({ id, title, icon } = {}) {
@@ -347,7 +355,9 @@
     missing_image: 'Choose an image before uploading.',
     invalid_image: 'The selected image could not be processed.',
     image_too_large: 'The image is too large. Please upload a file under 20 MB.',
-    map_upload_failed: 'Uploading the map image failed. Please try again.'
+    map_upload_failed: 'Uploading the map image failed. Please try again.',
+    invalid_current_password: 'The current password you entered is incorrect.',
+    password_mismatch: 'New password and confirmation do not match.'
   };
 
   function errorCode(err) {
@@ -374,6 +384,55 @@
     el.classList.add('hidden');
     el.classList.remove('success', 'error');
     el.textContent = '';
+  }
+
+  function clearPasswordInputs() {
+    if (currentPasswordInput) currentPasswordInput.value = '';
+    if (newPasswordInput) newPasswordInput.value = '';
+    if (confirmPasswordInput) confirmPasswordInput.value = '';
+  }
+
+  async function changePassword() {
+    if (!state.TOKEN) {
+      showNotice(passwordStatus, describeError('unauthorized'), 'error');
+      return;
+    }
+    hideNotice(passwordStatus);
+    const currentValue = currentPasswordInput?.value || '';
+    const nextValue = newPasswordInput?.value || '';
+    const confirmValue = confirmPasswordInput?.value || '';
+    if (!currentValue || !nextValue || !confirmValue) {
+      showNotice(passwordStatus, describeError('missing_fields'), 'error');
+      return;
+    }
+    if (nextValue.length < 8) {
+      showNotice(passwordStatus, describeError('weak_password'), 'error');
+      return;
+    }
+    if (nextValue !== confirmValue) {
+      showNotice(passwordStatus, describeError('password_mismatch'), 'error');
+      return;
+    }
+    const restore = btnChangePassword
+      ? { disabled: btnChangePassword.disabled, text: btnChangePassword.textContent }
+      : null;
+    if (btnChangePassword) {
+      btnChangePassword.disabled = true;
+      btnChangePassword.textContent = 'Updating…';
+    }
+    try {
+      await api('/api/password', { currentPassword: currentValue, newPassword: nextValue }, 'POST');
+      showNotice(passwordStatus, 'Password updated successfully.', 'success');
+      clearPasswordInputs();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(passwordStatus, describeError(err), 'error');
+    } finally {
+      if (btnChangePassword && restore) {
+        btnChangePassword.disabled = restore.disabled;
+        btnChangePassword.textContent = restore.text;
+      }
+    }
   }
 
   function setApiBase(value) {
@@ -1363,6 +1422,8 @@
     userCard.classList.add('hidden');
     hideNotice(userFeedback);
     hideNotice(settingsStatus);
+    hideNotice(passwordStatus);
+    clearPasswordInputs();
     if (rustMapsKeyInput) rustMapsKeyInput.value = '';
     ui.showLogin();
     loadPublicConfig();
@@ -1714,6 +1775,16 @@
     });
     btnSaveSettings?.addEventListener('click', (e) => { e.preventDefault(); saveSettings(); });
     rustMapsKeyInput?.addEventListener('input', () => hideNotice(settingsStatus));
+    btnChangePassword?.addEventListener('click', (e) => { e.preventDefault(); changePassword(); });
+    currentPasswordInput?.addEventListener('input', () => hideNotice(passwordStatus));
+    newPasswordInput?.addEventListener('input', () => hideNotice(passwordStatus));
+    confirmPasswordInput?.addEventListener('input', () => hideNotice(passwordStatus));
+    confirmPasswordInput?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        changePassword();
+      }
+    });
     const triggerLogin = (ev) => {
       ev?.preventDefault();
       handleLogin();

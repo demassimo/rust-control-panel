@@ -1110,13 +1110,19 @@ app.post('/api/me/settings', auth, async (req, res) => {
 });
 
 app.post('/api/password', auth, async (req, res) => {
-  const { newPassword } = req.body || {};
-  if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: 'weak_password' });
-  const hash = bcrypt.hashSync(newPassword, 10);
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'missing_fields' });
+  if (newPassword.length < 8) return res.status(400).json({ error: 'weak_password' });
   try {
+    const user = await db.getUser(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const ok = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'invalid_current_password' });
+    const hash = bcrypt.hashSync(newPassword, 10);
     await db.updateUserPassword(req.user.uid, hash);
     res.json({ ok: true });
-  } catch {
+  } catch (err) {
+    console.error('password update failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
