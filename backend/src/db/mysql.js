@@ -117,6 +117,15 @@ function createApi(pool, dialect) {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_maps FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS server_discord_integrations(
+        server_id INT PRIMARY KEY,
+        bot_token TEXT NULL,
+        guild_id VARCHAR(64) NULL,
+        channel_id VARCHAR(64) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_server_discord FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
@@ -261,6 +270,27 @@ function createApi(pool, dialect) {
       }
       const rows = await exec('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
       return rows?.[0]?.c ? Number(rows[0].c) : 0;
+    },
+    async getServerDiscordIntegration(serverId){
+      const rows = await exec('SELECT * FROM server_discord_integrations WHERE server_id=?',[serverId]);
+      return rows?.[0] ?? null;
+    },
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
+      await exec(`
+        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id)
+        VALUES(?,?,?,?)
+        ON DUPLICATE KEY UPDATE
+          bot_token=VALUES(bot_token),
+          guild_id=VALUES(guild_id),
+          channel_id=VALUES(channel_id)
+      `,[serverId, bot_token, guild_id, channel_id]);
+    },
+    async deleteServerDiscordIntegration(serverId){
+      const result = await exec('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
+      if (result == null) return 0;
+      if (typeof result.affectedRows === 'number') return result.affectedRows;
+      if (Array.isArray(result) && typeof result[0]?.affectedRows === 'number') return result[0].affectedRows;
+      return 0;
     }
   };
 }

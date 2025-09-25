@@ -918,6 +918,56 @@ function toServerId(value) {
   return Number.isFinite(id) ? id : null;
 }
 
+function sanitizeDiscordToken(value, maxLength = 256) {
+  if (value == null) return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return text;
+  return text.slice(0, maxLength);
+}
+
+function sanitizeDiscordSnowflake(value, maxLength = 64) {
+  if (value == null) return '';
+  const digits = String(value).replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return digits;
+  return digits.slice(0, maxLength);
+}
+
+function projectDiscordIntegration(row) {
+  if (!row || typeof row !== 'object') return null;
+  const serverId = Number(row.server_id ?? row.serverId);
+  return {
+    serverId: Number.isFinite(serverId) ? serverId : null,
+    guildId: row.guild_id || row.guildId || null,
+    channelId: row.channel_id || row.channelId || null,
+    createdAt: row.created_at || row.createdAt || null,
+    updatedAt: row.updated_at || row.updatedAt || null,
+    hasToken: Boolean(row.bot_token)
+  };
+}
+
+function describeDiscordStatus(serverId) {
+  const numericId = Number(serverId);
+  const status = Number.isFinite(numericId) ? statusMap.get(numericId) : null;
+  const details = status?.details || {};
+  const playersOnline = Number(details?.players?.online);
+  const maxPlayers = Number(details?.players?.max);
+  const joiningRaw = Number(details?.joining);
+  const serverOnline = Boolean(status?.ok);
+  return {
+    serverOnline,
+    players: {
+      current: Number.isFinite(playersOnline) ? playersOnline : 0,
+      max: Number.isFinite(maxPlayers) ? maxPlayers : null
+    },
+    joining: Number.isFinite(joiningRaw) ? Math.max(0, joiningRaw) : 0,
+    presence: serverOnline ? 'online' : 'dnd',
+    presenceLabel: serverOnline ? 'Online' : 'Do Not Disturb',
+    lastCheck: status?.lastCheck || null
+  };
+}
+
 rconEventBus.on('monitor_status', (serverId, payload) => {
   const id = toServerId(serverId);
   if (id == null) return;
@@ -1237,6 +1287,84 @@ app.get('/api/servers/:id/status', auth, (req, res) => {
   const status = statusMap.get(id);
   if (!status) return res.status(404).json({ error: 'not_found' });
   res.json(status);
+});
+
+app.get('/api/servers/:id/discord', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (typeof db.getServerDiscordIntegration !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const integration = await db.getServerDiscordIntegration(id);
+    res.json({
+      integration: projectDiscordIntegration(integration),
+      status: describeDiscordStatus(id)
+    });
+  } catch (err) {
+    console.error('failed to load discord integration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/servers/:id/discord', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (typeof db.saveServerDiscordIntegration !== 'function' || typeof db.getServerDiscordIntegration !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const existing = await db.getServerDiscordIntegration(id);
+    const body = req.body || {};
+    const guildId = sanitizeDiscordSnowflake(body.guildId ?? body.guild_id);
+    const channelId = sanitizeDiscordSnowflake(body.channelId ?? body.channel_id);
+    const tokenInput = sanitizeDiscordToken(body.botToken ?? body.bot_token);
+    if (!guildId || !channelId) return res.status(400).json({ error: 'missing_fields' });
+    let botToken = tokenInput;
+    if (!botToken) {
+      const existingToken = existing?.bot_token;
+      if (existingToken) botToken = existingToken;
+      else return res.status(400).json({ error: 'missing_bot_token' });
+    }
+    await db.saveServerDiscordIntegration(id, {
+      bot_token: botToken,
+      guild_id: guildId,
+      channel_id: channelId
+    });
+    const integration = await db.getServerDiscordIntegration(id);
+    res.json({
+      integration: projectDiscordIntegration(integration),
+      status: describeDiscordStatus(id)
+    });
+  } catch (err) {
+    console.error('failed to save discord integration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/servers/:id/discord', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (typeof db.deleteServerDiscordIntegration !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const removed = await db.deleteServerDiscordIntegration(id);
+    res.json({
+      removed: Number(removed) > 0,
+      integration: null,
+      status: describeDiscordStatus(id)
+    });
+  } catch (err) {
+    console.error('failed to delete discord integration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
 });
 
 app.post('/api/servers', auth, async (req, res) => {
