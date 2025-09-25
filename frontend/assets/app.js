@@ -609,20 +609,43 @@
     loadPublicConfig();
   }
 
+  function isLocalHostname(value) {
+    return value === 'localhost' || value === '127.0.0.1' || value === '::1';
+  }
+
   function detectDefaultApiBase() {
     const stored = localStorage.getItem('apiBase');
     if (stored) return stored;
-    const meta = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
-    if (meta) return meta;
-    try {
+
+    const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
+    const hasWindow = typeof window !== 'undefined' && window?.location;
+
+    if (metaContent) {
+      if (hasWindow) {
+        try {
+          const metaUrl = new URL(metaContent, window.location.origin);
+          const windowHost = window.location.hostname;
+          if (windowHost && !isLocalHostname(windowHost) && isLocalHostname(metaUrl.hostname)) {
+            metaUrl.hostname = windowHost;
+            return metaUrl.href.replace(/\/$/, '');
+          }
+          return metaUrl.href.replace(/\/$/, '');
+        } catch {
+          return metaContent;
+        }
+      }
+      return metaContent;
+    }
+
+    if (hasWindow) {
       const { protocol, hostname } = window.location;
-      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      if (isLocalHostname(hostname)) {
         return `${protocol}//${hostname}:8787`;
       }
       return window.location.origin;
-    } catch {
-      return 'http://localhost:8787';
     }
+
+    return 'http://localhost:8787';
   }
 
   async function loadPublicConfig() {
