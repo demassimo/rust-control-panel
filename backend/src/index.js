@@ -237,36 +237,36 @@ function extractInteger(value) {
 }
 
 function parseServerInfoMessage(message) {
-  const info = {
-    raw: message,
-    mapName: null,
-    size: null,
-    seed: null
-  };
-  if (!message) return info;
+  const result = { raw: message, mapName: null, size: null, seed: null };
+  if (!message) return { ...result };
+
+  const trimmed = typeof message === 'string' ? message.trim() : '';
+  const fields = {};
 
   const assign = (key, value) => {
-    const lower = String(key || '').trim().toLowerCase();
-    if (!lower) return;
+    const keyText = String(key ?? '').trim();
+    if (!keyText) return;
     const trimmedValue = typeof value === 'string' ? value.trim() : value;
+    fields[keyText] = trimmedValue;
+
+    const lower = keyText.toLowerCase();
     if (trimmedValue == null || trimmedValue === '') return;
 
     if (lower.includes('map') && !lower.includes('seed') && !lower.includes('size') && !lower.includes('url')) {
-      if (!info.mapName) info.mapName = String(trimmedValue);
+      if (!result.mapName) result.mapName = String(trimmedValue);
     }
 
     if (lower.includes('size')) {
       const size = extractInteger(trimmedValue);
-      if (size != null) info.size = size;
+      if (size != null) result.size = size;
     }
 
     if (lower.includes('seed')) {
       const seed = extractInteger(trimmedValue);
-      if (seed != null) info.seed = seed;
+      if (seed != null) result.seed = seed;
     }
   };
 
-  const trimmed = typeof message === 'string' ? message.trim() : '';
   let parsedJson = false;
   if (trimmed.startsWith('{')) {
     try {
@@ -291,12 +291,25 @@ function parseServerInfoMessage(message) {
     }
   }
 
-  if (info.mapName && info.size == null) {
-    const size = extractInteger(info.mapName);
-    if (size != null) info.size = size;
+  if (result.mapName == null) {
+    const directMap = fields.Map ?? fields.map ?? null;
+    if (typeof directMap === 'string' && directMap.trim()) result.mapName = directMap.trim();
   }
 
-  return info;
+  if (result.mapName && result.size == null) {
+    const size = extractInteger(result.mapName);
+    if (size != null) result.size = size;
+  }
+
+  const output = { ...fields, ...result };
+  if (!output.mapName && typeof output.Map === 'string' && output.Map.trim()) output.mapName = output.Map.trim();
+  if (!output.mapName && typeof output.map === 'string' && output.map.trim()) output.mapName = output.map.trim();
+  if (output.size == null) {
+    const mapSize = extractInteger(output.Map ?? output.map ?? null);
+    if (mapSize != null) output.size = mapSize;
+  }
+
+  return output;
 }
 
 function parsePlayerListMessage(message) {
