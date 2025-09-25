@@ -41,21 +41,6 @@
       list.className = 'live-players-list';
       ctx.body?.appendChild(list);
 
-      let clearBtn = null;
-      let clearHandler = null;
-
-      function bindClearButton() {
-        clearBtn = document.getElementById('show-all');
-        if (!clearBtn) return;
-        if (clearHandler) clearBtn.removeEventListener('click', clearHandler);
-        clearHandler = () => {
-          ctx.emit?.('live-players:focus', { steamId: null });
-        };
-        clearBtn.addEventListener('click', clearHandler);
-      }
-
-      bindClearButton();
-
       const state = {
         serverId: null,
         players: [],
@@ -106,6 +91,11 @@
           return;
         }
         clearMessage();
+        if (state.selected && !state.players.some((p) => (p.steamId || '') === state.selected)) {
+          state.selected = null;
+          ctx.emit?.('live-players:focus', { steamId: null });
+          window.dispatchEvent(new CustomEvent('team:clear'));
+        }
         for (const player of state.players) {
           const row = document.createElement('article');
           row.className = 'live-player-row';
@@ -222,10 +212,17 @@
           row.appendChild(details);
 
           row.addEventListener('click', () => {
-            state.selected = player.steamId || null;
+            const steamId = player.steamId || null;
+            const sameSelection = state.selected && steamId && state.selected === steamId;
+            state.selected = sameSelection ? null : steamId;
             highlightRows();
-            ctx.emit?.('live-players:focus', { steamId: player.steamId, player });
-            window.dispatchEvent(new CustomEvent('player:selected', { detail: { player } }));
+            if (state.selected) {
+              ctx.emit?.('live-players:focus', { steamId: player.steamId, player });
+              window.dispatchEvent(new CustomEvent('player:selected', { detail: { player } }));
+            } else {
+              ctx.emit?.('live-players:focus', { steamId: null });
+              window.dispatchEvent(new CustomEvent('team:clear'));
+            }
           });
 
           list.appendChild(row);
@@ -280,9 +277,6 @@
       ctx.onCleanup?.(() => offLogout?.());
       ctx.onCleanup?.(() => offData?.());
       ctx.onCleanup?.(() => offHighlight?.());
-      ctx.onCleanup?.(() => {
-        if (clearBtn && clearHandler) clearBtn.removeEventListener('click', clearHandler);
-      });
       ctx.onCleanup?.(() => window.removeEventListener('team:clear', onTeamClear));
 
       setMessage('Connect to a server to view connected players.');

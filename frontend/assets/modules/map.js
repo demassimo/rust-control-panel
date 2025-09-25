@@ -65,15 +65,6 @@
       summary.className = 'map-summary';
       sidebar.appendChild(summary);
 
-      const filterRow = document.createElement('div');
-      filterRow.className = 'row';
-      const clearBtn = document.createElement('button');
-      clearBtn.className = 'ghost small';
-      clearBtn.textContent = 'Show everyone';
-      clearBtn.disabled = true;
-      filterRow.appendChild(clearBtn);
-      sidebar.appendChild(filterRow);
-
       const listWrap = document.createElement('div');
       listWrap.className = 'map-player-list';
       sidebar.appendChild(listWrap);
@@ -123,9 +114,9 @@
         pollTimer: null
       };
 
-      function showUploadNotice(message, variant = 'error') {
+      function showUploadNotice(msg, variant = 'error') {
         if (!uploadStatus) return;
-        uploadStatus.textContent = message;
+        uploadStatus.textContent = msg;
         uploadStatus.className = 'notice ' + (variant === 'success' ? 'success' : 'error');
       }
 
@@ -299,7 +290,11 @@
         }
       }
 
-      function shouldDisplay(player) {
+      function selectionActive() {
+        return !!(state.selectedSolo || state.selectedTeam);
+      }
+
+      function isPlayerFocused(player) {
         if (state.selectedSolo) return player.steamId === state.selectedSolo;
         if (state.selectedTeam) return Number(player.teamId) === state.selectedTeam;
         return true;
@@ -317,9 +312,9 @@
           marker.style.left = position.left + '%';
           marker.style.top = position.top + '%';
           marker.title = player.displayName || player.persona || player.steamId;
-          if (!shouldDisplay(player)) marker.classList.add('dimmed');
-          if (state.selectedSolo && state.selectedSolo === player.steamId) marker.classList.add('active');
-          if (!state.selectedSolo && state.selectedTeam && Number(player.teamId) === state.selectedTeam) marker.classList.add('active');
+          const focused = isPlayerFocused(player);
+          if (selectionActive() && !focused) marker.classList.add('dimmed');
+          if (focused) marker.classList.add('active');
           marker.addEventListener('click', (e) => {
             e.stopPropagation();
             selectPlayer(player);
@@ -328,8 +323,10 @@
         }
       }
 
+      // ---- CONFLICT-FIXED: main version of renderPlayerList ----
       function renderPlayerList() {
         listWrap.innerHTML = '';
+
         const hasServer = !!state.serverId;
         if (!hasServer) {
           const empty = document.createElement('p');
@@ -347,8 +344,9 @@
           return;
         }
 
-        const hasSelection = !!(state.selectedSolo || state.selectedTeam);
-        const matches = state.players.filter((p) => shouldDisplay(p));
+        const hasSelection = selectionActive();
+        const matches = state.players.filter((p) => isPlayerFocused(p));
+
         const table = document.createElement('table');
         table.className = 'map-player-table';
 
@@ -360,8 +358,9 @@
         for (const player of state.players) {
           const row = document.createElement('tr');
           row.dataset.steamid = player.steamId || '';
-          const isMatch = shouldDisplay(player);
-          if (isMatch) row.classList.add('active');
+
+          const focused = isPlayerFocused(player);
+          if (focused) row.classList.add('active');
           else if (hasSelection) row.classList.add('dimmed');
 
           const nameCell = document.createElement('td');
@@ -423,6 +422,7 @@
           listWrap.appendChild(note);
         }
       }
+      // ---------------------------------------------------------
 
       function renderSummary() {
         summary.innerHTML = '';
@@ -519,7 +519,6 @@
         renderSummary();
         renderTeamInfo();
         updateUploadSection();
-        clearBtn.disabled = !state.selectedSolo && !state.selectedTeam;
       }
 
       function broadcastPlayers() {
@@ -573,7 +572,6 @@
         }
       }
 
-      clearBtn.addEventListener('click', () => clearSelection());
       mapView.addEventListener('click', () => clearSelection());
 
       async function refreshData(reason) {

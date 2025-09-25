@@ -56,12 +56,18 @@
   const workspaceStatus = $('#workspaceStatus');
   const workspacePlayers = $('#workspacePlayers');
   const workspaceQueue = $('#workspaceQueue');
-  const workspaceSleepers = $('#workspaceSleepers');
+  const workspaceJoining = $('#workspaceJoining');
   const workspaceMenu = $('#workspaceMenu');
-  const workspaceInfoHostname = $('#workspaceInfoHostname');
-  const workspaceInfoAddress = $('#workspaceInfoAddress');
-  const workspaceInfoLastCheck = $('#workspaceInfoLastCheck');
-  const workspaceInfoNotes = $('#workspaceInfoNotes');
+  const workspaceInfoPlayers = $('#workspaceInfoPlayers');
+  const workspaceInfoMaxPlayers = $('#workspaceInfoMaxPlayers');
+  const workspaceInfoQueue = $('#workspaceInfoQueue');
+  const workspaceInfoJoining = $('#workspaceInfoJoining');
+  const workspaceInfoGameTime = $('#workspaceInfoGameTime');
+  const workspaceInfoUptime = $('#workspaceInfoUptime');
+  const workspaceInfoFramerate = $('#workspaceInfoFramerate');
+  const workspaceInfoNetworkIn = $('#workspaceInfoNetworkIn');
+  const workspaceInfoNetworkOut = $('#workspaceInfoNetworkOut');
+  const workspaceInfoSaveCreatedTime = $('#workspaceInfoSaveCreatedTime');
   const btnBackToDashboard = $('#btnBackToDashboard');
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
@@ -493,6 +499,82 @@
     highlightSelectedServer();
   }
 
+  function coerceNumber(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function pickNumber(...values) {
+    for (const value of values) {
+      const num = coerceNumber(value);
+      if (num != null) return num;
+    }
+    return null;
+  }
+
+  function pickString(...values) {
+    for (const value of values) {
+      if (value == null) continue;
+      const str = String(value).trim();
+      if (str) return str;
+    }
+    return null;
+  }
+
+  function parseServerInfo(details) {
+    if (!details || typeof details !== 'object') return null;
+    const candidates = [
+      details.serverInfo,
+      details.serverinfo,
+      details.ServerInfo,
+      details.info,
+      details.serverInfoRaw,
+      details.rawInfo
+    ];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (typeof candidate === 'object') return candidate;
+      if (typeof candidate === 'string') {
+        try {
+          const parsed = JSON.parse(candidate);
+          if (parsed && typeof parsed === 'object') return parsed;
+        } catch { /* ignore */ }
+      }
+    }
+    if (typeof details.raw === 'string') {
+      try {
+        const parsed = JSON.parse(details.raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch { /* ignore */ }
+    }
+    return null;
+  }
+
+  function formatUptime(seconds) {
+    const value = coerceNumber(seconds);
+    if (value == null) return '—';
+    const total = Math.max(0, Math.floor(value));
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    return `${days}d ${hours}h ${minutes}m`;
+  }
+
+  function formatNumber(value, { fractionDigits } = {}) {
+    const num = coerceNumber(value);
+    if (num == null) return '—';
+    if (typeof fractionDigits === 'number') return num.toFixed(fractionDigits);
+    return num.toLocaleString();
+  }
+
+  function formatDateTime(value) {
+    const text = pickString(value);
+    if (!text) return '—';
+    const date = new Date(text);
+    if (!Number.isNaN(date.valueOf())) return date.toLocaleString();
+    return text;
+  }
+
   function updateWorkspaceDisplay(entry) {
     if (!entry || state.currentServerId == null) return;
     const numericId = Number(entry.data?.id ?? entry.data);
@@ -504,16 +586,24 @@
       workspaceMeta.textContent = server.host ? `${server.host}:${server.port}${tlsLabel}` : '';
     }
     const status = entry.status;
+    const serverInfo = status?.details ? parseServerInfo(status.details) : null;
     const pill = workspaceStatus;
-    const players = status?.details?.players?.online ?? null;
-    const maxPlayers = status?.details?.players?.max ?? null;
-    const queued = status?.details?.queued ?? null;
-    const sleepers = status?.details?.sleepers ?? null;
+    const playersOnline = pickNumber(status?.details?.players?.online, serverInfo?.Players, serverInfo?.players);
+    const maxPlayers = pickNumber(status?.details?.players?.max, serverInfo?.MaxPlayers, serverInfo?.maxPlayers);
+    const queueCount = pickNumber(status?.details?.queued, serverInfo?.Queued, serverInfo?.queue);
+    const joiningCount = pickNumber(status?.details?.joining, status?.details?.sleepers, serverInfo?.Joining, serverInfo?.joining);
+    const framerate = pickNumber(serverInfo?.Framerate, serverInfo?.framerate, serverInfo?.fps);
+    const networkIn = pickNumber(serverInfo?.NetworkIn, serverInfo?.networkIn, serverInfo?.network_in);
+    const networkOut = pickNumber(serverInfo?.NetworkOut, serverInfo?.networkOut, serverInfo?.network_out);
+    const uptimeSeconds = pickNumber(serverInfo?.Uptime, serverInfo?.uptime, serverInfo?.uptimeSeconds, serverInfo?.UptimeSeconds);
+    const gameTime = pickString(serverInfo?.GameTime, serverInfo?.gameTime, serverInfo?.game_time);
+    const lastSave = pickString(serverInfo?.SaveCreatedTime, serverInfo?.saveCreatedTime, serverInfo?.save_created_time);
+    const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const online = !!status?.ok;
     if (pill) {
       let cls = 'status-pill';
       if (online) {
-        if (queued && queued > 0) {
+        if (queueCount && queueCount > 0) {
           cls += ' degraded';
           pill.textContent = 'Busy';
         } else {
@@ -525,45 +615,56 @@
         pill.textContent = 'Offline';
       }
       pill.className = cls;
-      pill.title = status?.details?.hostname || status?.error || '';
+      pill.title = hostname || status?.error || '';
     }
     if (workspacePlayers) {
-      if (online && players != null) {
+      if (online && playersOnline != null) {
         const maxInfo = maxPlayers != null ? `/${maxPlayers}` : '';
-        workspacePlayers.textContent = `${players}${maxInfo}`;
+        workspacePlayers.textContent = `${playersOnline}${maxInfo}`;
       } else {
         workspacePlayers.textContent = '--';
       }
     }
     if (workspaceQueue) {
-      workspaceQueue.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
+      workspaceQueue.textContent = queueCount != null && queueCount > 0 ? String(queueCount) : (online ? '0' : '--');
     }
-    if (workspaceSleepers) {
-      workspaceSleepers.textContent = online && sleepers != null ? String(sleepers) : '--';
+    if (workspaceJoining) {
+      workspaceJoining.textContent = joiningCount != null ? String(joiningCount) : (online ? '0' : '--');
     }
-    const lastCheck = status?.lastCheck ? new Date(status.lastCheck) : null;
-    if (workspaceInfoHostname) {
-      workspaceInfoHostname.textContent = status?.details?.hostname || '—';
+    if (workspaceInfoPlayers) {
+      workspaceInfoPlayers.textContent = playersOnline != null ? playersOnline.toLocaleString() : (online ? '0' : '—');
     }
-    if (workspaceInfoAddress) {
-      const tlsLabel = server.tls ? ' · TLS' : '';
-      workspaceInfoAddress.textContent = server.host ? `${server.host}:${server.port}${tlsLabel}` : '—';
+    if (workspaceInfoMaxPlayers) {
+      workspaceInfoMaxPlayers.textContent = maxPlayers != null ? maxPlayers.toLocaleString() : '—';
     }
-    if (workspaceInfoLastCheck) {
-      workspaceInfoLastCheck.textContent = lastCheck && !Number.isNaN(lastCheck.valueOf())
-        ? lastCheck.toLocaleString()
-        : '—';
+    if (workspaceInfoQueue) {
+      workspaceInfoQueue.textContent = queueCount != null ? queueCount.toLocaleString() : (online ? '0' : '—');
     }
-    if (workspaceInfoNotes) {
-      const base = status?.error || status?.details?.raw || '';
-      if (base) {
-        const compact = base.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(' · ');
-        workspaceInfoNotes.textContent = compact || base;
-        workspaceInfoNotes.title = base;
+    if (workspaceInfoJoining) {
+      workspaceInfoJoining.textContent = joiningCount != null ? joiningCount.toLocaleString() : (online ? '0' : '—');
+    }
+    if (workspaceInfoGameTime) {
+      workspaceInfoGameTime.textContent = formatDateTime(gameTime);
+    }
+    if (workspaceInfoUptime) {
+      workspaceInfoUptime.textContent = formatUptime(uptimeSeconds);
+    }
+    if (workspaceInfoFramerate) {
+      if (framerate != null) {
+        const digits = Number.isInteger(framerate) ? 0 : 1;
+        workspaceInfoFramerate.textContent = `${formatNumber(framerate, { fractionDigits: digits })} fps`;
       } else {
-        workspaceInfoNotes.textContent = '—';
-        workspaceInfoNotes.title = '';
+        workspaceInfoFramerate.textContent = '—';
       }
+    }
+    if (workspaceInfoNetworkIn) {
+      workspaceInfoNetworkIn.textContent = networkIn != null ? networkIn.toLocaleString() : '—';
+    }
+    if (workspaceInfoNetworkOut) {
+      workspaceInfoNetworkOut.textContent = networkOut != null ? networkOut.toLocaleString() : '—';
+    }
+    if (workspaceInfoSaveCreatedTime) {
+      workspaceInfoSaveCreatedTime.textContent = formatDateTime(lastSave);
     }
   }
 
@@ -587,19 +688,22 @@
     if (workspaceMeta) workspaceMeta.textContent = 'Pick a server card to inspect live data.';
     if (workspacePlayers) workspacePlayers.textContent = '--';
     if (workspaceQueue) workspaceQueue.textContent = '--';
-    if (workspaceSleepers) workspaceSleepers.textContent = '--';
+    if (workspaceJoining) workspaceJoining.textContent = '--';
     if (workspaceStatus) {
       workspaceStatus.className = 'status-pill';
       workspaceStatus.textContent = 'offline';
       workspaceStatus.title = '';
     }
-    if (workspaceInfoHostname) workspaceInfoHostname.textContent = '—';
-    if (workspaceInfoAddress) workspaceInfoAddress.textContent = '—';
-    if (workspaceInfoLastCheck) workspaceInfoLastCheck.textContent = '—';
-    if (workspaceInfoNotes) {
-      workspaceInfoNotes.textContent = '—';
-      workspaceInfoNotes.title = '';
-    }
+    if (workspaceInfoPlayers) workspaceInfoPlayers.textContent = '—';
+    if (workspaceInfoMaxPlayers) workspaceInfoMaxPlayers.textContent = '—';
+    if (workspaceInfoQueue) workspaceInfoQueue.textContent = '—';
+    if (workspaceInfoJoining) workspaceInfoJoining.textContent = '—';
+    if (workspaceInfoGameTime) workspaceInfoGameTime.textContent = '—';
+    if (workspaceInfoUptime) workspaceInfoUptime.textContent = '—';
+    if (workspaceInfoFramerate) workspaceInfoFramerate.textContent = '—';
+    if (workspaceInfoNetworkIn) workspaceInfoNetworkIn.textContent = '—';
+    if (workspaceInfoNetworkOut) workspaceInfoNetworkOut.textContent = '—';
+    if (workspaceInfoSaveCreatedTime) workspaceInfoSaveCreatedTime.textContent = '—';
     setWorkspaceView(workspaceViewDefault);
   }
 
@@ -680,9 +784,11 @@
       return;
     }
     const online = !!status.ok;
-    const queued = status?.details?.queued ?? null;
-    const players = status?.details?.players?.online ?? null;
-    const maxPlayers = status?.details?.players?.max ?? null;
+    const serverInfo = status?.details ? parseServerInfo(status.details) : null;
+    const queued = pickNumber(status?.details?.queued, serverInfo?.Queued, serverInfo?.queue);
+    const players = pickNumber(status?.details?.players?.online, serverInfo?.Players, serverInfo?.players);
+    const maxPlayers = pickNumber(status?.details?.players?.max, serverInfo?.MaxPlayers, serverInfo?.maxPlayers);
+    const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const lastCheck = status.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : null;
 
     if (pill) {
@@ -700,7 +806,7 @@
         pill.textContent = 'Offline';
       }
       pill.className = pillClass;
-      pill.title = status?.details?.hostname || status?.error || '';
+      pill.title = hostname || status?.error || '';
     }
 
     if (playersEl) {
