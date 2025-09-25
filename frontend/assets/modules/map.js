@@ -790,16 +790,21 @@
           broadcastPlayers();
           const hasImage = hasMapImage(state.mapMeta);
           const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
+
           if (state.status === 'awaiting_world_details') {
+            // Need size/seed from user; don't poll for imagery yet
             state.pendingGeneration = false;
             clearPendingRefresh();
-          } else if (awaitingImagery) {
+          } else if (state.status === 'pending' || awaitingImagery) {
+            // RustMaps is generating or we're waiting for imagery
             if (!state.pendingGeneration) schedulePendingRefresh();
             state.pendingGeneration = true;
           } else {
+            // Have imagery or no generation required
             if (state.pendingGeneration) clearPendingRefresh();
             state.pendingGeneration = false;
           }
+
           updateConfigPanel();
           updateUploadSection();
           updateStatusMessage(hasImage);

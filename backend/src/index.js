@@ -1767,9 +1767,14 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
+    // keep cached flag consistent
     if (map && typeof map.cached === 'undefined') map.cached = !!(mapRecord?.image_path);
 
+
+    // unified response (keeps main's shape, adds richer status from codex)
     const mapPayload = map || null;
+
+    // derive a status + requirements summary for the frontend
     let status = 'ready';
     const requirements = {};
     if (!mapPayload) {
@@ -1790,6 +1795,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       status = 'awaiting_imagery';
     }
 
+    // structured log so you can see why the map didn't render
     logger.info('Live map payload ready', {
       players: players.length,
       mapKey: mapPayload?.mapKey || null,
@@ -1798,16 +1804,18 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       status
     });
 
+    // backward-compatible shape + richer fields
     const responsePayload = {
       players,
       map: mapPayload,
       info,
-      status,
+      status,                    // <-- new
       fetchedAt: new Date().toISOString()
     };
     if (Object.keys(requirements).length > 0) {
-      responsePayload.requirements = requirements;
+      responsePayload.requirements = requirements;   // <-- new
     }
+
     res.json(responsePayload);
   } catch (err) {
     logger.error('live-map route error', err);

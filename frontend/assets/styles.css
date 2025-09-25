@@ -125,6 +125,21 @@ button.ghost.danger:hover {
 
 button.small { padding: 7px 14px; font-size: 0.9rem; border-radius: 999px; }
 
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.profile-actions button {
+  flex: 1 1 160px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
 button.icon {
   width: 40px;
   height: 40px;
