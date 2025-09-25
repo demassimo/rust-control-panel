@@ -26,6 +26,9 @@ body.app{
   color:var(--text); font-family:var(--font);
 }
 
+.hidden{display:none!important}
+body.modal-open{overflow:hidden}
+
 .topbar{
   display:flex; align-items:center; justify-content:space-between;
   padding:14px 22px; border-bottom:1px solid var(--border);
@@ -113,8 +116,11 @@ main.grid{
   display:flex; justify-content:space-between; gap:18px; align-items:flex-start;
   padding:16px 18px; border-bottom:1px solid var(--border);
   background:rgba(12,15,23,.6);
+  cursor:pointer; transition:background .15s ease, border-color .15s ease;
 }
 .player-directory li:nth-child(even){background:rgba(255,255,255,.02)}
+.player-directory li:hover{background:rgba(225,29,72,.12); border-color:rgba(225,29,72,.35)}
+.player-directory li:focus-visible{outline:2px solid rgba(225,29,72,.6); outline-offset:2px}
 .player-directory strong{font-weight:600}
 .player-directory .muted{color:var(--muted)}
 .player-directory .small{font-size:12px}
@@ -271,6 +277,63 @@ main.grid{
 .dot{width:8px; height:8px; border-radius:50%}
 .health{padding:3px 8px; border-radius:8px; background:#0f172a; color:#a3ffbf; border:1px solid rgba(34,197,94,.25)}
 .ping{padding:3px 8px; border-radius:8px; background:#13151f; color:#93c5fd; border:1px solid rgba(59,130,246,.25)}
+
+.player-modal-backdrop{
+  position:fixed; inset:0; z-index:90;
+  background:rgba(6,9,15,.72);
+  backdrop-filter:blur(12px);
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:60px 16px 30px; overflow:auto;
+}
+.player-modal-backdrop.hidden{display:none}
+.player-modal{
+  width:min(560px, 100%);
+  background:linear-gradient(180deg, #121722 0%, #0b0f19 100%);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  box-shadow:0 20px 48px rgba(0,0,0,.55);
+  display:flex; flex-direction:column; overflow:hidden;
+  animation:playerModalIn .18s ease;
+}
+.player-modal-header{
+  padding:20px 22px; display:flex; align-items:center; justify-content:space-between;
+  gap:16px; border-bottom:1px solid var(--border);
+}
+.player-modal-title{display:flex; align-items:center; gap:16px}
+.player-modal-avatar{
+  width:64px; height:64px; border-radius:18px; overflow:hidden;
+  background:var(--surface-2); display:grid; place-items:center;
+  font-weight:700; color:var(--muted); text-transform:uppercase;
+}
+.player-modal-avatar img{width:100%; height:100%; object-fit:cover}
+.player-modal-heading{display:flex; flex-direction:column; gap:6px}
+.player-modal-name{font-weight:700; font-size:1.1rem}
+.player-modal-persona{font-size:.85rem}
+.player-modal-meta{font-size:.8rem; color:var(--muted)}
+.player-modal-badges{display:flex; gap:8px; flex-wrap:wrap; margin-top:4px}
+.player-modal-body{padding:22px 22px 24px; display:flex; flex-direction:column; gap:20px}
+.player-modal-loading{padding:10px 12px; border-radius:10px; background:rgba(148,163,184,.08); color:var(--muted);}
+.player-modal-details{display:grid; grid-template-columns: 160px 1fr; gap:10px 18px; margin:0}
+.player-modal-details dt{font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.player-modal-details dd{margin:0; font-weight:600; color:var(--text)}
+.player-modal-events h4{margin:0 0 10px; font-size:.95rem; font-weight:600}
+.player-event-list{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px}
+.player-event-row{background:rgba(15,19,30,.7); border:1px solid rgba(148,163,184,.18); border-radius:12px; padding:10px 12px; display:flex; flex-direction:column; gap:4px}
+.player-event-empty{background:rgba(15,19,30,.5); border:1px dashed rgba(148,163,184,.18); border-radius:12px; padding:12px}
+.player-event-row strong{font-weight:600}
+.event-meta{font-size:.75rem; color:var(--muted)}
+.player-modal-footer{padding:18px 22px; border-top:1px solid var(--border); display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between}
+.player-modal-status{font-size:.8rem; color:var(--muted)}
+.player-modal-status.hidden{display:none!important}
+.player-modal-status[data-variant="success"]{color:#bbf7d0}
+.player-modal-status[data-variant="error"]{color:#fecaca}
+.player-modal-status[data-variant="warn"]{color:#fde68a}
+.player-modal-actions{display:flex; gap:10px; flex-wrap:wrap}
+
+@keyframes playerModalIn{
+  from{transform:translateY(18px); opacity:0}
+  to{transform:translateY(0); opacity:1}
+}
 
 .right .kv{display:grid; grid-template-columns: 100px 1fr; gap:8px; margin:10px 0}
 .right .kv .k{color:var(--muted)}
