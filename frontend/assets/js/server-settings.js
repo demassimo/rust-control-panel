@@ -39,8 +39,25 @@
     pollTimer: null,
     serverId: null,
     apiBase: detectInitialApiBase(),
-    refreshToken: 0
+    refreshToken: 0,
+    dirty: {
+      token: false,
+      guild: false,
+      channel: false
+    }
   };
+
+  function setDirty(field, value = true) {
+    if (!state.dirty || !(field in state.dirty)) return;
+    state.dirty[field] = !!value;
+  }
+
+  function resetDirty() {
+    if (!state.dirty) return;
+    for (const key of Object.keys(state.dirty)) {
+      state.dirty[key] = false;
+    }
+  }
 
   function buildError(message, code) {
     const err = new Error(message || code || 'api_error');
@@ -107,17 +124,28 @@
     }
   }
 
-  function applyIntegration(integration) {
+  function applyIntegration(integration, options = {}) {
+    const { force = false } = options;
     state.integration = integration;
-    if (guildInput) guildInput.value = integration?.guildId || '';
-    if (channelInput) channelInput.value = integration?.channelId || '';
+    if (guildInput && (force || !state.dirty.guild)) {
+      guildInput.value = integration?.guildId || '';
+      setDirty('guild', false);
+    }
+    if (channelInput && (force || !state.dirty.channel)) {
+      channelInput.value = integration?.channelId || '';
+      setDirty('channel', false);
+    }
     if (tokenInput) {
-      tokenInput.value = '';
+      if (force || !state.dirty.token) {
+        tokenInput.value = '';
+        setDirty('token', false);
+      }
       tokenInput.placeholder = integration?.hasToken
         ? 'Token stored — enter to replace'
         : 'Paste bot token';
     }
     if (removeBtn) removeBtn.disabled = !state.serverId || !integration;
+    if (force) resetDirty();
   }
 
   function describeError(code) {
@@ -232,19 +260,22 @@
     const activeServer = state.serverId;
     const token = ++state.refreshToken;
 
+    const hasUnsavedChanges = Object.values(state.dirty || {}).some(Boolean);
+    const shouldDisableForm = !silent || !hasUnsavedChanges;
+
     if (!silent) setNotice('Loading Discord integration…');
-    disableForm(true);
+    if (shouldDisableForm) disableForm(true);
 
     try {
       const data = await apiRequest('GET');
       if (state.serverId !== activeServer || state.refreshToken !== token) return;
       applyIntegration(data.integration || null);
       updateStatusView(data.status || {});
-      disableForm(false);
+      if (shouldDisableForm) disableForm(false);
       clearNotice();
     } catch (err) {
       if (state.serverId !== activeServer || state.refreshToken !== token) return;
-      disableForm(false);
+      if (shouldDisableForm) disableForm(false);
       handleError(err, { silent });
     }
   }
@@ -268,7 +299,7 @@
 
     try {
       const data = await apiRequest('POST', payload);
-      applyIntegration(data.integration || null);
+      applyIntegration(data.integration || null, { force: true });
       updateStatusView(data.status || {});
       if (tokenInput) tokenInput.value = '';
       disableForm(false);
@@ -294,7 +325,7 @@
 
     try {
       const data = await apiRequest('DELETE');
-      applyIntegration(null);
+      applyIntegration(null, { force: true });
       updateStatusView(data.status || {});
       disableForm(false);
       setNotice('Discord integration removed.', 'success');
@@ -305,7 +336,7 @@
   }
 
   function resetView() {
-    applyIntegration(null);
+    applyIntegration(null, { force: true });
     updateStatusView({ presence: 'dnd', presenceLabel: 'Do Not Disturb' });
   }
 
@@ -336,6 +367,10 @@
 
   if (form) form.addEventListener('submit', saveIntegration);
   if (removeBtn) removeBtn.addEventListener('click', removeIntegration);
+
+  tokenInput?.addEventListener('input', () => setDirty('token', true));
+  guildInput?.addEventListener('input', () => setDirty('guild', true));
+  channelInput?.addEventListener('input', () => setDirty('channel', true));
 
   window.addEventListener('beforeunload', () => {
     stopPolling();
