@@ -3,7 +3,6 @@
 
   const serversEl = $('#servers');
   const consoleEl = $('#console');
-  const moduleColumn = $('#moduleColumn');
   const loginPanel = $('#loginPanel');
   const appPanel = $('#appPanel');
   const userBox = $('#userBox');
@@ -57,9 +56,57 @@
   const workspaceStatus = $('#workspaceStatus');
   const workspacePlayers = $('#workspacePlayers');
   const workspaceQueue = $('#workspaceQueue');
+  const workspaceSleepers = $('#workspaceSleepers');
+  const workspaceMenu = $('#workspaceMenu');
+  const workspaceInfoHostname = $('#workspaceInfoHostname');
+  const workspaceInfoAddress = $('#workspaceInfoAddress');
+  const workspaceInfoLastCheck = $('#workspaceInfoLastCheck');
+  const workspaceInfoNotes = $('#workspaceInfoNotes');
   const btnBackToDashboard = $('#btnBackToDashboard');
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
+  const moduleFallback = $('#moduleFallback');
+
+  const workspaceViewSections = Array.from(document.querySelectorAll('.workspace-view'));
+  const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
+  const workspaceViewDefault = 'players';
+  let activeWorkspaceView = workspaceViewDefault;
+
+  const moduleSlots = new Map();
+  document.querySelectorAll('[data-module-card]').forEach((card) => {
+    const id = card?.dataset?.moduleCard;
+    if (!id) return;
+    const body = card.querySelector('[data-module-slot]');
+    if (!body) return;
+    const header = card.querySelector('.card-header') || null;
+    const actions = card.querySelector('[data-module-actions]') || null;
+    const titleEl = header?.querySelector('[data-module-title]') || header?.querySelector('h3') || null;
+    moduleSlots.set(id, { card, body, header, actions, titleEl });
+  });
+
+  function setWorkspaceView(nextView = workspaceViewDefault) {
+    const available = new Set(workspaceViewButtons.map((btn) => btn.dataset.view));
+    const target = available.has(nextView) ? nextView : workspaceViewDefault;
+    activeWorkspaceView = target;
+    workspaceViewButtons.forEach((btn) => {
+      const match = btn.dataset.view === target;
+      btn.classList.toggle('active', match);
+      btn.setAttribute('aria-pressed', match ? 'true' : 'false');
+    });
+    workspaceViewSections.forEach((section) => {
+      const match = section.dataset.view === target;
+      section.classList.toggle('active', match);
+      section.setAttribute('aria-hidden', match ? 'false' : 'true');
+    });
+  }
+
+  workspaceViewButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setWorkspaceView(btn.dataset.view));
+  });
+
+  if (workspaceViewSections.length) {
+    setWorkspaceView(workspaceViewDefault);
+  }
 
   const state = {
     API: '',
@@ -211,7 +258,35 @@
   }
 
   function createModuleCard({ id, title, icon } = {}) {
-    if (!moduleColumn) throw new Error('Module mount element missing');
+    if (!id) throw new Error('Module id is required');
+    const slot = moduleSlots.get(id);
+    if (slot && slot.body) {
+      const headingEl = slot.titleEl || null;
+      if (headingEl) {
+        const baseText = typeof title === 'string' && title.length
+          ? title
+          : (headingEl.textContent || id || 'Module');
+        headingEl.textContent = icon ? `${icon} ${baseText}`.trim() : baseText;
+      }
+      slot.card?.classList.remove('module-hidden');
+      return {
+        card: slot.card,
+        header: slot.header,
+        body: slot.body,
+        actions: slot.actions || null,
+        setTitle(value) {
+          if (!headingEl) return;
+          headingEl.textContent = value || '';
+        },
+        remove() {
+          if (slot.body) slot.body.innerHTML = '';
+          slot.card?.classList.add('module-hidden');
+        }
+      };
+    }
+
+    const host = moduleFallback || workspacePanel;
+    if (!host) throw new Error('Module mount element missing');
     const card = document.createElement('div');
     card.className = 'card module-card';
     if (id) card.dataset.moduleId = id;
@@ -228,7 +303,8 @@
     body.className = 'module-body';
     card.appendChild(header);
     card.appendChild(body);
-    moduleColumn.appendChild(card);
+    host.appendChild(card);
+    host.classList.remove('hidden');
     return {
       card,
       header,
@@ -432,6 +508,7 @@
     const players = status?.details?.players?.online ?? null;
     const maxPlayers = status?.details?.players?.max ?? null;
     const queued = status?.details?.queued ?? null;
+    const sleepers = status?.details?.sleepers ?? null;
     const online = !!status?.ok;
     if (pill) {
       let cls = 'status-pill';
@@ -461,6 +538,33 @@
     if (workspaceQueue) {
       workspaceQueue.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
     }
+    if (workspaceSleepers) {
+      workspaceSleepers.textContent = online && sleepers != null ? String(sleepers) : '--';
+    }
+    const lastCheck = status?.lastCheck ? new Date(status.lastCheck) : null;
+    if (workspaceInfoHostname) {
+      workspaceInfoHostname.textContent = status?.details?.hostname || '—';
+    }
+    if (workspaceInfoAddress) {
+      const tlsLabel = server.tls ? ' · TLS' : '';
+      workspaceInfoAddress.textContent = server.host ? `${server.host}:${server.port}${tlsLabel}` : '—';
+    }
+    if (workspaceInfoLastCheck) {
+      workspaceInfoLastCheck.textContent = lastCheck && !Number.isNaN(lastCheck.valueOf())
+        ? lastCheck.toLocaleString()
+        : '—';
+    }
+    if (workspaceInfoNotes) {
+      const base = status?.error || status?.details?.raw || '';
+      if (base) {
+        const compact = base.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(' · ');
+        workspaceInfoNotes.textContent = compact || base;
+        workspaceInfoNotes.title = base;
+      } else {
+        workspaceInfoNotes.textContent = '—';
+        workspaceInfoNotes.title = '';
+      }
+    }
   }
 
   function showWorkspaceForServer(id) {
@@ -469,6 +573,7 @@
     dashboardPanel?.classList.add('hidden');
     settingsPanel?.classList.add('hidden');
     workspacePanel?.classList.remove('hidden');
+    setWorkspaceView(workspaceViewDefault);
     updateWorkspaceDisplay(entry);
   }
 
@@ -482,11 +587,20 @@
     if (workspaceMeta) workspaceMeta.textContent = 'Pick a server card to inspect live data.';
     if (workspacePlayers) workspacePlayers.textContent = '--';
     if (workspaceQueue) workspaceQueue.textContent = '--';
+    if (workspaceSleepers) workspaceSleepers.textContent = '--';
     if (workspaceStatus) {
       workspaceStatus.className = 'status-pill';
       workspaceStatus.textContent = 'offline';
       workspaceStatus.title = '';
     }
+    if (workspaceInfoHostname) workspaceInfoHostname.textContent = '—';
+    if (workspaceInfoAddress) workspaceInfoAddress.textContent = '—';
+    if (workspaceInfoLastCheck) workspaceInfoLastCheck.textContent = '—';
+    if (workspaceInfoNotes) {
+      workspaceInfoNotes.textContent = '—';
+      workspaceInfoNotes.title = '';
+    }
+    setWorkspaceView(workspaceViewDefault);
   }
 
   function ensureSocket() {
