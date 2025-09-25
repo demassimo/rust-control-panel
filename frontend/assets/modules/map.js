@@ -155,6 +155,10 @@
         pendingRefresh: null
       };
 
+      let mapImageSource = null;
+      let mapImageObjectUrl = null;
+      let mapImageAbort = null;
+
       function showUploadNotice(msg, variant = 'error') {
         if (!uploadStatus) return;
         uploadStatus.textContent = msg;
@@ -479,14 +483,99 @@
         return { left: px, top: 100 - pz };
       }
 
-      function updateMapImage(meta) {
+      function clearMapImage() {
+        if (mapImageObjectUrl) {
+          try { URL.revokeObjectURL(mapImageObjectUrl); }
+          catch { /* ignore */ }
+        }
+        mapImageObjectUrl = null;
+        mapImageSource = null;
+        mapImage.removeAttribute('src');
+      }
+
+      function cancelMapImageRequest() {
+        if (mapImageAbort) {
+          try { mapImageAbort.abort(); }
+          catch { /* ignore */ }
+        }
+        mapImageAbort = null;
+      }
+
+      function resolveImageUrl(value) {
+        if (!value) return '';
+        if (/^https?:\/\//i.test(value)) return value;
+        const apiState = typeof ctx.getState === 'function' ? ctx.getState() : null;
+        if (apiState?.API) return apiState.API + value;
+        return value;
+      }
+
+      async function fetchAuthorizedImage(path, controller) {
+        if (typeof ctx.authorizedFetch !== 'function') {
+          return { url: resolveImageUrl(path) };
+        }
+        const res = await ctx.authorizedFetch(path, { signal: controller.signal, cache: 'no-store' });
+        if (!res.ok) {
+          const error = new Error('map_image_unavailable');
+          error.status = res.status;
+          throw error;
+        }
+        const blob = await res.blob();
+        return { blob };
+      }
+
+      function applyBlobToImage(blob) {
+        if (!blob) return;
+        const objectUrl = URL.createObjectURL(blob);
+        if (mapImageObjectUrl) {
+          try { URL.revokeObjectURL(mapImageObjectUrl); }
+          catch { /* ignore */ }
+        }
+        mapImageObjectUrl = objectUrl;
+        mapImage.src = objectUrl;
+      }
+
+      async function updateMapImage(meta) {
         if (!hasMapImage(meta)) {
-          mapImage.removeAttribute('src');
+          cancelMapImageRequest();
+          clearMapImage();
           return;
         }
         const next = meta.imageUrl;
-        if (mapImage.getAttribute('src') !== next) {
-          mapImage.src = next;
+        if (!next) {
+          cancelMapImageRequest();
+          clearMapImage();
+          return;
+        }
+        if (mapImageSource === next) return;
+        mapImageSource = next;
+        cancelMapImageRequest();
+
+        const controller = new AbortController();
+        mapImageAbort = controller;
+
+        try {
+          const result = await fetchAuthorizedImage(next, controller);
+          if (mapImageAbort !== controller) return;
+          if (result.blob) {
+            applyBlobToImage(result.blob);
+          } else if (result.url) {
+            clearMapImage();
+            mapImage.src = result.url;
+            mapImageSource = next;
+          }
+        } catch (err) {
+          if (mapImageAbort !== controller) return;
+          if (err?.name === 'AbortError') return;
+          if (ctx.errorCode?.(err) === 'unauthorized') {
+            ctx.handleUnauthorized?.();
+            return;
+          }
+          ctx.log?.('Failed to load map image: ' + (err?.message || err));
+          clearMapImage();
+          mapImage.src = resolveImageUrl(next);
+          mapImageSource = next;
+        } finally {
+          if (mapImageAbort === controller) mapImageAbort = null;
         }
       }
 
@@ -876,7 +965,7 @@
           state.status = null;
           clearSelection();
           overlay.innerHTML = '';
-          mapImage.removeAttribute('src');
+          clearMapImage();
           renderPlayerList();
           renderSummary();
           renderTeamInfo();
@@ -903,7 +992,7 @@
         state.status = null;
         clearSelection();
         overlay.innerHTML = '';
-        mapImage.removeAttribute('src');
+        clearMapImage();
         renderPlayerList();
         renderSummary();
         renderTeamInfo();
@@ -942,6 +1031,14 @@
       ctx.onCleanup?.(() => offFocus?.());
       ctx.onCleanup?.(() => stopPolling());
       ctx.onCleanup?.(() => clearPendingRefresh());
+      ctx.onCleanup?.(() => {
+        cancelMapImageRequest();
+        if (mapImageObjectUrl) {
+          try { URL.revokeObjectURL(mapImageObjectUrl); }
+          catch { /* ignore */ }
+          mapImageObjectUrl = null;
+        }
+      });
 
       setMessage('Connect to a server to load the live map.');
     }

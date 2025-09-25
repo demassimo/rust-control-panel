@@ -1562,12 +1562,35 @@
     return state.serverItems.get(String(id))?.data || null;
   }
 
+  function isAbsoluteUrl(value) {
+    return /^https?:\/\//i.test(String(value || ''));
+  }
+
+  async function authorizedFetch(path, options = {}) {
+    if (!state.TOKEN) throw new Error('unauthorized');
+    const { absolute = false, headers: inputHeaders, ...rest } = options || {};
+    const headers = new Headers(inputHeaders || {});
+    headers.set('Authorization', 'Bearer ' + state.TOKEN);
+    const fetchOptions = { ...rest, headers };
+    const target = absolute || isAbsoluteUrl(path) ? String(path || '') : state.API + String(path || '');
+    let res;
+    try {
+      res = await fetch(target, fetchOptions);
+    } catch (err) {
+      if (err instanceof TypeError) throw new Error('network_error');
+      throw err;
+    }
+    if (res.status === 401) throw new Error('unauthorized');
+    return res;
+  }
+
   const moduleHostContext = {
     createCard: createModuleCard,
     on: moduleBus.on,
     emit: moduleBus.emit,
     api,
     publicJson,
+    authorizedFetch,
     log: (line) => ui.log(line),
     describeError,
     errorCode,
