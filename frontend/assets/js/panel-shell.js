@@ -14,16 +14,31 @@
     if (!player) return;
     const profile = player.steamProfile || {};
     const displayName = profile.persona || player.displayName || player.DisplayName || player.steamId || player.SteamID || 'Player';
+    const steamIdValue = player.steamId || player.SteamID || '';
+    const steamProfileUrl = profile.profileUrl || (steamIdValue ? `https://steamcommunity.com/profiles/${encodeURIComponent(steamIdValue)}` : '');
+    const serverArmourUrl = steamIdValue ? `https://serverarmour.com/profile/${encodeURIComponent(steamIdValue)}` : '';
     const playtimeText = formatPlaytime(profile.rustPlaytimeMinutes, profile.visibility);
     const vacText = profile.vacBanned ? 'Yes' : 'No';
     const gameBanCount = Number(profile.gameBans) > 0 ? Number(profile.gameBans) : 0;
-    const lastBan = Number.isFinite(Number(profile.daysSinceLastBan)) ? `${profile.daysSinceLastBan} day${profile.daysSinceLastBan === 1 ? '' : 's'} ago` : '—';
+    const rawDaysSinceBan = Number(profile.daysSinceLastBan);
+    const hasBanAge = Number.isFinite(rawDaysSinceBan) && rawDaysSinceBan >= 0;
+    const lastBan = hasBanAge
+      ? rawDaysSinceBan === 0
+        ? 'Today'
+        : `${rawDaysSinceBan} day${rawDaysSinceBan === 1 ? '' : 's'} ago`
+      : '—';
     const ipText = player.ip ? `${player.ip}${player.port ? ':' + player.port : ''}` : 'Hidden';
     const position = player.position || player.Position || {};
     const positionText = `${Math.round(position.x ?? 0)}, ${Math.round(position.z ?? 0)}`;
-    const nameValue = profile.profileUrl
-      ? `<a href="${escapeAttr(profile.profileUrl)}" target="_blank" rel="noreferrer">${escapeHtml(displayName)}</a>`
-      : escapeHtml(displayName);
+    const nameValue = escapeHtml(displayName);
+    const actions = [];
+    if (steamProfileUrl) {
+      actions.push('<button type="button" class="ghost small" data-action="steam-profile">Steam profile</button>');
+    }
+    if (serverArmourUrl) {
+      actions.push('<button type="button" class="ghost small" data-action="server-armour">Server Armour</button>');
+    }
+    const actionsBlock = actions.length ? `<div class="profile-actions">${actions.join('')}</div>` : '';
     infoTitle.textContent = 'Player Info';
     infoContent.innerHTML = `
       <div class="kv"><div class="k">Name:</div><div>${nameValue}</div></div>
@@ -37,7 +52,20 @@
       <div class="kv"><div class="k">Country:</div><div>${escapeHtml(profile.country || '—')}</div></div>
       <div class="kv"><div class="k">Address:</div><div>${escapeHtml(ipText)}</div></div>
       <div class="kv"><div class="k">Position:</div><div>(${positionText})</div></div>
+      ${actionsBlock}
     `;
+    const steamBtn = infoContent.querySelector('[data-action="steam-profile"]');
+    if (steamBtn && steamProfileUrl) {
+      steamBtn.addEventListener('click', () => {
+        window.open(steamProfileUrl, '_blank', 'noopener,noreferrer');
+      });
+    }
+    const armourBtn = infoContent.querySelector('[data-action="server-armour"]');
+    if (armourBtn && serverArmourUrl) {
+      armourBtn.addEventListener('click', () => {
+        window.open(serverArmourUrl, '_blank', 'noopener,noreferrer');
+      });
+    }
   });
 
   // Show server info again
