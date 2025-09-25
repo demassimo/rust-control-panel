@@ -312,6 +312,8 @@ function parseServerInfoMessage(message) {
   return output;
 }
 
+const STEAM_ID_REGEX = /^\d{17}$/;
+
 function parsePlayerListMessage(message) {
   if (!message) return [];
   let text = message.trim();
@@ -327,23 +329,34 @@ function parsePlayerListMessage(message) {
   }
   if (payload && Array.isArray(payload.Players)) payload = payload.Players;
   if (!Array.isArray(payload)) return [];
-  return payload.map((entry) => ({
-    steamId: entry.SteamID || entry.steamId || entry.steamid || '',
-    ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
-    displayName: entry.DisplayName || entry.displayName || '',
-    ping: Number(entry.Ping ?? entry.ping ?? 0) || 0,
-    address: entry.Address || entry.address || '',
-    connectedSeconds: Number(entry.ConnectedSeconds ?? entry.connectedSeconds ?? 0) || 0,
-    violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
-    health: Number(entry.Health ?? entry.health ?? 0) || 0,
-    position: {
-      x: Number(entry.Position?.x ?? entry.position?.x ?? 0) || 0,
-      y: Number(entry.Position?.y ?? entry.position?.y ?? 0) || 0,
-      z: Number(entry.Position?.z ?? entry.position?.z ?? 0) || 0
-    },
-    teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
-    networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
-  }));
+
+  const result = [];
+  for (const entry of payload) {
+    const steamIdRaw = entry && typeof entry === 'object'
+      ? (entry.SteamID ?? entry.steamId ?? entry.steamid ?? '')
+      : '';
+    const steamId = String(steamIdRaw || '').trim();
+    if (!STEAM_ID_REGEX.test(steamId)) continue;
+
+    result.push({
+      steamId,
+      ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
+      displayName: entry.DisplayName || entry.displayName || '',
+      ping: Number(entry.Ping ?? entry.ping ?? 0) || 0,
+      address: entry.Address || entry.address || '',
+      connectedSeconds: Number(entry.ConnectedSeconds ?? entry.connectedSeconds ?? 0) || 0,
+      violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
+      health: Number(entry.Health ?? entry.health ?? 0) || 0,
+      position: {
+        x: Number(entry.Position?.x ?? entry.position?.x ?? 0) || 0,
+        y: Number(entry.Position?.y ?? entry.position?.y ?? 0) || 0,
+        z: Number(entry.Position?.z ?? entry.position?.z ?? 0) || 0
+      },
+      teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
+      networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
+    });
+  }
+  return result;
 }
 
 function parseDateLike(value) {
@@ -424,7 +437,19 @@ function setCachedSteamProfile(steamid, data) {
   steamProfileCache.set(key, { data, timestamp: Date.now() });
 }
 
+function isProfileIncomplete(profile) {
+  if (!profile) return true;
+  const hasPersona = typeof profile.persona === 'string' && profile.persona.trim().length > 0;
+  const hasAvatar = typeof profile.avatar === 'string' && profile.avatar.trim().length > 0;
+  const vacBanned = profile.vac_banned;
+  const gameBans = profile.game_bans;
+  const hasBanInfo = !(typeof vacBanned === 'undefined' || vacBanned === null)
+    && !(typeof gameBans === 'undefined' || gameBans === null);
+  return !hasPersona || !hasAvatar || !hasBanInfo;
+}
+
 function shouldRefreshProfile(profile, now = Date.now()) {
+  if (isProfileIncomplete(profile)) return true;
   const updated = parseDateLike(profile?.updated_at);
   if (!updated) return true;
   return now - updated.getTime() > STEAM_PROFILE_REFRESH_INTERVAL;
@@ -504,13 +529,15 @@ async function resolveSteamProfiles(steamids) {
   const toFetch = [];
   for (const steamid of ids) {
     const cached = getCachedSteamProfile(steamid);
-    if (cached) {
+    if (cached && !isProfileIncomplete(cached)) {
       profileMap.set(steamid, cached);
       continue;
     }
     const existing = profileMap.get(steamid);
-    if (!existing || shouldRefreshProfile(existing, now) || shouldRefreshPlaytime(existing, now)) {
+    if (!existing || isProfileIncomplete(existing) || shouldRefreshProfile(existing, now) || shouldRefreshPlaytime(existing, now)) {
       toFetch.push(steamid);
+    } else if (existing) {
+      profileMap.set(steamid, existing);
     }
   }
   if (toFetch.length > 0 && process.env.STEAM_API_KEY) {
