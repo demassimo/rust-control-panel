@@ -214,15 +214,23 @@ function parseStatusMessage(message) {
     if (hostnameMatch) info.hostname = hostnameMatch[1].trim();
     const playersMatch = line.match(/players?\s*(?:[:=]\s*|\s+)(\d+)(?:\s*\/\s*(\d+))?/i);
     if (playersMatch) {
-      info.players = {
-        online: parseInt(playersMatch[1], 10),
-        max: playersMatch[2] ? parseInt(playersMatch[2], 10) : null
-      };
+      const online = parseInt(playersMatch[1], 10);
+      let max = playersMatch[2] ? parseInt(playersMatch[2], 10) : null;
+      if (!Number.isFinite(max)) {
+        const inlineMaxMatch = line.match(/\((\d+)\s*(?:max|players?)\)/i);
+        if (inlineMaxMatch) {
+          const parsed = parseInt(inlineMaxMatch[1], 10);
+          if (Number.isFinite(parsed)) max = parsed;
+        }
+      }
+      info.players = { online, max: Number.isFinite(max) ? max : null };
     }
-    const queuedMatch = line.match(/queued\s*[:=]\s*(\d+)/i);
+    const queuedMatch = line.match(/queued\s*[:=]\s*(\d+)/i) || line.match(/\((\d+)\s*queued\)/i);
     if (queuedMatch) info.queued = parseInt(queuedMatch[1], 10);
     const sleepersMatch = line.match(/sleepers\s*[:=]\s*(\d+)/i);
     if (sleepersMatch) info.sleepers = parseInt(sleepersMatch[1], 10);
+    const joiningMatch = line.match(/joining\s*[:=]\s*(\d+)/i) || line.match(/\((\d+)\s*joining\)/i);
+    if (joiningMatch) info.joining = parseInt(joiningMatch[1], 10);
   }
   return info;
 }
