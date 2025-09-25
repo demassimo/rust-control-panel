@@ -199,6 +199,48 @@ function createApi(pool, dialect) {
         timestamp
       ]);
     },
+    async listServerPlayerCounts(serverId, { since = null, until = null, limit = 5000 } = {}){
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const conditions = ['server_id=?'];
+      const params = [serverIdNum];
+
+      const normalise = (value) => {
+        if (!value) return null;
+        if (value instanceof Date) {
+          return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 19).replace('T', ' ');
+        }
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return parsed.toISOString().slice(0, 19).replace('T', ' ');
+      };
+
+      const sinceSql = normalise(since);
+      const untilSql = normalise(until);
+      if (sinceSql) {
+        conditions.push('recorded_at >= ?');
+        params.push(sinceSql);
+      }
+      if (untilSql) {
+        conditions.push('recorded_at <= ?');
+        params.push(untilSql);
+      }
+
+      let sql = `
+        SELECT server_id, player_count, max_players, queued, sleepers, recorded_at
+        FROM server_player_counts
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY recorded_at ASC
+      `;
+
+      const maxRows = Number(limit);
+      if (Number.isFinite(maxRows) && maxRows > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.floor(maxRows));
+      }
+
+      return await exec(sql, params);
+    },
     async listServerPlayers(serverId,{limit=100,offset=0}={}){
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];
