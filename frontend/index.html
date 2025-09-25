@@ -145,31 +145,112 @@
           </div>
           <span id="workspaceStatus" class="status-pill">offline</span>
         </div>
-        <div class="workspace-summary">
-          <div class="summary-card">
-            <span class="summary-label">Players</span>
-            <strong id="workspacePlayers">--</strong>
-          </div>
-          <div class="summary-card">
-            <span class="summary-label">Queue</span>
-            <strong id="workspaceQueue">--</strong>
-          </div>
-        </div>
-        <div class="workspace-grid">
-          <div class="card console-card">
-            <div class="card-header">
-              <h3>Console</h3>
-              <button id="btnClearConsole" class="icon" title="Clear console">✕</button>
+
+        <nav id="workspaceMenu" class="workspace-menu" aria-label="Server sections">
+          <button type="button" class="menu-tab active" data-view="players" aria-pressed="true">Players</button>
+          <button type="button" class="menu-tab" data-view="map" aria-pressed="false">Map</button>
+          <button type="button" class="menu-tab" data-view="console" aria-pressed="false">Console</button>
+          <button type="button" class="menu-tab" data-view="dashboard" aria-pressed="false">Dashboard</button>
+        </nav>
+
+        <div class="workspace-views">
+          <section id="workspaceViewPlayers" class="workspace-view active" data-view="players" aria-hidden="false">
+            <div class="card players-card" data-module-card="live-players">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3><span data-module-title>Current Players</span> <span id="player-count" class="muted small">(0)</span></h3>
+                  <div class="module-actions" data-module-actions></div>
+                </div>
+                <div class="card-controls">
+                  <button id="show-all" class="ghost small">Show everyone</button>
+                </div>
+              </div>
+              <div class="module-host players-live" data-module-slot="live-players"></div>
             </div>
-            <pre id="console"></pre>
-            <div class="row">
-              <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
-              <button id="btnSend" class="accent">Send</button>
+
+            <div class="card directory-card" data-module-card="players-directory">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3><span data-module-title>All Players</span></h3>
+                  <div class="module-actions" data-module-actions></div>
+                </div>
+              </div>
+              <div class="module-host players-directory" data-module-slot="players-directory"></div>
             </div>
-            <div class="row quick-row" id="quickCommands"></div>
-          </div>
-          <div id="moduleColumn" class="module-stack"></div>
+          </section>
+
+          <section id="workspaceViewMap" class="workspace-view" data-view="map" aria-hidden="true">
+            <div class="card map-card" data-module-card="live-map">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3><span data-module-title>Live Map</span></h3>
+                  <div class="module-actions" data-module-actions></div>
+                </div>
+              </div>
+              <div class="module-host map-body" data-module-slot="live-map"></div>
+            </div>
+          </section>
+
+          <section id="workspaceViewConsole" class="workspace-view" data-view="console" aria-hidden="true">
+            <div class="card console-card">
+              <div class="card-header">
+                <h3>Console</h3>
+                <div class="card-controls">
+                  <button id="btnClearConsole" class="icon" title="Clear console">✕</button>
+                </div>
+              </div>
+              <pre id="console"></pre>
+              <div class="row">
+                <input id="cmd" placeholder="say &quot;Hello&quot; | status | kick &lt;steamid&gt; reason">
+                <button id="btnSend" class="accent">Send</button>
+              </div>
+              <div class="row quick-row" id="quickCommands"></div>
+            </div>
+          </section>
+
+          <section id="workspaceViewDashboard" class="workspace-view" data-view="dashboard" aria-hidden="true">
+            <div class="workspace-summary">
+              <div class="summary-card">
+                <span class="summary-label">Players</span>
+                <strong id="workspacePlayers">--</strong>
+              </div>
+              <div class="summary-card">
+                <span class="summary-label">Queue</span>
+                <strong id="workspaceQueue">--</strong>
+              </div>
+              <div class="summary-card">
+                <span class="summary-label">Sleepers</span>
+                <strong id="workspaceSleepers">--</strong>
+              </div>
+            </div>
+
+            <div class="card info-card">
+              <div class="card-header">
+                <h3>Server Overview</h3>
+              </div>
+              <div class="info-grid">
+                <div class="info-item">
+                  <span class="label">Hostname</span>
+                  <span class="value" id="workspaceInfoHostname">—</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">Address</span>
+                  <span class="value" id="workspaceInfoAddress">—</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">Last Check</span>
+                  <span class="value" id="workspaceInfoLastCheck">—</span>
+                </div>
+                <div class="info-item">
+                  <span class="label">Status Notes</span>
+                  <span class="value" id="workspaceInfoNotes">—</span>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
+
+        <div id="moduleFallback" class="module-stack hidden" aria-hidden="true"></div>
       </section>
 
       <section id="settingsPanel" class="hidden settings-panel">
@@ -246,6 +327,7 @@
   </div>
 
   <script src="assets/modules/module-loader.js"></script>
+  <script src="assets/modules/live-players.js"></script>
   <script src="assets/modules/players.js"></script>
   <script src="assets/modules/map.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
