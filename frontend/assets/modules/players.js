@@ -65,7 +65,14 @@
           const meta = document.createElement('div');
           meta.className = 'muted small';
           const lastSeen = formatTimestamp(p.last_seen);
-          meta.textContent = lastSeen ? `${p.steamid} · Last seen ${lastSeen}` : p.steamid;
+          const parts = [];
+          parts.push(p.steamid || '—');
+          if (p.last_ip) {
+            const endpoint = p.last_port ? `${p.last_ip}:${p.last_port}` : p.last_ip;
+            parts.push(endpoint);
+          }
+          if (lastSeen) parts.push(`Last seen ${lastSeen}`);
+          meta.textContent = parts.join(' · ');
           left.appendChild(meta);
           const right = document.createElement('div');
           right.className = 'server-actions';
