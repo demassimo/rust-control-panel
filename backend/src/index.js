@@ -18,6 +18,7 @@ import {
   startAutoMonitor,
   rconEventBus
 } from './rcon.js';
+import { fetchRustMapMetadata, downloadRustMapImage } from './rustmaps.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -712,74 +713,6 @@ function deriveMapKey(info = {}, metadata = null) {
   return parts.length ? parts.join(':') : null;
 }
 
-async function fetchRustMapMetadata(size, seed, apiKey) {
-  if (!size || !seed) return null;
-  if (!apiKey) {
-    const err = new Error('rustmaps_api_key_missing');
-    err.code = 'rustmaps_api_key_missing';
-    throw err;
-  }
-  const url = `https://api.rustmaps.com/v4/maps/${encodeURIComponent(size)}/${encodeURIComponent(seed)}?staging=false`;
-  const res = await fetch(url, { headers: { 'x-api-key': apiKey } });
-  if (res.status === 401 || res.status === 403) {
-    const err = new Error('rustmaps_unauthorized');
-    err.code = 'rustmaps_unauthorized';
-    throw err;
-  }
-  if (res.status === 404) {
-    const err = new Error('rustmaps_not_found');
-    err.code = 'rustmaps_not_found';
-    throw err;
-  }
-  if (!res.ok) {
-    const err = new Error('rustmaps_error');
-    err.code = 'rustmaps_error';
-    err.status = res.status;
-    throw err;
-  }
-  const body = await res.json();
-  const data = body?.data;
-  if (!data) {
-    const err = new Error('rustmaps_error');
-    err.code = 'rustmaps_error';
-    throw err;
-  }
-  return {
-    id: data.id || null,
-    type: data.type || null,
-    seed: Number(data.seed ?? seed) || seed,
-    size: Number(data.size ?? size) || size,
-    saveVersion: data.saveVersion || null,
-    mapName: data.mapName || data.map || null,
-    imageUrl: data.imageUrl || data.rawImageUrl || null,
-    rawImageUrl: data.rawImageUrl || null,
-    thumbnailUrl: data.thumbnailUrl || null,
-    url: data.url || null,
-    isCustomMap: !!data.isCustomMap,
-    totalMonuments: data.totalMonuments || null
-  };
-}
-
-async function downloadRustMapImage(meta, apiKey) {
-  const imageUrl = meta?.imageUrl || meta?.rawImageUrl;
-  if (!imageUrl) return null;
-  const headers = apiKey ? { 'x-api-key': apiKey } : undefined;
-  const res = await fetch(imageUrl, { headers });
-  if (!res.ok) {
-    const err = new Error('rustmaps_image_error');
-    err.code = 'rustmaps_image_error';
-    err.status = res.status;
-    throw err;
-  }
-  const arrayBuffer = await res.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  const type = res.headers.get('content-type') || '';
-  let extension = 'jpg';
-  if (type.includes('png')) extension = 'png';
-  else if (type.includes('webp')) extension = 'webp';
-  return { buffer, extension, mime: type || 'image/jpeg' };
-}
-
 function decodeBase64Image(input) {
   if (typeof input !== 'string' || !input) return null;
   let data = input.trim();
@@ -1216,8 +1149,14 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
           }
         } catch (err) {
           const code = err?.code || err?.message;
-          if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized') {
+          if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized' || code === 'rustmaps_invalid_parameters') {
             return res.status(400).json({ error: code });
+          }
+          if (code === 'rustmaps_generation_timeout') {
+            return res.status(504).json({ error: code });
+          }
+          if (code === 'rustmaps_generation_pending') {
+            return res.status(202).json({ error: code });
           }
           if (code === 'rustmaps_not_found') {
             map = {
