@@ -19,6 +19,39 @@
     return `${hours.toFixed(1)} h`;
   }
 
+  function mapPlayerForDirectory(player) {
+    if (!player) return null;
+    const profile = player.steamProfile || {};
+    const steamId = player.steamId || player.steamid || player.SteamID || profile.steamId || profile.steamid || '';
+    const steamid = String(steamId || '').trim();
+    const displayName = player.displayName || profile.persona || profile.personaName || steamid || 'Unknown player';
+    const profileUrl = profile.profileUrl || profile.profileurl || '';
+    const avatarFull = profile.avatarFull || profile.avatarfull || profile.avatar || '';
+    const rustMinutes = profile.rustPlaytimeMinutes;
+    const lastBanDays = profile.daysSinceLastBan;
+    const payload = {
+      steamid,
+      display_name: displayName,
+      raw_display_name: player.displayName || profile.persona || '',
+      persona: profile.persona || profile.personaName || '',
+      profileurl: profileUrl,
+      profile_url: profileUrl,
+      avatar: profile.avatar || '',
+      avatarfull: avatarFull,
+      country: profile.country || '',
+      vac_banned: profile.vacBanned ? 1 : 0,
+      game_bans: Number(profile.gameBans || 0) || 0,
+      last_ban_days: Number.isFinite(Number(lastBanDays)) ? Number(lastBanDays) : null,
+      rust_playtime_minutes: Number.isFinite(Number(rustMinutes)) ? Number(rustMinutes) : null,
+      visibility: profile.visibility ?? null,
+      last_ip: player.ip || null,
+      last_port: Number.isFinite(Number(player.port)) ? Number(player.port) : null,
+      first_seen: player.firstSeen ?? player.first_seen ?? null,
+      last_seen: player.lastSeen ?? player.last_seen ?? null,
+    };
+    return payload;
+  }
+
   function avatarInitial(name = '') {
     const trimmed = name.trim();
     if (!trimmed) return '?';
@@ -337,16 +370,31 @@
           row.appendChild(details);
 
           row.addEventListener('click', () => {
-            const steamId = player.steamId || null;
+            const rawSteamId = player.steamId || player.steamid || player.SteamID || null;
+            const steamId = rawSteamId ? String(rawSteamId) : null;
             const sameSelection = state.selected && steamId && state.selected === steamId;
             state.selected = sameSelection ? null : steamId;
             highlightRows();
             if (state.selected) {
               ctx.emit?.('live-players:focus', { steamId: player.steamId, player });
               window.dispatchEvent(new CustomEvent('player:selected', { detail: { player } }));
+              const payload = mapPlayerForDirectory(player);
+              window.dispatchEvent(new CustomEvent('players:open-profile', {
+                detail: {
+                  steamId: steamId || payload?.steamid || '',
+                  player: payload,
+                  source: moduleId
+                }
+              }));
             } else {
               ctx.emit?.('live-players:focus', { steamId: null });
               window.dispatchEvent(new CustomEvent('team:clear'));
+              window.dispatchEvent(new CustomEvent('players:close-profile', {
+                detail: {
+                  steamId: steamId || '',
+                  source: moduleId
+                }
+              }));
             }
           });
 
