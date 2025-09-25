@@ -6,6 +6,8 @@ GROUP_NAME=rustadmin
 INSTALL_DIR=/opt/rustadmin
 SERVICE_NAME=rustadmin-backend
 SERVICE_FILE=/etc/systemd/system/${SERVICE_NAME}.service
+DISCORD_SERVICE_NAME=rustadmin-discord-bot
+DISCORD_SERVICE_FILE=/etc/systemd/system/${DISCORD_SERVICE_NAME}.service
 NGINX_SITE=/etc/nginx/sites-available/rustadmin.conf
 NGINX_LINK=/etc/nginx/sites-enabled/rustadmin.conf
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -243,12 +245,22 @@ configure_backend_env() {
   } >"$env_file"
 }
 
-install_service() {
+install_backend_service() {
   log "Installing systemd service"
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
   install -m 644 "$INSTALL_DIR/deploy/systemd/${SERVICE_NAME}.service" "$SERVICE_FILE"
   systemctl daemon-reload
   systemctl enable --now "$SERVICE_NAME"
+}
+
+install_discord_bot_service() {
+  if [ ! -f "$INSTALL_DIR/deploy/systemd/${DISCORD_SERVICE_NAME}.service" ]; then
+    log "Discord bot service definition missing, skipping"
+    return
+  fi
+  log "Installing Discord bot service"
+  INSTALL_DIR="$INSTALL_DIR" USER_NAME="$USER_NAME" GROUP_NAME="$GROUP_NAME" \
+    bash "$SCRIPT_DIR/install-discord-bot-service.sh"
 }
 
 configure_nginx() {
@@ -299,7 +311,8 @@ main() {
   setup_backend
   configure_backend_env
   finalize_permissions
-  install_service
+  install_backend_service
+  install_discord_bot_service
   configure_nginx
   log "Installation complete. API on :8787, UI on :80"
 }

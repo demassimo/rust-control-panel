@@ -4,6 +4,7 @@ set -euo pipefail
 USER_NAME=rustadmin
 INSTALL_DIR=/opt/rustadmin
 SERVICE_FILE=/etc/systemd/system/rustadmin-backend.service
+DISCORD_SERVICE_FILE=/etc/systemd/system/rustadmin-discord-bot.service
 NGINX_SITE=/etc/nginx/sites-available/rustadmin.conf
 NGINX_LINK=/etc/nginx/sites-enabled/rustadmin.conf
 
@@ -56,12 +57,21 @@ echo "[*] Stopping and disabling service"
 if command -v systemctl >/dev/null 2>&1; then
   systemctl stop rustadmin-backend 2>/dev/null || true
   systemctl disable rustadmin-backend 2>/dev/null || true
+  systemctl stop rustadmin-discord-bot 2>/dev/null || true
+  systemctl disable rustadmin-discord-bot 2>/dev/null || true
 else
   echo "    systemctl not available, skipping"
 fi
 
 if [ -f "$SERVICE_FILE" ]; then
   rm -f "$SERVICE_FILE"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload
+  fi
+fi
+
+if [ -f "$DISCORD_SERVICE_FILE" ]; then
+  rm -f "$DISCORD_SERVICE_FILE"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
   fi

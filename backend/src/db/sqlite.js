@@ -337,6 +337,15 @@ function createApi(dbh, dialect) {
     async getServerDiscordIntegration(serverId){
       return await dbh.get('SELECT * FROM server_discord_integrations WHERE server_id=?',[serverId]);
     },
+    async listServerDiscordIntegrations(){
+      return await dbh.all('SELECT * FROM server_discord_integrations ORDER BY server_id ASC');
+    },
+    async getLatestServerPlayerCount(serverId){
+      return await dbh.get(
+        'SELECT server_id, player_count, max_players, queued, sleepers, recorded_at FROM server_player_counts WHERE server_id=? ORDER BY recorded_at DESC LIMIT 1',
+        [serverId]
+      );
+    },
     async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
       await dbh.run(
         "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,created_at,updated_at) VALUES(?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, updated_at=excluded.updated_at",

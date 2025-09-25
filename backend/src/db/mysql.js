@@ -317,6 +317,16 @@ function createApi(pool, dialect) {
       const rows = await exec('SELECT * FROM server_discord_integrations WHERE server_id=?',[serverId]);
       return rows?.[0] ?? null;
     },
+    async listServerDiscordIntegrations(){
+      return await exec('SELECT * FROM server_discord_integrations ORDER BY server_id ASC');
+    },
+    async getLatestServerPlayerCount(serverId){
+      const rows = await exec(
+        'SELECT server_id, player_count, max_players, queued, sleepers, recorded_at FROM server_player_counts WHERE server_id=? ORDER BY recorded_at DESC LIMIT 1',
+        [serverId]
+      );
+      return rows?.[0] ?? null;
+    },
     async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
       await exec(`
         INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id)

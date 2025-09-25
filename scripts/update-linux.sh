@@ -5,6 +5,10 @@ REPO_URL="https://github.com/demassimo/rust-control-panel"
 INSTALL_DIR="/opt/rustadmin"
 SERVICE_NAME="rustadmin-backend"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+DISCORD_SERVICE_NAME="rustadmin-discord-bot"
+DISCORD_SERVICE_FILE="/etc/systemd/system/${DISCORD_SERVICE_NAME}.service"
+USER_NAME="rustadmin"
+GROUP_NAME="rustadmin"
 NGINX_SITE="/etc/nginx/sites-available/rustadmin.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/rustadmin.conf"
 
@@ -77,7 +81,7 @@ update_backend() {
   mkdir -p "$INSTALL_DIR/backend/data"
 }
 
-update_service() {
+update_backend_service() {
   local source_service="$INSTALL_DIR/deploy/systemd/${SERVICE_NAME}.service"
   if [ ! -f "$source_service" ]; then
     warn "Service definition not found at $source_service"
@@ -88,6 +92,23 @@ update_service() {
   install -m 644 "$source_service" "$SERVICE_FILE"
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
+install_or_update_discord_service() {
+  local source_service="$INSTALL_DIR/deploy/systemd/${DISCORD_SERVICE_NAME}.service"
+  if [ ! -f "$source_service" ]; then
+    warn "Discord bot service definition not found at $source_service"
+    return
+  fi
+
+  local installer_script="$CLONE_DIR/scripts/install-discord-bot-service.sh"
+  if [ ! -x "$installer_script" ]; then
+    warn "Discord bot installer script missing at $installer_script"
+    return
+  fi
+
+  log "Installing/updating Discord bot service"
+  INSTALL_DIR="$INSTALL_DIR" USER_NAME="$USER_NAME" GROUP_NAME="$GROUP_NAME" bash "$installer_script"
 }
 
 backend_port_from_env() {
@@ -124,9 +145,14 @@ update_nginx() {
   fi
 }
 
-restart_service() {
-  log "Restarting $SERVICE_NAME"
+restart_services() {
+  log "Restarting services"
   systemctl restart "$SERVICE_NAME"
+  if systemctl list-unit-files | awk '{print $1}' | grep -qx "$DISCORD_SERVICE_NAME"; then
+    systemctl restart "$DISCORD_SERVICE_NAME" 2>/dev/null || true
+  elif [ -f "$DISCORD_SERVICE_FILE" ]; then
+    systemctl restart "$DISCORD_SERVICE_NAME" 2>/dev/null || true
+  fi
 }
 
 main() {
@@ -143,9 +169,10 @@ main() {
   clone_latest
   sync_sources
   update_backend
-  update_service
+  update_backend_service
+  install_or_update_discord_service
   update_nginx
-  restart_service
+  restart_services
   log "Update complete"
 }
 
