@@ -64,6 +64,65 @@ main.grid{
 .col.center{min-width:520px}
 .col.right{min-width:320px}
 
+.server-panel{
+  padding:22px 24px 36px;
+  display:flex; flex-direction:column; gap:24px;
+}
+
+.server-menu{
+  display:flex; gap:12px; flex-wrap:wrap;
+}
+
+.menu-tab{
+  appearance:none; border:1px solid var(--border); border-radius:999px;
+  padding:10px 18px; font-weight:600; font-size:14px;
+  background:linear-gradient(180deg, #1b2030 0%, #131722 100%);
+  color:var(--muted); cursor:pointer; transition:filter .15s ease, transform .05s ease;
+}
+
+.menu-tab:hover{filter:brightness(1.1)}
+.menu-tab:active{transform:translateY(1px)}
+.menu-tab.active{
+  background:rgba(225,29,72,.18); color:#fda4af;
+  border-color:rgba(225,29,72,.45); box-shadow:inset 0 0 0 1px rgba(225,29,72,.45);
+}
+
+.view-panel{display:none; flex-direction:column; gap:22px}
+.view-panel.active{display:flex}
+.card.full-width{width:100%}
+.players-strip{padding:0 18px 18px}
+.players-strip .module-message{padding:28px; text-align:center; color:var(--muted)}
+.players-strip .live-players-list{
+  display:grid; gap:16px; padding:18px 0 0;
+  grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
+}
+.players-strip .live-player-row{
+  border:1px solid var(--border); border-radius:16px;
+  padding:18px; display:flex; flex-direction:column; gap:16px;
+  background:rgba(12,15,24,.75); border-bottom:none;
+}
+.players-strip .live-player-row:hover{background:rgba(225,29,72,.12)}
+.players-strip .live-player-details{align-items:flex-start}
+
+.players-directory{padding:0}
+.players-directory .module-message{padding:24px; text-align:center}
+.player-directory{
+  list-style:none; margin:0; padding:0; display:flex; flex-direction:column;
+}
+.player-directory li{
+  display:flex; justify-content:space-between; gap:18px; align-items:flex-start;
+  padding:16px 18px; border-bottom:1px solid var(--border);
+  background:rgba(12,15,23,.6);
+}
+.player-directory li:nth-child(even){background:rgba(255,255,255,.02)}
+.player-directory strong{font-weight:600}
+.player-directory .muted{color:var(--muted)}
+.player-directory .small{font-size:12px}
+.player-directory .server-actions{display:flex; gap:10px; flex-wrap:wrap}
+
+.muted{color:var(--muted)}
+.small{font-size:12px}
+
 .card{
   background:linear-gradient(180deg, #12151f 0%, #0e1119 100%);
   border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow);
