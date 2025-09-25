@@ -12,6 +12,88 @@ function createApi(pool, dialect) {
     const [rows] = await pool.query(sql, params);
     return rows;
   }
+
+  async function runInTransaction(fn) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const result = await fn(conn);
+      await conn.commit();
+      return result;
+    } catch (err) {
+      try { await conn.rollback(); }
+      catch { /* ignore */ }
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  function normaliseRoleIds(roleIds = []) {
+    const out = [];
+    const seen = new Set();
+    for (const value of roleIds) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) continue;
+      const id = Math.trunc(numeric);
+      const token = String(id);
+      if (seen.has(token)) continue;
+      seen.add(token);
+      out.push(id);
+    }
+    return out;
+  }
+
+  function normalisePermissionEntries(entries = []) {
+    const out = [];
+    const seen = new Set();
+    for (const entry of entries) {
+      const perm = String(entry?.permission || entry?.key || '').trim();
+      if (!perm) continue;
+      let serverId = null;
+      if (entry && Object.prototype.hasOwnProperty.call(entry, 'serverId')) {
+        const numeric = Number(entry.serverId);
+        if (Number.isFinite(numeric)) serverId = Math.trunc(numeric);
+      } else if (entry && Object.prototype.hasOwnProperty.call(entry, 'server_id')) {
+        const numeric = Number(entry.server_id);
+        if (Number.isFinite(numeric)) serverId = Math.trunc(numeric);
+      }
+      const token = `${perm.toLowerCase()}:${serverId ?? 'global'}`;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      out.push({ permission: perm.toLowerCase(), serverId });
+    }
+    return out;
+  }
+
+  async function setUserRolesInternal(userId, roleIds) {
+    const numericId = Number(userId);
+    if (!Number.isFinite(numericId)) return;
+    const ids = normaliseRoleIds(roleIds);
+    await runInTransaction(async (conn) => {
+      await conn.query('DELETE FROM user_roles WHERE user_id=?', [numericId]);
+      for (const roleId of ids) {
+        await conn.query('INSERT INTO user_roles(user_id, role_id) VALUES(?, ?)', [numericId, roleId]);
+      }
+    });
+  }
+
+  async function setRolePermissionsInternal(roleId, permissions) {
+    const numericId = Number(roleId);
+    if (!Number.isFinite(numericId)) return;
+    const prepared = normalisePermissionEntries(Array.isArray(permissions) ? permissions : []);
+    await runInTransaction(async (conn) => {
+      await conn.query('DELETE FROM role_permissions WHERE role_id=?', [numericId]);
+      for (const entry of prepared) {
+        await conn.query('INSERT INTO role_permissions(role_id, permission, server_id) VALUES(?,?,?)', [
+          numericId,
+          entry.permission,
+          entry.serverId != null ? entry.serverId : null
+        ]);
+      }
+    });
+  }
+
   return {
     dialect,
     async init() {
@@ -115,16 +197,64 @@ function createApi(pool, dialect) {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_maps FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS roles(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(190) UNIQUE NOT NULL,
+        description TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS role_permissions(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        role_id INT NOT NULL,
+        permission VARCHAR(190) NOT NULL,
+        server_id INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_role_permission (role_id, permission, server_id),
+        CONSTRAINT fk_role_permissions_role FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+        CONSTRAINT fk_role_permissions_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS user_roles(
+        user_id INT NOT NULL,
+        role_id INT NOT NULL,
+        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(user_id, role_id),
+        CONSTRAINT fk_user_roles_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_user_roles_role FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
-      const { username, password_hash, role = 'user' } = u;
+      const { username, password_hash, role = 'user', roles = [] } = u;
       const r = await exec('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,role]);
-      return r.insertId;
+      const userId = r.insertId;
+      if (Array.isArray(roles) && roles.length) {
+        await setUserRolesInternal(userId, roles);
+      }
+      return userId;
     },
     async getUser(id){ const r = await exec('SELECT * FROM users WHERE id=?',[id]); return r[0]||null; },
     async getUserByUsername(u){ const r = await exec('SELECT * FROM users WHERE username=?',[u]); return r[0]||null; },
-    async listUsers(){ return await exec('SELECT id,username,role,created_at FROM users ORDER BY id ASC'); },
+    async listUsers(){
+      const rows = await exec(`
+        SELECT u.id, u.username, u.role, u.created_at,
+               r.id AS role_id, r.name AS role_name, r.description AS role_description
+        FROM users u
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN roles r ON r.id = ur.role_id
+        ORDER BY u.id ASC, r.name ASC
+      `);
+      const map = new Map();
+      for (const row of rows) {
+        const id = row.id;
+        if (!map.has(id)) {
+          map.set(id, { id, username: row.username, role: row.role, created_at: row.created_at, roles: [] });
+        }
+        if (row.role_id) {
+          map.get(id).roles.push({ id: row.role_id, name: row.role_name, description: row.role_description });
+        }
+      }
+      return Array.from(map.values());
+    },
     async countAdmins(){ const r = await exec("SELECT COUNT(*) c FROM users WHERE role='admin'"); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await exec('UPDATE users SET role=? WHERE id=?',[role,id]); },
@@ -244,6 +374,104 @@ function createApi(pool, dialect) {
       }
       const rows = await exec('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
       return rows?.[0]?.c ? Number(rows[0].c) : 0;
+    },
+    async listRoles(){
+      return await exec('SELECT id, name, description, created_at FROM roles ORDER BY name ASC');
+    },
+    async getRole(id){
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return null;
+      const rows = await exec('SELECT id, name, description, created_at FROM roles WHERE id=?',[numericId]);
+      return rows[0] || null;
+    },
+    async createRole({ name, description = null }){
+      const trimmedName = String(name || '').trim();
+      if (!trimmedName) throw new Error('invalid_role_name');
+      const desc = description != null ? String(description).trim() : null;
+      const res = await exec('INSERT INTO roles(name, description) VALUES(?, ?)', [trimmedName, desc || null]);
+      return res.insertId;
+    },
+    async updateRole(id, data = {}){
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return 0;
+      const rows = await exec('SELECT id, name, description FROM roles WHERE id=?',[numericId]);
+      const current = rows[0];
+      if (!current) return 0;
+      const nextName = Object.prototype.hasOwnProperty.call(data, 'name') ? String(data.name || '').trim() || current.name : current.name;
+      const nextDescription = Object.prototype.hasOwnProperty.call(data, 'description')
+        ? (String(data.description || '').trim() || null)
+        : (current.description || null);
+      const res = await exec('UPDATE roles SET name=?, description=? WHERE id=?',[nextName, nextDescription, numericId]);
+      return res.affectedRows || 0;
+    },
+    async deleteRole(id){
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return 0;
+      const res = await exec('DELETE FROM roles WHERE id=?',[numericId]);
+      return res.affectedRows || 0;
+    },
+    async listRolePermissions(roleId){
+      const numericId = Number(roleId);
+      if (!Number.isFinite(numericId)) return [];
+      return await exec('SELECT id, permission, server_id FROM role_permissions WHERE role_id=? ORDER BY permission ASC, server_id ASC',[numericId]);
+    },
+    async setRolePermissions(roleId, permissions = []){
+      await setRolePermissionsInternal(roleId, permissions);
+    },
+    async listRolesWithPermissions(){
+      const rows = await exec(`
+        SELECT r.id, r.name, r.description,
+               rp.permission, rp.server_id
+        FROM roles r
+        LEFT JOIN role_permissions rp ON rp.role_id = r.id
+        ORDER BY r.name ASC, rp.permission ASC
+      `);
+      const map = new Map();
+      for (const row of rows) {
+        const id = row.id;
+        if (!map.has(id)) {
+          map.set(id, { id, name: row.name, description: row.description, permissions: [] });
+        }
+        if (row.permission) {
+          map.get(id).permissions.push({ permission: row.permission, serverId: row.server_id });
+        }
+      }
+      return Array.from(map.values());
+    },
+    async getUserRoles(userId){
+      const numericId = Number(userId);
+      if (!Number.isFinite(numericId)) return [];
+      return await exec(`
+        SELECT r.id, r.name, r.description
+        FROM user_roles ur
+        INNER JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id=?
+        ORDER BY r.name ASC
+      `,[numericId]);
+    },
+    async setUserRoles(userId, roleIds = []){
+      await setUserRolesInternal(userId, roleIds);
+    },
+    async getUserAccessProfile(userId){
+      const numericId = Number(userId);
+      if (!Number.isFinite(numericId)) return null;
+      const userRows = await exec('SELECT id, username, role FROM users WHERE id=?',[numericId]);
+      const user = userRows[0] || null;
+      if (!user) return null;
+      const roles = await exec(`
+        SELECT r.id, r.name, r.description
+        FROM user_roles ur
+        INNER JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id=?
+        ORDER BY r.name ASC
+      `,[numericId]);
+      const permissions = await exec(`
+        SELECT DISTINCT rp.permission, rp.server_id
+        FROM role_permissions rp
+        INNER JOIN user_roles ur ON ur.role_id = rp.role_id
+        WHERE ur.user_id=?
+      `,[numericId]);
+      return { user, roles, permissions };
     }
   };
 }

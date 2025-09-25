@@ -10,6 +10,84 @@ export default {
 };
 
 function createApi(dbh, dialect) {
+  async function runInTransaction(fn) {
+    await dbh.exec('BEGIN');
+    try {
+      const result = await fn();
+      await dbh.exec('COMMIT');
+      return result;
+    } catch (err) {
+      try { await dbh.exec('ROLLBACK'); }
+      catch { /* ignore */ }
+      throw err;
+    }
+  }
+
+  function normaliseRoleIds(roleIds = []) {
+    const out = [];
+    const seen = new Set();
+    for (const value of roleIds) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) continue;
+      const id = Math.trunc(numeric);
+      const token = String(id);
+      if (seen.has(token)) continue;
+      seen.add(token);
+      out.push(id);
+    }
+    return out;
+  }
+
+  function normalisePermissionEntries(entries = []) {
+    const out = [];
+    const seen = new Set();
+    for (const entry of entries) {
+      const perm = String(entry?.permission || entry?.key || '').trim();
+      if (!perm) continue;
+      let serverId = null;
+      if (entry && Object.prototype.hasOwnProperty.call(entry, 'serverId')) {
+        const numeric = Number(entry.serverId);
+        if (Number.isFinite(numeric)) serverId = Math.trunc(numeric);
+      } else if (entry && Object.prototype.hasOwnProperty.call(entry, 'server_id')) {
+        const numeric = Number(entry.server_id);
+        if (Number.isFinite(numeric)) serverId = Math.trunc(numeric);
+      }
+      const token = `${perm.toLowerCase()}:${serverId ?? 'global'}`;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      out.push({ permission: perm.toLowerCase(), serverId });
+    }
+    return out;
+  }
+
+  async function setUserRolesInternal(userId, roleIds) {
+    const numericId = Number(userId);
+    if (!Number.isFinite(numericId)) return;
+    const ids = normaliseRoleIds(roleIds);
+    await runInTransaction(async () => {
+      await dbh.run('DELETE FROM user_roles WHERE user_id=?', [numericId]);
+      for (const roleId of ids) {
+        await dbh.run('INSERT INTO user_roles(user_id, role_id) VALUES(?, ?)', [numericId, roleId]);
+      }
+    });
+  }
+
+  async function setRolePermissionsInternal(roleId, permissions) {
+    const numericId = Number(roleId);
+    if (!Number.isFinite(numericId)) return;
+    const prepared = normalisePermissionEntries(Array.isArray(permissions) ? permissions : []);
+    await runInTransaction(async () => {
+      await dbh.run('DELETE FROM role_permissions WHERE role_id=?', [numericId]);
+      for (const entry of prepared) {
+        await dbh.run('INSERT INTO role_permissions(role_id, permission, server_id) VALUES(?,?,?)', [
+          numericId,
+          entry.permission,
+          entry.serverId != null ? entry.serverId : null
+        ]);
+      }
+    });
+  }
+
   return {
     dialect,
     async init() {
@@ -97,6 +175,30 @@ function createApi(dbh, dialect) {
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS roles(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS role_permissions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role_id INTEGER NOT NULL,
+        permission TEXT NOT NULL,
+        server_id INTEGER,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(role_id, permission, server_id),
+        FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS user_roles(
+        user_id INTEGER NOT NULL,
+        role_id INTEGER NOT NULL,
+        assigned_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(user_id, role_id),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
+      );
       `);
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
@@ -124,13 +226,36 @@ function createApi(dbh, dialect) {
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
-      const { username, password_hash, role = 'user' } = u;
+      const { username, password_hash, role = 'user', roles = [] } = u;
       const r = await dbh.run('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,role]);
-      return r.lastID;
+      const userId = r.lastID;
+      if (Array.isArray(roles) && roles.length) {
+        await setUserRolesInternal(userId, roles);
+      }
+      return userId;
     },
     async getUser(id){ return await dbh.get('SELECT * FROM users WHERE id=?',[id]); },
     async getUserByUsername(u){ return await dbh.get('SELECT * FROM users WHERE username=?',[u]); },
-    async listUsers(){ return await dbh.all('SELECT id,username,role,created_at FROM users ORDER BY id ASC'); },
+    async listUsers(){
+      const rows = await dbh.all(`
+        SELECT u.id, u.username, u.role, u.created_at,
+               r.id AS role_id, r.name AS role_name, r.description AS role_description
+        FROM users u
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN roles r ON r.id = ur.role_id
+        ORDER BY u.id ASC, r.name ASC
+      `);
+      const map = new Map();
+      for (const row of rows) {
+        if (!map.has(row.id)) {
+          map.set(row.id, { id: row.id, username: row.username, role: row.role, created_at: row.created_at, roles: [] });
+        }
+        if (row.role_id) {
+          map.get(row.id).roles.push({ id: row.role_id, name: row.role_name, description: row.role_description });
+        }
+      }
+      return Array.from(map.values());
+    },
     async countAdmins(){ const r = await dbh.get("SELECT COUNT(*) c FROM users WHERE role='admin'"); return r.c; },
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await dbh.run('UPDATE users SET role=? WHERE id=?',[role,id]); },
@@ -270,6 +395,100 @@ function createApi(dbh, dialect) {
       }
       const row = await dbh.get('SELECT COUNT(*) c FROM server_maps WHERE image_path=?', [imagePath]);
       return row?.c ? Number(row.c) : 0;
+    },
+    async listRoles(){
+      return await dbh.all('SELECT id, name, description, created_at FROM roles ORDER BY name ASC');
+    },
+    async getRole(id){
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return null;
+      return await dbh.get('SELECT id, name, description, created_at FROM roles WHERE id=?',[numericId]);
+    },
+    async createRole({ name, description = null }){
+      const trimmedName = String(name || '').trim();
+      if (!trimmedName) throw new Error('invalid_role_name');
+      const desc = description != null ? String(description).trim() : null;
+      const r = await dbh.run('INSERT INTO roles(name, description) VALUES(?, ?)', [trimmedName, desc || null]);
+      return r.lastID;
+    },
+    async updateRole(id, data = {}){
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return 0;
+      const current = await dbh.get('SELECT id, name, description FROM roles WHERE id=?',[numericId]);
+      if (!current) return 0;
+      const nextName = Object.prototype.hasOwnProperty.call(data, 'name') ? String(data.name || '').trim() || current.name : current.name;
+      const nextDescription = Object.prototype.hasOwnProperty.call(data, 'description')
+        ? (String(data.description || '').trim() || null)
+        : (current.description || null);
+      const res = await dbh.run('UPDATE roles SET name=?, description=? WHERE id=?',[nextName, nextDescription, numericId]);
+      return res.changes || 0;
+    },
+    async deleteRole(id){
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) return 0;
+      const res = await dbh.run('DELETE FROM roles WHERE id=?',[numericId]);
+      return res.changes || 0;
+    },
+    async listRolePermissions(roleId){
+      const numericId = Number(roleId);
+      if (!Number.isFinite(numericId)) return [];
+      return await dbh.all('SELECT id, permission, server_id FROM role_permissions WHERE role_id=? ORDER BY permission ASC, server_id ASC',[numericId]);
+    },
+    async setRolePermissions(roleId, permissions = []){
+      await setRolePermissionsInternal(roleId, permissions);
+    },
+    async listRolesWithPermissions(){
+      const rows = await dbh.all(`
+        SELECT r.id, r.name, r.description,
+               rp.permission, rp.server_id
+        FROM roles r
+        LEFT JOIN role_permissions rp ON rp.role_id = r.id
+        ORDER BY r.name ASC, rp.permission ASC
+      `);
+      const map = new Map();
+      for (const row of rows) {
+        if (!map.has(row.id)) {
+          map.set(row.id, { id: row.id, name: row.name, description: row.description, permissions: [] });
+        }
+        if (row.permission) {
+          map.get(row.id).permissions.push({ permission: row.permission, serverId: row.server_id });
+        }
+      }
+      return Array.from(map.values());
+    },
+    async getUserRoles(userId){
+      const numericId = Number(userId);
+      if (!Number.isFinite(numericId)) return [];
+      return await dbh.all(`
+        SELECT r.id, r.name, r.description
+        FROM user_roles ur
+        INNER JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id=?
+        ORDER BY r.name ASC
+      `,[numericId]);
+    },
+    async setUserRoles(userId, roleIds = []){
+      await setUserRolesInternal(userId, roleIds);
+    },
+    async getUserAccessProfile(userId){
+      const numericId = Number(userId);
+      if (!Number.isFinite(numericId)) return null;
+      const user = await dbh.get('SELECT id, username, role FROM users WHERE id=?',[numericId]);
+      if (!user) return null;
+      const roles = await dbh.all(`
+        SELECT r.id, r.name, r.description
+        FROM user_roles ur
+        INNER JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id=?
+        ORDER BY r.name ASC
+      `,[numericId]);
+      const permissions = await dbh.all(`
+        SELECT DISTINCT rp.permission, rp.server_id
+        FROM role_permissions rp
+        INNER JOIN user_roles ur ON ur.role_id = rp.role_id
+        WHERE ur.user_id=?
+      `,[numericId]);
+      return { user, roles, permissions };
     }
   };
 }

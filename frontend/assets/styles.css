@@ -737,20 +737,109 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 
 .team-card-body { display: flex; flex-direction: column; gap: 18px; }
 
-.users { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
-.users li {
+.users { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+
+.user-entry {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 14px;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.user-entry-main { display: flex; flex-direction: column; gap: 6px; }
+.user-entry-main strong { font-size: 1.05rem; }
+
+.user-role-editor { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.user-role-editor label { width: 100%; }
+.user-role-select { min-width: 200px; }
+.user-role-editor button { align-self: flex-start; }
+
+.user-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.user-entry .badge { align-self: flex-start; }
+
+@media (min-width: 720px) {
+  .user-entry { flex-direction: row; align-items: flex-start; justify-content: space-between; }
+  .user-entry-main { flex: 1; }
+  .user-entry-actions { justify-content: flex-end; }
+}
+
+.roles-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 18px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.role-create { display: flex; flex-direction: column; gap: 12px; }
+.role-create .row { margin-top: 8px; }
+
+.roles-list { display: flex; flex-direction: column; gap: 16px; }
+
+.role-item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.role-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.users li .server-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.users li .server-actions button { font-size: 0.8rem; padding: 6px 10px; }
+.role-item-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.role-permissions {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.role-permissions li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.role-permissions li span { flex: 1; }
+.role-permissions button { flex-shrink: 0; }
+
+.role-permissions li.muted { display: block; }
+
+.role-permission-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.role-permission-select,
+.role-server-select {
+  min-width: 200px;
+}
+
+.roles-card p:not(.notice) { margin: 0; }
 
 .status-pill {
   display: inline-flex;

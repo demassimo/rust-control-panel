@@ -8,7 +8,15 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { db, initDb } from './db/index.js';
-import { authMiddleware, signToken, requireAdmin } from './auth.js';
+import { authMiddleware, signToken } from './auth.js';
+import {
+  PERMISSIONS,
+  PERMISSION_DEFINITIONS,
+  buildAccessContext,
+  hasPermission,
+  toUserPayload,
+  findPermissionDefinition
+} from './permissions.js';
 // index.js
 import {
   connectRcon,
@@ -67,6 +75,94 @@ await fs.mkdir(MAP_GLOBAL_CACHE_DIR, { recursive: true });
 await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
 const auth = authMiddleware(JWT_SECRET);
+
+async function attachAccess(req, res, next) {
+  if (!req.user?.uid) return res.status(401).json({ error: 'invalid_token' });
+  try {
+    const profile = await db.getUserAccessProfile(req.user.uid);
+    if (!profile?.user) return res.status(401).json({ error: 'not_found' });
+    const context = buildAccessContext(profile);
+    if (!context) return res.status(401).json({ error: 'not_found' });
+    req.access = context;
+    req.user = {
+      ...(req.user || {}),
+      username: context.username,
+      role: context.legacyRole,
+      uid: req.user.uid
+    };
+    next();
+  } catch (err) {
+    console.error('access_context_failed', err);
+    res.status(500).json({ error: 'access_error' });
+  }
+}
+
+function normalizeRoleIds(roleIds = []) {
+  const ids = [];
+  const seen = new Set();
+  for (const value of roleIds) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    const id = Math.trunc(numeric);
+    const token = String(id);
+    if (seen.has(token)) continue;
+    seen.add(token);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function requirePermission(permission, options = {}) {
+  return (req, res, next) => {
+    const context = req.access;
+    if (!context) return res.status(403).json({ error: 'forbidden' });
+    let serverId = null;
+    if (options.serverParam) {
+      const raw = req.params?.[options.serverParam];
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric)) return res.status(400).json({ error: 'invalid_id' });
+      serverId = Math.trunc(numeric);
+    } else if (typeof options.getServerId === 'function') {
+      const derived = options.getServerId(req);
+      if (derived != null) {
+        const numeric = Number(derived);
+        if (!Number.isFinite(numeric)) return res.status(400).json({ error: 'invalid_id' });
+        serverId = Math.trunc(numeric);
+      }
+    }
+    if (!hasPermission(context, permission, { serverId })) {
+      if (options.allowScoped && !serverId) {
+        const hasScoped = (context.permissions || []).some((entry) => {
+          return hasPermission(context, permission, { serverId: entry.serverId ?? null });
+        });
+        if (!hasScoped) return res.status(403).json({ error: 'forbidden' });
+      } else {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+    }
+    next();
+  };
+}
+
+function filterServersForUser(rows, context) {
+  if (!Array.isArray(rows) || !context) return [];
+  return rows.filter((row) => {
+    const id = Number(row?.id);
+    if (!Number.isFinite(id)) return false;
+    return hasPermission(context, PERMISSIONS.SERVERS_VIEW, { serverId: id });
+  });
+}
+
+function statusSnapshotFor(context) {
+  if (!context) return {};
+  const out = {};
+  for (const [id, payload] of statusMap.entries()) {
+    if (hasPermission(context, PERMISSIONS.SERVERS_VIEW, { serverId: id })) {
+      out[id] = payload;
+    }
+  }
+  return out;
+}
 const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
@@ -1045,8 +1141,11 @@ app.post('/api/login', async (req, res) => {
     if (!row) return res.status(401).json({ error: 'invalid_login' });
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid_login' });
+    const profile = await db.getUserAccessProfile(row.id);
+    const context = buildAccessContext(profile || { user: row, roles: [], permissions: [] });
+    const payload = toUserPayload(context) || { id: row.id, username: row.username, role: row.role, roles: [], permissions: [] };
     const token = signToken(row, JWT_SECRET);
-    res.json({ token, username: row.username, role: row.role, id: row.id });
+    res.json({ token, user: payload });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1069,17 +1168,19 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-app.get('/api/me', auth, async (req, res) => {
+app.get('/api/me', auth, attachAccess, async (req, res) => {
   try {
     const row = await db.getUser(req.user.uid);
     if (!row) return res.status(404).json({ error: 'not_found' });
-    res.json({ id: row.id, username: row.username, role: row.role, created_at: row.created_at });
+    const payload = toUserPayload(req.access) || { id: row.id, username: row.username, role: row.role, roles: [], permissions: [] };
+    if (row.created_at && typeof payload.created_at === 'undefined') payload.created_at = row.created_at;
+    res.json(payload);
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
 });
 
-app.get('/api/me/settings', auth, async (req, res) => {
+app.get('/api/me/settings', auth, attachAccess, async (req, res) => {
   try {
     const settings = await db.getUserSettings(req.user.uid);
     res.json(settings);
@@ -1088,7 +1189,7 @@ app.get('/api/me/settings', auth, async (req, res) => {
   }
 });
 
-app.post('/api/me/settings', auth, async (req, res) => {
+app.post('/api/me/settings', auth, attachAccess, async (req, res) => {
   const payload = req.body;
   if (!payload || typeof payload !== 'object') return res.status(400).json({ error: 'invalid_payload' });
   try {
@@ -1109,7 +1210,7 @@ app.post('/api/me/settings', auth, async (req, res) => {
   }
 });
 
-app.post('/api/password', auth, async (req, res) => {
+app.post('/api/password', auth, attachAccess, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'missing_fields' });
   if (newPassword.length < 8) return res.status(400).json({ error: 'weak_password' });
@@ -1127,7 +1228,7 @@ app.post('/api/password', auth, async (req, res) => {
   }
 });
 
-app.get('/api/users', auth, requireAdmin, async (req, res) => {
+app.get('/api/users', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
   try {
     res.json(await db.listUsers());
   } catch {
@@ -1135,8 +1236,8 @@ app.get('/api/users', auth, requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/users', auth, requireAdmin, async (req, res) => {
-  const { username, password, role = 'user' } = req.body || {};
+app.post('/api/users', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  const { username, password, role = 'user', roles: requestedRoles = [] } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
   if (!/^[a-z0-9_\-.]{3,32}$/i.test(username)) return res.status(400).json({ error: 'invalid_username' });
   if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
@@ -1144,15 +1245,26 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
   try {
     const existing = await db.getUserByUsername(username);
     if (existing) return res.status(409).json({ error: 'username_taken' });
+    let roleIds = [];
+    if (Array.isArray(requestedRoles) && requestedRoles.length) {
+      roleIds = normalizeRoleIds(requestedRoles);
+      if (roleIds.length) {
+        const available = await db.listRoles();
+        const known = new Set((available || []).map((r) => Number(r.id)));
+        for (const rid of roleIds) {
+          if (!known.has(rid)) return res.status(400).json({ error: 'unknown_role', roleId: rid });
+        }
+      }
+    }
     const hash = bcrypt.hashSync(password, 10);
-    const id = await db.createUser({ username, password_hash: hash, role });
-    res.status(201).json({ id, username, role });
+    const id = await db.createUser({ username, password_hash: hash, role, roles: roleIds });
+    res.status(201).json({ id, username, role, roles: roleIds });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
 });
 
-app.patch('/api/users/:id', auth, requireAdmin, async (req, res) => {
+app.patch('/api/users/:id', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
   const { role } = req.body || {};
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
@@ -1165,7 +1277,7 @@ app.patch('/api/users/:id', auth, requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/users/:id/password', auth, requireAdmin, async (req, res) => {
+app.post('/api/users/:id/password', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
   const { newPassword } = req.body || {};
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
@@ -1179,7 +1291,7 @@ app.post('/api/users/:id/password', auth, requireAdmin, async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
+app.delete('/api/users/:id', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   if (id === req.user.uid) return res.status(400).json({ error: 'cannot_delete_self' });
@@ -1197,26 +1309,169 @@ app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
   }
 });
 
+app.get('/api/roles', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  try {
+    const roles = await db.listRolesWithPermissions();
+    res.json({ roles, definitions: PERMISSION_DEFINITIONS });
+  } catch (err) {
+    console.error('list roles failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/roles', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  const { name, description = '' } = req.body || {};
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed) return res.status(400).json({ error: 'invalid_name' });
+  try {
+    const id = await db.createRole({ name: trimmed, description: typeof description === 'string' ? description.trim() : null });
+    const role = await db.getRole(id);
+    res.status(201).json(role);
+  } catch (err) {
+    if (err?.code === 'SQLITE_CONSTRAINT' || err?.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'role_exists' });
+    }
+    console.error('create role failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.patch('/api/roles/:id', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const updates = {};
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
+    const next = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+    if (!next) return res.status(400).json({ error: 'invalid_name' });
+    updates.name = next;
+  }
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'description')) {
+    const desc = req.body.description;
+    updates.description = typeof desc === 'string' ? desc.trim() : null;
+  }
+  try {
+    const role = await db.getRole(id);
+    if (!role) return res.status(404).json({ error: 'not_found' });
+    await db.updateRole(id, updates);
+    const nextRole = await db.getRole(id);
+    res.json(nextRole);
+  } catch (err) {
+    if (err?.code === 'SQLITE_CONSTRAINT' || err?.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'role_exists' });
+    }
+    console.error('update role failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/roles/:id', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  try {
+    const deleted = await db.deleteRole(id);
+    if (!deleted) return res.status(404).json({ error: 'not_found' });
+    res.json({ deleted });
+  } catch (err) {
+    console.error('delete role failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.put('/api/roles/:id/permissions', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const list = req.body?.permissions;
+  if (!Array.isArray(list)) return res.status(400).json({ error: 'invalid_permissions' });
+  try {
+    const role = await db.getRole(id);
+    if (!role) return res.status(404).json({ error: 'not_found' });
+    const normalized = [];
+    const seen = new Set();
+    const serverChecks = new Map();
+    for (const entry of list) {
+      const key = typeof entry?.permission === 'string' ? entry.permission.trim().toLowerCase() : '';
+      if (!key) continue;
+      const def = findPermissionDefinition(key);
+      if (!def) return res.status(400).json({ error: 'unknown_permission', permission: key });
+      let serverId = null;
+      if (Object.prototype.hasOwnProperty.call(entry, 'serverId')) serverId = entry.serverId;
+      else if (Object.prototype.hasOwnProperty.call(entry, 'server_id')) serverId = entry.server_id;
+      if (serverId != null) {
+        const numeric = Number(serverId);
+        if (!Number.isFinite(numeric)) return res.status(400).json({ error: 'invalid_server' });
+        if (!def.allowServerScope) return res.status(400).json({ error: 'permission_scope', permission: key });
+        const serverNumeric = Math.trunc(numeric);
+        if (!serverChecks.has(serverNumeric)) {
+          const exists = await db.getServer(serverNumeric);
+          if (!exists) return res.status(400).json({ error: 'unknown_server', serverId: serverNumeric });
+          serverChecks.set(serverNumeric, true);
+        }
+        serverId = serverNumeric;
+      } else {
+        serverId = null;
+      }
+      const token = `${key}:${serverId ?? 'global'}`;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      normalized.push({ permission: key, serverId });
+    }
+    await db.setRolePermissions(id, normalized);
+    const permissions = await db.listRolePermissions(id);
+    res.json({ permissions });
+  } catch (err) {
+    console.error('set role permissions failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.put('/api/users/:id/roles', auth, attachAccess, requirePermission(PERMISSIONS.USERS_MANAGE), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const roleIdsInput = req.body?.roles;
+  if (!Array.isArray(roleIdsInput)) return res.status(400).json({ error: 'invalid_roles' });
+  try {
+    const user = await db.getUser(id);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const roleIds = normalizeRoleIds(roleIdsInput);
+    if (roleIds.length) {
+      const available = await db.listRoles();
+      const known = new Set((available || []).map((r) => Number(r.id)));
+      for (const rid of roleIds) {
+        if (!known.has(rid)) return res.status(400).json({ error: 'unknown_role', roleId: rid });
+      }
+    }
+    await db.setUserRoles(id, roleIds);
+    const roles = await db.getUserRoles(id);
+    res.json({ roles });
+  } catch (err) {
+    console.error('set user roles failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 // --- Servers CRUD
-app.get('/api/servers', auth, async (req, res) => {
+app.get('/api/servers', auth, attachAccess, async (req, res) => {
   try {
     const rows = await db.listServers();
+    const allowed = filterServersForUser(rows, req.access);
     const sanitized = rows.map((row) => {
       if (!row || typeof row !== 'object') return row;
       const { password: _pw, ...rest } = row;
       return rest;
     });
-    res.json(sanitized);
+    const allowedIds = new Set((allowed || []).map((row) => row?.id));
+    const filtered = sanitized.filter((row) => allowedIds.has(row?.id));
+    res.json(filtered);
   } catch {
     res.status(500).json({ error: 'db_error' });
   }
 });
 
-app.get('/api/servers/status', auth, (req, res) => {
-  res.json(getStatusSnapshot());
+app.get('/api/servers/status', auth, attachAccess, (req, res) => {
+  res.json(statusSnapshotFor(req.access));
 });
 
-app.get('/api/servers/:id/status', auth, (req, res) => {
+app.get('/api/servers/:id/status', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_VIEW, { serverParam: 'id' }), (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   const status = statusMap.get(id);
@@ -1224,7 +1479,7 @@ app.get('/api/servers/:id/status', auth, (req, res) => {
   res.json(status);
 });
 
-app.post('/api/servers', auth, async (req, res) => {
+app.post('/api/servers', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_MANAGE), async (req, res) => {
   const { name, host, port, password, tls } = req.body || {};
   if (!name || !host || !port || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
@@ -1236,7 +1491,7 @@ app.post('/api/servers', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/servers/:id', auth, async (req, res) => {
+app.patch('/api/servers/:id', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_MANAGE, { serverParam: 'id' }), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   try {
@@ -1251,7 +1506,7 @@ app.patch('/api/servers/:id', auth, async (req, res) => {
   }
 });
 
-app.delete('/api/servers/:id', auth, async (req, res) => {
+app.delete('/api/servers/:id', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_MANAGE, { serverParam: 'id' }), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   try {
@@ -1265,7 +1520,7 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
   }
 });
 
-app.get('/api/servers/:id/live-map', auth, async (req, res) => {
+app.get('/api/servers/:id/live-map', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_MONITOR, { serverParam: 'id' }), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   try {
@@ -1395,7 +1650,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
   }
 });
 
-app.post('/api/servers/:id/map-image', auth, async (req, res) => {
+app.post('/api/servers/:id/map-image', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_MANAGE, { serverParam: 'id' }), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   const { image, mapKey } = req.body || {};
@@ -1436,7 +1691,7 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
   }
 });
 
-app.get('/api/servers/:id/map-image', auth, async (req, res) => {
+app.get('/api/servers/:id/map-image', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_MONITOR, { serverParam: 'id' }), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   try {
@@ -1451,7 +1706,7 @@ app.get('/api/servers/:id/map-image', auth, async (req, res) => {
 });
 
 // --- RCON
-app.post('/api/rcon/:id', auth, async (req, res) => {
+app.post('/api/rcon/:id', auth, attachAccess, requirePermission(PERMISSIONS.SERVERS_CONTROL, { serverParam: 'id' }), async (req, res) => {
   const { id } = req.params;
   const { cmd } = req.body || {};
   if (!cmd) return res.status(400).json({ error: 'missing_cmd' });
@@ -1467,7 +1722,7 @@ app.post('/api/rcon/:id', auth, async (req, res) => {
 });
 
 // --- Players & Steam sync
-app.get('/api/players', auth, async (req, res) => {
+app.get('/api/players', auth, attachAccess, requirePermission(PERMISSIONS.PLAYERS_VIEW), async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
   try {
@@ -1478,7 +1733,7 @@ app.get('/api/players', auth, async (req, res) => {
   }
 });
 
-app.get('/api/servers/:id/players', auth, async (req, res) => {
+app.get('/api/servers/:id/players', auth, attachAccess, requirePermission(PERMISSIONS.PLAYERS_VIEW, { serverParam: 'id' }), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
@@ -1493,7 +1748,7 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
   }
 });
 
-app.get('/api/players/:steamid', auth, async (req, res) => {
+app.get('/api/players/:steamid', auth, attachAccess, requirePermission(PERMISSIONS.PLAYERS_VIEW), async (req, res) => {
   try {
     const p = await db.getPlayer(req.params.steamid);
     if (!p) return res.status(404).json({ error: 'not_found' });
@@ -1504,7 +1759,7 @@ app.get('/api/players/:steamid', auth, async (req, res) => {
   }
 });
 
-app.post('/api/players/:steamid/event', auth, async (req, res) => {
+app.post('/api/players/:steamid/event', auth, attachAccess, requirePermission(PERMISSIONS.PLAYERS_MANAGE), async (req, res) => {
   const { steamid } = req.params;
   const { server_id, event, note } = req.body || {};
   if (!event) return res.status(400).json({ error: 'missing_event' });
@@ -1583,7 +1838,7 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
   return out;
 }
 
-app.post('/api/steam/sync', auth, async (req, res) => {
+app.post('/api/steam/sync', auth, attachAccess, requirePermission(PERMISSIONS.PLAYERS_MANAGE), async (req, res) => {
   const { steamids } = req.body || {};
   if (!Array.isArray(steamids) || steamids.length === 0) return res.status(400).json({ error: 'missing_steamids' });
   if (!process.env.STEAM_API_KEY) return res.status(400).json({ error: 'no_steam_api_key' });

@@ -1,4 +1,15 @@
 (() => {
+  const PERMISSIONS = {
+    SYSTEM_ADMIN: 'system.admin',
+    USERS_MANAGE: 'users.manage',
+    SERVERS_VIEW: 'servers.view',
+    SERVERS_MANAGE: 'servers.manage',
+    SERVERS_CONTROL: 'servers.control',
+    SERVERS_MONITOR: 'servers.monitor',
+    PLAYERS_VIEW: 'players.view',
+    PLAYERS_MANAGE: 'players.manage'
+  };
+
   const $ = (sel) => document.querySelector(sel);
 
   const serversEl = $('#servers');
@@ -32,6 +43,7 @@
   const svTLS = $('#svTLS');
   const btnSend = $('#btnSend');
   const cmdInput = $('#cmd');
+  const defaultCommandPlaceholder = cmdInput?.placeholder || '';
   const loginUsername = $('#username');
   const loginPassword = $('#password');
   const btnLogin = $('#btnLogin');
@@ -41,7 +53,13 @@
   const newUserName = $('#newUserName');
   const newUserPassword = $('#newUserPassword');
   const newUserRole = $('#newUserRole');
+  const newUserRoles = $('#newUserRoles');
   const btnCreateUser = $('#btnCreateUser');
+  const newRoleName = $('#newRoleName');
+  const newRoleDescription = $('#newRoleDescription');
+  const btnCreateRole = $('#btnCreateRole');
+  const roleFeedback = $('#roleFeedback');
+  const roleList = $('#roleList');
   const quickCommandsEl = $('#quickCommands');
   const rustMapsKeyInput = $('#rustMapsKey');
   const btnSaveSettings = $('#btnSaveSettings');
@@ -128,11 +146,76 @@
     allowRegistration: false,
     statusTimer: null,
     settings: {},
-    activePanel: 'dashboard'
+    activePanel: 'dashboard',
+    roles: [],
+    permissionDefinitions: []
   };
 
   let socket = null;
   let addServerPinned = false;
+
+  function normalisePermissionEntry(entry) {
+    const key = typeof entry?.permission === 'string' ? entry.permission.trim().toLowerCase() : '';
+    if (!key) return null;
+    let serverId = null;
+    if (Object.prototype.hasOwnProperty.call(entry || {}, 'serverId')) {
+      const numeric = Number(entry.serverId);
+      if (Number.isFinite(numeric)) serverId = Math.trunc(numeric);
+    } else if (Object.prototype.hasOwnProperty.call(entry || {}, 'server_id')) {
+      const numeric = Number(entry.server_id);
+      if (Number.isFinite(numeric)) serverId = Math.trunc(numeric);
+    }
+    return { key, serverId };
+  }
+
+  function permissionMatches(pattern, target) {
+    if (!pattern) return false;
+    if (pattern === '*' || pattern === target) return true;
+    const patternParts = pattern.split('.');
+    const targetParts = target.split('.');
+    for (let i = 0; i < patternParts.length; i += 1) {
+      const currentPattern = patternParts[i];
+      const currentTarget = targetParts[i];
+      if (currentPattern === '*') return true;
+      if (typeof currentTarget === 'undefined') return false;
+      if (currentPattern !== currentTarget) return false;
+    }
+    return patternParts.length === targetParts.length;
+  }
+
+  function refreshPermissionCache(user) {
+    if (!user) return;
+    const entries = Array.isArray(user.permissions) ? user.permissions : [];
+    user._normalizedPermissions = entries.map((entry) => normalisePermissionEntry(entry)).filter(Boolean);
+  }
+
+  function can(permission, serverId = null) {
+    const user = state.currentUser;
+    if (!user) return false;
+    const key = typeof permission === 'string' ? permission.trim().toLowerCase() : '';
+    if (!key) return false;
+    if ((user.role || '').toLowerCase() === 'admin') return true;
+    const entries = Array.isArray(user._normalizedPermissions) ? user._normalizedPermissions : [];
+    const targetServer = Number.isFinite(Number(serverId)) ? Math.trunc(Number(serverId)) : null;
+    for (const entry of entries) {
+      if (entry.key === PERMISSIONS.SYSTEM_ADMIN || entry.key === '*') return true;
+      if (!permissionMatches(entry.key, key)) continue;
+      if (entry.serverId == null) return true;
+      if (targetServer != null && entry.serverId === targetServer) return true;
+    }
+    return false;
+  }
+
+  function setCurrentUser(user) {
+    if (user) {
+      if (!Array.isArray(user.permissions)) user.permissions = [];
+      if (!Array.isArray(user.roles)) user.roles = [];
+      refreshPermissionCache(user);
+    }
+    state.currentUser = user || null;
+    updateServerManagementUi();
+    updateCommandAccess();
+  }
 
   function setProfileMenuOpen(open) {
     if (!userBox) return;
@@ -161,9 +244,59 @@
 
   function setAddServerPromptState(open) {
     if (!addServerPrompt) return;
+    const manageServers = can(PERMISSIONS.SERVERS_MANAGE);
+    if (!manageServers) {
+      addServerPrompt.classList.add('hidden');
+      addServerPrompt.classList.remove('open');
+      addServerPrompt.setAttribute('aria-hidden', 'true');
+      addServerPrompt.setAttribute('aria-expanded', 'false');
+      return;
+    }
     const active = !!open;
+    addServerPrompt.classList.remove('hidden');
+    addServerPrompt.setAttribute('aria-hidden', 'false');
     addServerPrompt.setAttribute('aria-expanded', active ? 'true' : 'false');
     addServerPrompt.classList.toggle('open', active);
+  }
+
+  function updateServerManagementUi() {
+    const manageServers = can(PERMISSIONS.SERVERS_MANAGE);
+    if (btnAddServer) {
+      btnAddServer.disabled = !manageServers;
+      btnAddServer.title = manageServers ? 'Save server' : 'You do not have permission to add servers.';
+    }
+    if (addServerCard) {
+      if (!manageServers) {
+        addServerCard.classList.add('hidden');
+        addServerPinned = false;
+      }
+      const hidden = !manageServers || addServerCard.classList.contains('hidden');
+      addServerCard.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    }
+    if (!manageServers) {
+      setAddServerPromptState(false);
+    } else if (addServerCard && !addServerCard.classList.contains('hidden')) {
+      setAddServerPromptState(true);
+    } else {
+      setAddServerPromptState(false);
+    }
+  }
+
+  function updateCommandAccess() {
+    const serverId = state.currentServerId;
+    const hasServer = serverId != null;
+    const canControl = hasServer
+      ? can(PERMISSIONS.SERVERS_CONTROL, serverId)
+      : can(PERMISSIONS.SERVERS_CONTROL);
+    const disabled = !hasServer || !canControl;
+    if (cmdInput) {
+      let placeholder = defaultCommandPlaceholder;
+      if (!hasServer) placeholder = 'Select a server to run commands.';
+      else if (!canControl) placeholder = 'You do not have permission to run commands on this server.';
+      cmdInput.disabled = disabled;
+      cmdInput.placeholder = disabled ? placeholder : defaultCommandPlaceholder;
+    }
+    if (btnSend) btnSend.disabled = disabled;
   }
 
   const moduleBus = (() => {
@@ -351,6 +484,7 @@
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
     no_server_selected: 'Select a server before sending commands.',
+    forbidden: 'You do not have permission to perform that action.',
     invalid_payload: 'The request payload was not accepted.',
     missing_image: 'Choose an image before uploading.',
     invalid_image: 'The selected image could not be processed.',
@@ -521,7 +655,7 @@
   }
 
   function showAddServerCard(options = {}) {
-    if (!addServerCard) return;
+    if (!addServerCard || !can(PERMISSIONS.SERVERS_MANAGE)) return;
     const pinned = !!options.pinned;
     if (pinned) addServerPinned = true;
     addServerCard.classList.remove('hidden');
@@ -538,7 +672,7 @@
   }
 
   function toggleAddServerCardVisibility() {
-    if (!addServerCard) return;
+    if (!addServerCard || !can(PERMISSIONS.SERVERS_MANAGE)) return;
     const willOpen = addServerCard.classList.contains('hidden');
     addServerPinned = willOpen;
     addServerCard.classList.toggle('hidden', !willOpen);
@@ -556,6 +690,7 @@
     moduleBus.emit('server:disconnected', { serverId: previous, reason });
     state.currentServerId = null;
     highlightSelectedServer();
+    updateCommandAccess();
   }
 
   function coerceNumber(value) {
@@ -1216,24 +1351,39 @@
       const list = await api('/api/servers');
       serversEl.innerHTML = '';
       state.serverItems.clear();
-      if (addServerPrompt) {
+      const manageServers = can(PERMISSIONS.SERVERS_MANAGE);
+      if (addServerPrompt && manageServers) {
         serversEl.appendChild(addServerPrompt);
-        setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));
       }
+      setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));
       const statuses = await fetchServerStatuses();
       for (const server of list) {
         const status = statuses?.[server.id] || statuses?.[String(server.id)];
         renderServer(server, status);
       }
+      if (state.currentServerId != null && !state.serverItems.has(String(state.currentServerId))) {
+        leaveCurrentServer('removed');
+      }
       const hasServers = list.length > 0;
+      if (serversEmpty) {
+        serversEmpty.textContent = manageServers
+          ? 'No servers added yet. Connect your first Rust server to get started.'
+          : 'No servers are currently shared with your account.';
+      }
       serversEmpty?.classList.toggle('hidden', hasServers);
       if (!hasServers) {
-        showAddServerCard();
-      } else if (!addServerPinned) {
+        if (manageServers) {
+          showAddServerCard();
+        } else {
+          hideAddServerCard({ force: true });
+        }
+      } else if (!addServerPinned || !manageServers) {
         hideAddServerCard();
       }
       highlightSelectedServer();
+      renderRoles();
       moduleBus.emit('servers:updated', { servers: list });
+      updateServerManagementUi();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         handleUnauthorized();
@@ -1263,6 +1413,7 @@
     }
     state.currentServerId = numericId;
     highlightSelectedServer();
+    updateCommandAccess();
     ui.clearConsole();
     const name = entry?.data?.name || `Server #${numericId}`;
     ui.log(`Connecting to ${name}...`);
@@ -1318,7 +1469,10 @@
       if (profileUsername) profileUsername.textContent = user?.username || '—';
       if (profileRole) {
         const roleLabel = user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : '—';
-        profileRole.textContent = roleLabel;
+        const extraRoles = Array.isArray(user?.roles) && user.roles.length
+          ? ` • ${user.roles.map((r) => r.name).join(', ')}`
+          : '';
+        profileRole.textContent = roleLabel + extraRoles;
       }
       if (!user) {
         return;
@@ -1338,7 +1492,11 @@
 
       const descriptor = document.createElement('span');
       descriptor.className = 'menu-description';
-      descriptor.textContent = user.role === 'admin' ? 'Administrator access' : 'Standard access';
+      const baseDescriptor = user.role === 'admin' ? 'Administrator access' : 'Standard access';
+      const extraDescriptor = Array.isArray(user.roles) && user.roles.length
+        ? ` • Roles: ${user.roles.map((r) => r.name).join(', ')}`
+        : '';
+      descriptor.textContent = baseDescriptor + extraDescriptor;
       userBox.appendChild(descriptor);
 
       const actions = document.createElement('div');
@@ -1409,13 +1567,15 @@
   function logout() {
     hideWorkspace('logout');
     state.TOKEN = '';
-    state.currentUser = null;
+    setCurrentUser(null);
     stopStatusPolling();
     disconnectSocket();
     localStorage.removeItem('token');
     state.serverItems.clear();
     state.settings = {};
     state.activePanel = 'dashboard';
+    state.roles = [];
+    state.permissionDefinitions = [];
     serversEl.innerHTML = '';
     ui.clearConsole();
     ui.setUser(null);
@@ -1489,24 +1649,85 @@
   }
 
   async function loadUsers() {
-    if (!state.currentUser || state.currentUser.role !== 'admin') return;
+    if (!can(PERMISSIONS.USERS_MANAGE)) return;
     hideNotice(userFeedback);
     try {
       const list = await api('/api/users');
       userList.innerHTML = '';
+      const availableRoles = Array.isArray(state.roles) ? state.roles : [];
+      const size = Math.min(6, Math.max(availableRoles.length, 3));
       for (const user of list) {
         const li = document.createElement('li');
+        li.className = 'user-entry';
         const left = document.createElement('div');
+        left.className = 'user-entry-main';
         const strong = document.createElement('strong');
         strong.textContent = user.username;
         left.appendChild(strong);
-        const meta = document.createElement('div');
-        meta.className = 'muted small';
-        meta.textContent = `Role: ${user.role}`;
-        left.appendChild(meta);
+        const baseMeta = document.createElement('div');
+        baseMeta.className = 'muted small';
+        const baseRole = user.role === 'admin' ? 'Admin' : 'User';
+        baseMeta.textContent = `Base role: ${baseRole}`;
+        left.appendChild(baseMeta);
+        if (Array.isArray(user.roles) && user.roles.length) {
+          const customMeta = document.createElement('div');
+          customMeta.className = 'muted small';
+          customMeta.textContent = 'Custom roles: ' + user.roles.map((r) => r.name).join(', ');
+          left.appendChild(customMeta);
+        }
+        const rolesWrap = document.createElement('div');
+        rolesWrap.className = 'user-role-editor';
+        const rolesLabel = document.createElement('label');
+        rolesLabel.textContent = 'Assign roles';
+        const select = document.createElement('select');
+        select.multiple = true;
+        select.size = size;
+        select.className = 'user-role-select';
+        const selectedIds = new Set((user.roles || []).map((r) => Number(r.id)));
+        for (const role of availableRoles) {
+          const option = document.createElement('option');
+          option.value = role.id;
+          option.textContent = role.name;
+          if (selectedIds.has(Number(role.id))) option.selected = true;
+          select.appendChild(option);
+        }
+        rolesLabel.appendChild(select);
+        rolesWrap.appendChild(rolesLabel);
+        if (!availableRoles.length) {
+          const hint = document.createElement('p');
+          hint.className = 'muted small';
+          hint.textContent = 'Create a custom role to assign granular permissions.';
+          rolesWrap.appendChild(hint);
+          select.disabled = true;
+        }
+        const saveRolesBtn = document.createElement('button');
+        saveRolesBtn.className = 'ghost small';
+        saveRolesBtn.textContent = 'Save roles';
+        if (!availableRoles.length) {
+          saveRolesBtn.disabled = true;
+          saveRolesBtn.title = 'Create a custom role first.';
+        }
+        saveRolesBtn.onclick = async () => {
+          if (!availableRoles.length) return;
+          const selected = Array.from(select.options)
+            .filter((opt) => opt.selected)
+            .map((opt) => Number(opt.value))
+            .filter((value) => Number.isFinite(value));
+          try {
+            await api(`/api/users/${user.id}/roles`, { roles: selected }, 'PUT');
+            showNotice(userFeedback, `Updated roles for ${user.username}`, 'success');
+            loadUsers();
+          } catch (err) {
+            if (errorCode(err) === 'unauthorized') handleUnauthorized();
+            else showNotice(userFeedback, describeError(err), 'error');
+          }
+        };
+        rolesWrap.appendChild(saveRolesBtn);
+        left.appendChild(rolesWrap);
+
         const right = document.createElement('div');
-        right.className = 'server-actions';
-        if (user.id === state.currentUser.id) {
+        right.className = 'user-entry-actions';
+        if (user.id === state.currentUser?.id) {
           const badge = document.createElement('span');
           badge.className = 'badge';
           badge.textContent = 'You';
@@ -1514,11 +1735,11 @@
         } else {
           const roleBtn = document.createElement('button');
           roleBtn.className = 'ghost small';
-          roleBtn.textContent = user.role === 'admin' ? 'Make user' : 'Promote to admin';
+          roleBtn.textContent = user.role === 'admin' ? 'Demote to user' : 'Promote to admin';
           roleBtn.onclick = async () => {
             try {
               await api(`/api/users/${user.id}`, { role: user.role === 'admin' ? 'user' : 'admin' }, 'PATCH');
-              showNotice(userFeedback, 'Updated role for ' + user.username, 'success');
+              showNotice(userFeedback, 'Updated base role for ' + user.username, 'success');
               loadUsers();
             } catch (err) {
               if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -1565,19 +1786,257 @@
         li.appendChild(right);
         userList.appendChild(li);
       }
+      if (!availableRoles.length) {
+        const emptyHint = document.createElement('p');
+        emptyHint.className = 'muted small';
+        emptyHint.textContent = 'Create custom roles to assign granular permissions.';
+        userList.appendChild(emptyHint);
+      }
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else showNotice(userFeedback, describeError(err), 'error');
     }
   }
 
-  function toggleUserCard() {
-    if (state.currentUser?.role === 'admin') {
-      userCard.classList.remove('hidden');
+  async function loadRoles() {
+    if (!can(PERMISSIONS.USERS_MANAGE)) {
+      state.roles = [];
+      state.permissionDefinitions = [];
+      renderRoleOptions();
+      renderRoles();
+      return;
+    }
+    try {
+      const payload = await api('/api/roles');
+      state.roles = Array.isArray(payload?.roles) ? payload.roles : [];
+      state.permissionDefinitions = Array.isArray(payload?.definitions) ? payload.definitions : [];
+      renderRoleOptions();
+      renderRoles();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else console.error('Failed to load roles', err);
+    }
+  }
+
+  function renderRoleOptions() {
+    if (!newUserRoles) return;
+    newUserRoles.innerHTML = '';
+    const roles = Array.isArray(state.roles) ? state.roles : [];
+    newUserRoles.disabled = roles.length === 0;
+    newUserRoles.size = Math.min(6, Math.max(roles.length, 3));
+    if (!roles.length) {
+      const placeholder = document.createElement('option');
+      placeholder.disabled = true;
+      placeholder.textContent = 'No custom roles yet';
+      newUserRoles.appendChild(placeholder);
+      return;
+    }
+    for (const role of roles) {
+      const option = document.createElement('option');
+      option.value = role.id;
+      option.textContent = role.name;
+      newUserRoles.appendChild(option);
+    }
+  }
+
+  async function saveRolePermissions(roleId, permissions, roleName = 'role') {
+    try {
+      const response = await api(`/api/roles/${roleId}/permissions`, { permissions }, 'PUT');
+      const match = state.roles.find((r) => Number(r.id) === Number(roleId));
+      if (match) match.permissions = Array.isArray(response?.permissions) ? response.permissions : [];
+      renderRoles();
       loadUsers();
+      showNotice(roleFeedback, `Updated permissions for ${roleName}.`, 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  function renderRoles() {
+    if (!roleList) return;
+    roleList.innerHTML = '';
+    if (!can(PERMISSIONS.USERS_MANAGE)) return;
+    const roles = Array.isArray(state.roles) ? state.roles : [];
+    const definitions = Array.isArray(state.permissionDefinitions) ? state.permissionDefinitions : [];
+    const servers = getServerList();
+    if (!roles.length) {
+      const empty = document.createElement('p');
+      empty.className = 'muted small';
+      empty.textContent = 'No custom roles defined yet.';
+      roleList.appendChild(empty);
+      return;
+    }
+    const findDefinition = (key) => definitions.find((def) => (def.key || '').toLowerCase() === key.toLowerCase()) || null;
+    const readServerId = (entry) => {
+      if (!entry) return null;
+      const raw = entry.serverId ?? entry.server_id;
+      const numeric = Number(raw);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+    const hasDefinitions = definitions.length > 0;
+    if (!hasDefinitions) {
+      const info = document.createElement('p');
+      info.className = 'muted small';
+      info.textContent = 'Permission catalog unavailable. Existing permissions can be removed, but new ones cannot be added until definitions load.';
+      roleList.appendChild(info);
+    }
+    for (const role of roles) {
+      const card = document.createElement('div');
+      card.className = 'role-item';
+      const header = document.createElement('div');
+      header.className = 'role-item-header';
+      const title = document.createElement('strong');
+      title.textContent = role.name;
+      header.appendChild(title);
+      const actions = document.createElement('div');
+      actions.className = 'role-item-actions';
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'ghost small danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = async () => {
+        if (!confirm(`Delete ${role.name}? Users assigned to it will lose its permissions.`)) return;
+        try {
+          await api(`/api/roles/${role.id}`, null, 'DELETE');
+          showNotice(roleFeedback, `Deleted ${role.name}.`, 'success');
+          await loadRoles();
+          loadUsers();
+        } catch (err) {
+          if (errorCode(err) === 'unauthorized') handleUnauthorized();
+          else showNotice(roleFeedback, describeError(err), 'error');
+        }
+      };
+      actions.appendChild(deleteBtn);
+      header.appendChild(actions);
+      card.appendChild(header);
+      if (role.description) {
+        const desc = document.createElement('p');
+        desc.className = 'muted small';
+        desc.textContent = role.description;
+        card.appendChild(desc);
+      }
+      const permList = document.createElement('ul');
+      permList.className = 'role-permissions';
+      if (!Array.isArray(role.permissions) || role.permissions.length === 0) {
+        const emptyPerm = document.createElement('li');
+        emptyPerm.className = 'muted small';
+        emptyPerm.textContent = 'No permissions assigned.';
+        permList.appendChild(emptyPerm);
+      } else {
+        for (const entry of role.permissions) {
+          const info = findDefinition(entry.permission) || { label: entry.permission, description: '' };
+          const entryServerId = readServerId(entry);
+          const item = document.createElement('li');
+          const label = document.createElement('span');
+          const serverLabel = entryServerId != null
+            ? (servers.find((srv) => Number(srv?.id) === Number(entryServerId))?.name || `Server #${entryServerId}`)
+            : 'All servers';
+          label.textContent = `${info.label || entry.permission} — ${serverLabel}`;
+          item.appendChild(label);
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'ghost small';
+          removeBtn.textContent = 'Remove';
+          removeBtn.onclick = () => {
+            const next = (role.permissions || []).filter((perm) => {
+              const permServerId = readServerId(perm);
+              return !(perm.permission === entry.permission && permServerId === entryServerId);
+            });
+            saveRolePermissions(role.id, next, role.name);
+          };
+          item.appendChild(removeBtn);
+          permList.appendChild(item);
+        }
+      }
+      card.appendChild(permList);
+
+      const editor = document.createElement('div');
+      editor.className = 'role-permission-editor';
+      const permSelect = document.createElement('select');
+      permSelect.className = 'role-permission-select';
+      if (hasDefinitions) {
+        for (const def of definitions) {
+          const opt = document.createElement('option');
+          opt.value = def.key;
+          opt.textContent = def.label;
+          permSelect.appendChild(opt);
+        }
+      } else {
+        permSelect.disabled = true;
+        permSelect.title = 'Permission catalog unavailable.';
+      }
+      const serverSelect = document.createElement('select');
+      serverSelect.className = 'role-server-select';
+      const allOption = document.createElement('option');
+      allOption.value = '';
+      allOption.textContent = 'All servers';
+      serverSelect.appendChild(allOption);
+      for (const server of servers) {
+        const opt = document.createElement('option');
+        opt.value = server.id;
+        opt.textContent = server.name;
+        serverSelect.appendChild(opt);
+      }
+      const updateServerSelect = () => {
+        if (!hasDefinitions) {
+          serverSelect.value = '';
+          serverSelect.disabled = true;
+          return;
+        }
+        const selectedDef = findDefinition(permSelect.value);
+        if (!selectedDef || !selectedDef.allowServerScope) {
+          serverSelect.value = '';
+          serverSelect.disabled = true;
+        } else {
+          serverSelect.disabled = false;
+        }
+      };
+      permSelect.addEventListener('change', updateServerSelect);
+      updateServerSelect();
+      const addBtn = document.createElement('button');
+      addBtn.className = 'ghost small';
+      addBtn.textContent = 'Add permission';
+      if (!hasDefinitions) {
+        addBtn.disabled = true;
+        addBtn.title = 'Permission catalog unavailable.';
+      }
+      addBtn.onclick = () => {
+        const key = permSelect.value;
+        if (!key) return;
+        const selectedDef = findDefinition(key);
+        let serverId = null;
+        if (selectedDef?.allowServerScope && !serverSelect.disabled && serverSelect.value) {
+          serverId = Number(serverSelect.value);
+        }
+        const exists = (role.permissions || []).some((perm) => {
+          const permServerId = readServerId(perm);
+          return perm.permission === key && ((permServerId ?? null) === (serverId ?? null));
+        });
+        if (exists) {
+          showNotice(roleFeedback, 'Permission already assigned.', 'error');
+          return;
+        }
+        const next = [...(role.permissions || []), { permission: key, serverId: serverId ?? null }];
+        saveRolePermissions(role.id, next, role.name);
+      };
+      editor.appendChild(permSelect);
+      editor.appendChild(serverSelect);
+      editor.appendChild(addBtn);
+      card.appendChild(editor);
+      roleList.appendChild(card);
+    }
+  }
+
+  function toggleUserCard() {
+    if (can(PERMISSIONS.USERS_MANAGE)) {
+      userCard.classList.remove('hidden');
+      loadRoles().then(() => loadUsers());
     } else {
       userCard.classList.add('hidden');
       userList.innerHTML = '';
+      state.roles = [];
+      state.permissionDefinitions = [];
+      renderRoleOptions();
+      renderRoles();
     }
   }
 
@@ -1620,9 +2079,9 @@
     }
     try {
       const me = await api('/api/me');
-      state.currentUser = me;
+      setCurrentUser(me);
       await loadSettings();
-      ui.setUser(me);
+      ui.setUser(state.currentUser);
       ui.showApp();
       ensureSocket();
       await refreshServers();
@@ -1657,7 +2116,8 @@
       const data = await publicJson('/api/login', { method: 'POST', body: { username, password } });
       state.TOKEN = data.token;
       localStorage.setItem('token', state.TOKEN);
-      state.currentUser = { id: data.id, username: data.username, role: data.role };
+      const loginUser = data.user || (typeof data.id !== 'undefined' ? { id: data.id, username: data.username, role: data.role, roles: [], permissions: [] } : null);
+      setCurrentUser(loginUser);
       await loadSettings();
       ui.setUser(state.currentUser);
       ui.showApp();
@@ -1710,6 +2170,10 @@
   }
 
   async function addServer() {
+    if (!can(PERMISSIONS.SERVERS_MANAGE)) {
+      ui.log('You do not have permission to add servers.');
+      return;
+    }
     const name = svName?.value.trim();
     const host = svHost?.value.trim();
     const port = parseInt(svPort?.value || '0', 10);
@@ -1739,8 +2203,13 @@
   async function runRconCommand(command) {
     const cmd = (command || '').toString().trim();
     if (!cmd) throw new Error('missing_command');
-    if (state.currentServerId == null) throw new Error('no_server_selected');
-    return await api(`/api/rcon/${state.currentServerId}`, { cmd }, 'POST');
+    const serverId = state.currentServerId;
+    if (serverId == null) throw new Error('no_server_selected');
+    if (!can(PERMISSIONS.SERVERS_CONTROL, serverId)) {
+      ui.log('You do not have permission to run commands on this server.');
+      throw new Error('forbidden');
+    }
+    return await api(`/api/rcon/${serverId}`, { cmd }, 'POST');
   }
 
   async function sendCommand() {
@@ -1760,6 +2229,7 @@
         ui.log('Select a server before sending commands.');
         return;
       }
+      if (errorCode(err) === 'forbidden') return;
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else ui.log('Command failed: ' + describeError(err));
     }
@@ -1812,11 +2282,15 @@
     addServerPrompt?.addEventListener('click', () => toggleAddServerCardVisibility());
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     btnCreateUser?.addEventListener('click', async () => {
-      if (state.currentUser?.role !== 'admin') return;
+      if (!can(PERMISSIONS.USERS_MANAGE)) return;
       hideNotice(userFeedback);
       const username = newUserName?.value.trim();
       const password = newUserPassword?.value || '';
       const role = newUserRole?.value || 'user';
+      const extraRoles = Array.from(newUserRoles?.options || [])
+        .filter((opt) => opt.selected)
+        .map((opt) => Number(opt.value))
+        .filter((value) => Number.isFinite(value));
       if (!username || !password) {
         showNotice(userFeedback, describeError('missing_fields'), 'error');
         return;
@@ -1826,15 +2300,39 @@
         return;
       }
       try {
-        await api('/api/users', { username, password, role }, 'POST');
+        await api('/api/users', { username, password, role, roles: extraRoles }, 'POST');
         showNotice(userFeedback, 'Created user ' + username, 'success');
         if (newUserName) newUserName.value = '';
         if (newUserPassword) newUserPassword.value = '';
         if (newUserRole) newUserRole.value = 'user';
+        if (newUserRoles) {
+          Array.from(newUserRoles.options).forEach((opt) => { opt.selected = false; });
+        }
         loadUsers();
       } catch (err) {
         if (errorCode(err) === 'unauthorized') handleUnauthorized();
         else showNotice(userFeedback, describeError(err), 'error');
+      }
+    });
+    btnCreateRole?.addEventListener('click', async () => {
+      if (!can(PERMISSIONS.USERS_MANAGE)) return;
+      hideNotice(roleFeedback);
+      const name = newRoleName?.value.trim();
+      const description = newRoleDescription?.value.trim() || '';
+      if (!name) {
+        showNotice(roleFeedback, 'Role name is required.', 'error');
+        return;
+      }
+      try {
+        await api('/api/roles', { name, description }, 'POST');
+        showNotice(roleFeedback, `Created role ${name}.`, 'success');
+        if (newRoleName) newRoleName.value = '';
+        if (newRoleDescription) newRoleDescription.value = '';
+        await loadRoles();
+        loadUsers();
+      } catch (err) {
+        if (errorCode(err) === 'unauthorized') handleUnauthorized();
+        else showNotice(roleFeedback, describeError(err), 'error');
       }
     });
     setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));

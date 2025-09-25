@@ -125,6 +125,9 @@
                   <option value="admin">Admin</option>
                 </select>
               </label>
+              <label>Additional roles
+                <select id="newUserRoles" multiple size="4"></select>
+              </label>
               <div class="row">
                 <button id="btnCreateUser" class="accent">Create user</button>
               </div>
@@ -132,6 +135,18 @@
             </div>
             <h4>Existing users</h4>
             <ul id="userList" class="users"></ul>
+            <h4>Custom roles</h4>
+            <div id="roleManager" class="roles-card">
+              <div class="role-create">
+                <input id="newRoleName" placeholder="Role name">
+                <input id="newRoleDescription" placeholder="Description (optional)">
+                <div class="row">
+                  <button id="btnCreateRole" class="ghost small">Create role</button>
+                </div>
+                <p id="roleFeedback" class="notice hidden"></p>
+              </div>
+              <div id="roleList" class="roles-list"></div>
+            </div>
           </div>
         </aside>
       </main>
