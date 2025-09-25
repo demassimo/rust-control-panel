@@ -14,13 +14,19 @@
     if (!player) return;
     const profile = player.steamProfile || {};
     const displayName = profile.persona || player.displayName || player.DisplayName || player.steamId || player.SteamID || 'Player';
-    const steamProfileUrl = profile.profileUrl;
     const steamIdValue = player.steamId || player.SteamID || '';
+    const steamProfileUrl = profile.profileUrl || (steamIdValue ? `https://steamcommunity.com/profiles/${encodeURIComponent(steamIdValue)}` : '');
     const serverArmourUrl = steamIdValue ? `https://serverarmour.com/profile/${encodeURIComponent(steamIdValue)}` : '';
     const playtimeText = formatPlaytime(profile.rustPlaytimeMinutes, profile.visibility);
     const vacText = profile.vacBanned ? 'Yes' : 'No';
     const gameBanCount = Number(profile.gameBans) > 0 ? Number(profile.gameBans) : 0;
-    const lastBan = Number.isFinite(Number(profile.daysSinceLastBan)) ? `${profile.daysSinceLastBan} day${profile.daysSinceLastBan === 1 ? '' : 's'} ago` : '—';
+    const rawDaysSinceBan = Number(profile.daysSinceLastBan);
+    const hasBanAge = Number.isFinite(rawDaysSinceBan) && rawDaysSinceBan >= 0;
+    const lastBan = hasBanAge
+      ? rawDaysSinceBan === 0
+        ? 'Today'
+        : `${rawDaysSinceBan} day${rawDaysSinceBan === 1 ? '' : 's'} ago`
+      : '—';
     const ipText = player.ip ? `${player.ip}${player.port ? ':' + player.port : ''}` : 'Hidden';
     const position = player.position || player.Position || {};
     const positionText = `${Math.round(position.x ?? 0)}, ${Math.round(position.z ?? 0)}`;
