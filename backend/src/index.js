@@ -86,6 +86,7 @@ function recordStatus(id, data) {
   const payload = { id: key, ...data };
   statusMap.set(key, payload);
   io.to(`srv:${key}`).emit('status', payload);
+  io.emit('status-map', { [key]: payload });
   return payload;
 }
 
@@ -333,11 +334,18 @@ function normaliseServerPlayer(row) {
     const date = parseDateLike(val);
     return date ? date.toISOString() : null;
   };
+  const ip = typeof row.last_ip === 'string' && row.last_ip
+    ? row.last_ip
+    : (typeof row.lastIp === 'string' && row.lastIp ? row.lastIp : null);
+  const portRaw = row.last_port ?? row.lastPort;
+  const portNum = Number(portRaw);
   return {
     server_id: Number.isFinite(serverId) ? serverId : null,
     display_name: row.display_name || row.displayName || base.persona || base.steamid || '',
     first_seen: toIso(row.first_seen || row.firstSeen),
     last_seen: toIso(row.last_seen || row.lastSeen),
+    last_ip: ip || null,
+    last_port: Number.isFinite(portNum) ? portNum : null,
     ...base
   };
 }
@@ -498,24 +506,67 @@ async function syncServerPlayerDirectory(serverId, players) {
   const numericId = Number(serverId);
   if (!Number.isFinite(numericId) || !Array.isArray(players)) return;
   const seenAt = new Date().toISOString();
-  const tasks = [];
+  const writes = [];
+  const toNumber = (val) => {
+    if (val === null || typeof val === 'undefined') return null;
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
   for (const player of players) {
     const steamId = String(player?.steamId || '').trim();
     if (!steamId) continue;
     const displayName = player.displayName || player.persona || player.steamProfile?.persona || null;
-    tasks.push(db.recordServerPlayer({
-      server_id: numericId,
-      steamid: steamId,
-      display_name: displayName,
-      seen_at: seenAt
-    }));
+    const ip = typeof player.ip === 'string' && player.ip ? player.ip : null;
+    const port = toNumber(player.port);
+    if (typeof db.recordServerPlayer === 'function') {
+      writes.push(db.recordServerPlayer({
+        server_id: numericId,
+        steamid: steamId,
+        display_name: displayName,
+        seen_at: seenAt,
+        ip,
+        port
+      }));
+    }
+    if (typeof db.upsertPlayer === 'function') {
+      const profile = player.steamProfile || null;
+      if (profile) {
+        const payload = {
+          steamid: steamId,
+          persona: profile.persona || displayName || null,
+          avatar: profile.avatar || null,
+          country: profile.country || null,
+          profileurl: profile.profileUrl || null,
+          vac_banned: profile.vacBanned ? 1 : 0,
+          game_bans: toNumber(profile.gameBans),
+          last_ban_days: toNumber(profile.daysSinceLastBan),
+          visibility: toNumber(profile.visibility),
+          rust_playtime_minutes: toNumber(profile.rustPlaytimeMinutes),
+          playtime_updated_at: profile.playtimeUpdatedAt || null
+        };
+        writes.push(db.upsertPlayer(payload));
+      } else if (displayName) {
+        writes.push(db.upsertPlayer({ steamid: steamId, persona: displayName }));
+      }
+    }
   }
-  if (tasks.length > 0) {
+  if (writes.length > 0) {
     try {
-      await Promise.all(tasks);
+      await Promise.all(writes);
     } catch (err) {
       console.warn('Failed to sync server player directory', err);
     }
+  }
+}
+
+async function processMonitorPlayerListSnapshot(serverId, message) {
+  try {
+    let players = parsePlayerListMessage(message);
+    if (!Array.isArray(players) || players.length === 0) return;
+    players = await enrichLivePlayers(players);
+    await syncServerPlayerDirectory(serverId, players);
+  } catch (err) {
+    console.warn('Failed to process monitored player list', err);
   }
 }
 
@@ -810,8 +861,16 @@ rconEventBus.on('monitor_status', (serverId, payload) => {
   const id = toServerId(serverId);
   if (id == null) return;
   const latency = Number.isFinite(payload?.latency) ? payload.latency : null;
-  const message = payload?.reply?.Message || '';
-  const details = parseStatusMessage(message);
+  const replies = Array.isArray(payload?.replies) ? payload.replies : [];
+  const findReply = (command) => {
+    const target = String(command || '').trim().toLowerCase();
+    if (!target) return null;
+    const entry = replies.find((item) => typeof item?.command === 'string' && item.command.toLowerCase() === target);
+    return entry?.reply || null;
+  };
+  const statusReply = findReply('status') || payload?.reply || null;
+  const statusMessage = statusReply?.Message || statusReply?.message || '';
+  const details = parseStatusMessage(statusMessage);
   recordStatus(id, {
     ok: true,
     lastCheck: new Date().toISOString(),
@@ -828,6 +887,13 @@ rconEventBus.on('monitor_status', (serverId, payload) => {
     };
     db.recordServerPlayerCount(snapshot).catch((err) => {
       console.warn('Failed to record player count snapshot', err);
+    });
+  }
+  const playerReply = findReply('playerlist');
+  const playerMessage = playerReply?.Message || playerReply?.message || '';
+  if (playerMessage) {
+    processMonitorPlayerListSnapshot(id, playerMessage).catch((err) => {
+      console.warn('Failed to persist monitored player list', err);
     });
   }
 });
@@ -881,7 +947,7 @@ async function refreshMonitoredServers() {
         monitorController = startAutoMonitor(list, {
           intervalMs: MONITOR_INTERVAL,
           timeoutMs: MONITOR_TIMEOUT,
-          commands: ['status']
+          commands: ['status', 'playerlist']
         });
       } else {
         monitorController.update(list);

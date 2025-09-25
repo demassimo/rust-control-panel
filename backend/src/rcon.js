@@ -590,12 +590,14 @@ async function _pollOnce(id) {
     await _ensureBinding(row);
 
     const start = Date.now();
+    const replies = [];
     let lastReply = null;
 
     // Run commands sequentially to avoid inflight overflow
     for (const cmd of _monitor.opts.commands) {
       try {
         const reply = await sendRconCommand(row, cmd, { timeoutMs: _monitor.opts.timeoutMs });
+        replies.push({ command: String(cmd || ''), reply });
         lastReply = reply;
       } catch (e) {
         // single command failed â€” escalate as monitor error and backoff
@@ -608,7 +610,7 @@ async function _pollOnce(id) {
     }
 
     const latency = Date.now() - start;
-    emitScoped('monitor_status', id, { ok: true, latency, reply: lastReply });
+    emitScoped('monitor_status', id, { ok: true, latency, reply: lastReply, replies });
     _resetBackoff(id);
     _monitor.inflight.delete(id);
     _schedule(id, _monitor.opts.intervalMs);

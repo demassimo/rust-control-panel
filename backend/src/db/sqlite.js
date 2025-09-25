@@ -53,6 +53,8 @@ function createApi(dbh, dialect) {
         display_name TEXT,
         first_seen TEXT DEFAULT (datetime('now')),
         last_seen TEXT DEFAULT (datetime('now')),
+        last_ip TEXT,
+        last_port INTEGER,
         UNIQUE(server_id, steamid),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
@@ -111,6 +113,14 @@ function createApi(dbh, dialect) {
       await ensureColumn('visibility', 'visibility INTEGER');
       await ensureColumn('rust_playtime_minutes', 'rust_playtime_minutes INTEGER');
       await ensureColumn('playtime_updated_at', 'playtime_updated_at TEXT');
+      const serverPlayerCols = await dbh.all("PRAGMA table_info('server_players')");
+      const ensureServerPlayerColumn = async (name, definition) => {
+        if (!serverPlayerCols.some((c) => c.name === name)) {
+          await dbh.run(`ALTER TABLE server_players ADD COLUMN ${definition}`);
+        }
+      };
+      await ensureServerPlayerColumn('last_ip', 'last_ip TEXT');
+      await ensureServerPlayerColumn('last_port', 'last_port INTEGER');
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
@@ -171,19 +181,24 @@ function createApi(dbh, dialect) {
       return await dbh.all(`SELECT * FROM players WHERE steamid IN (${placeholders})`, steamids);
     },
     async listPlayers({limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
-    async recordServerPlayer({ server_id, steamid, display_name = null, seen_at = null }){
+    async recordServerPlayer({ server_id, steamid, display_name = null, seen_at = null, ip = null, port = null }){
       const serverIdNum = Number(server_id);
       if (!Number.isFinite(serverIdNum)) return;
       const sid = String(steamid || '').trim();
       if (!sid) return;
       const seen = seen_at || new Date().toISOString();
+      const ipValue = typeof ip === 'string' && ip ? ip : null;
+      const portNum = Number(port);
+      const portValue = Number.isFinite(portNum) ? portNum : null;
       await dbh.run(`
-        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen)
-        VALUES(?,?,?,?,?)
+        INSERT INTO server_players(server_id, steamid, display_name, first_seen, last_seen, last_ip, last_port)
+        VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(server_id, steamid) DO UPDATE SET
           display_name=COALESCE(excluded.display_name, server_players.display_name),
-          last_seen=excluded.last_seen
-      `,[serverIdNum,sid,display_name,seen,seen]);
+          last_seen=excluded.last_seen,
+          last_ip=COALESCE(excluded.last_ip, server_players.last_ip),
+          last_port=COALESCE(excluded.last_port, server_players.last_port)
+      `,[serverIdNum,sid,display_name,seen,seen,ipValue,portValue]);
     },
     async recordServerPlayerCount({ server_id, player_count, max_players = null, queued = null, sleepers = null, recorded_at = null }){
       const serverIdNum = Number(server_id);
@@ -215,6 +230,7 @@ function createApi(dbh, dialect) {
       if (!Number.isFinite(serverIdNum)) return [];
       return await dbh.all(`
         SELECT sp.server_id, sp.steamid, sp.display_name, sp.first_seen, sp.last_seen,
+               sp.last_ip, sp.last_port,
                p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
                p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
         FROM server_players sp
