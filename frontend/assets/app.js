@@ -771,6 +771,7 @@
     const details = entry.statusDetails;
     const playersEl = entry.playersValue;
     const queueEl = entry.queueValue;
+    const joiningEl = entry.joiningValue;
     if (!status) {
       if (pill) {
         pill.className = 'status-pill';
@@ -780,6 +781,7 @@
       if (details) details.textContent = '';
       if (playersEl) playersEl.textContent = '--';
       if (queueEl) queueEl.textContent = '--';
+      if (joiningEl) joiningEl.textContent = '--';
       updateWorkspaceDisplay(entry);
       return;
     }
@@ -788,6 +790,7 @@
     const queued = pickNumber(status?.details?.queued, serverInfo?.Queued, serverInfo?.queue);
     const players = pickNumber(status?.details?.players?.online, serverInfo?.Players, serverInfo?.players);
     const maxPlayers = pickNumber(status?.details?.players?.max, serverInfo?.MaxPlayers, serverInfo?.maxPlayers);
+    const joining = pickNumber(status?.details?.joining, status?.details?.sleepers, serverInfo?.Joining, serverInfo?.joining);
     const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const lastCheck = status.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : null;
 
@@ -820,6 +823,9 @@
     if (queueEl) {
       queueEl.textContent = queued != null && queued > 0 ? String(queued) : (online ? '0' : '--');
     }
+    if (joiningEl) {
+      joiningEl.textContent = joining != null ? String(joining) : (online ? '0' : '--');
+    }
     if (details) {
       const parts = [];
       if (online && players != null) {
@@ -827,6 +833,7 @@
         parts.push(`${players}${maxInfo} players`);
       }
       if (online && queued != null && queued > 0) parts.push(`${queued} queued`);
+      if (online && joining != null && joining > 0) parts.push(`${joining} joining`);
       if (!online && status.error) parts.push(status.error);
       if (lastCheck) parts.push(`checked ${lastCheck}`);
       details.textContent = parts.join(' · ');
@@ -892,8 +899,10 @@
     stats.className = 'server-card-stats';
     const playersStat = createServerStat('👥', 'Players');
     const queueStat = createServerStat('⏳', 'Queue');
+    const joiningStat = createServerStat('🚪', 'Joining');
     stats.appendChild(playersStat.element);
     stats.appendChild(queueStat.element);
+    stats.appendChild(joiningStat.element);
 
     mainRow.appendChild(head);
     mainRow.appendChild(stats);
@@ -1134,6 +1143,7 @@
     entry.statusDetails = details;
     entry.playersValue = playersStat.value;
     entry.queueValue = queueStat.value;
+    entry.joiningValue = joiningStat.value;
     entry.toggleEdit = toggleEdit;
     entry.nameEl = nameEl;
     entry.metaEl = metaEl;
