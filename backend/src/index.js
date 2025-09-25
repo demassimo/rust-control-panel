@@ -1089,9 +1089,14 @@ function deriveMapKey(info = {}, metadata = null) {
   const rawSize = Number(metadata?.size ?? info.size);
   const rawSeed = Number(metadata?.seed ?? info.seed);
   const saveVersion = metadata?.saveVersion || null;
+  if (Number.isFinite(rawSeed) && Number.isFinite(rawSize)) {
+    let key = `${rawSeed}_${rawSize}`;
+    if (saveVersion) key = `${key}_v${saveVersion}`;
+    return key;
+  }
   const parts = [];
-  if (Number.isFinite(rawSize)) parts.push(`size${rawSize}`);
   if (Number.isFinite(rawSeed)) parts.push(`seed${rawSeed}`);
+  if (Number.isFinite(rawSize)) parts.push(`size${rawSize}`);
   if (saveVersion) parts.push(`v${saveVersion}`);
   if (!parts.length && info.mapName) parts.push(`name-${info.mapName}`);
   if (!parts.length && metadata?.id) parts.push(`id${metadata.id}`);
@@ -1624,6 +1629,18 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (!server) return res.status(404).json({ error: 'not_found' });
     logger.debug('Loaded server details', { name: server?.name, host: server?.host, port: server?.port });
     ensureRconBinding(server);
+    let playerPayload = '';
+    try {
+      const reply = await sendRconCommand(server, 'playerlist');
+      playerPayload = reply?.Message || '';
+    } catch (err) {
+      logger.error('playerlist command failed', err);
+      return res.status(502).json({ error: 'playerlist_failed' });
+    }
+    let players = parsePlayerListMessage(playerPayload);
+    players = await enrichLivePlayers(players);
+    await syncServerPlayerDirectory(id, players);
+    logger.debug('Processed live players', { count: players.length });
     let info = getCachedServerInfo(id);
     if (!info) {
       try {
@@ -1647,18 +1664,6 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         // leave info as-is if lookups fail
       }
     }
-    let playerPayload = '';
-    try {
-      const reply = await sendRconCommand(server, 'playerlist');
-      playerPayload = reply?.Message || '';
-    } catch (err) {
-      logger.error('playerlist command failed', err);
-      return res.status(502).json({ error: 'playerlist_failed' });
-    }
-    let players = parsePlayerListMessage(playerPayload);
-    players = await enrichLivePlayers(players);
-    await syncServerPlayerDirectory(id, players);
-    logger.debug('Processed live players', { count: players.length });
     const now = new Date();
     let mapRecord = await db.getServerMap(id);
     if (mapRecord && shouldResetMapRecord(mapRecord, now)) {
