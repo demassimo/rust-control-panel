@@ -125,7 +125,7 @@ async function ensureBot(integration) {
 
   const now = Date.now();
   if (state.cooldownUntil > now) {
-    return null;
+    return state;
   }
 
   if (!state.ready) {
@@ -168,7 +168,7 @@ async function ensureBot(integration) {
     try {
       await state.connectPromise;
     } catch (err) {
-      return null;
+      return state;
     }
   }
 
