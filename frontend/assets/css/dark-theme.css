@@ -110,16 +110,22 @@ main.grid{
 .players-directory{padding:0}
 .players-directory .module-message{padding:24px; text-align:center}
 .player-directory{
-  list-style:none; margin:0; padding:0; display:flex; flex-direction:column;
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
 }
+.player-directory .player-name-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .player-directory li{
   display:flex; justify-content:space-between; gap:18px; align-items:flex-start;
   padding:16px 18px; border-bottom:1px solid var(--border);
   background:rgba(12,15,23,.6);
-  cursor:pointer; transition:background .15s ease, border-color .15s ease;
+  cursor:pointer; transition:background .18s ease, border-color .18s ease, transform .18s ease, box-shadow .18s ease;
 }
 .player-directory li:nth-child(even){background:rgba(255,255,255,.02)}
-.player-directory li:hover{background:rgba(225,29,72,.12); border-color:rgba(225,29,72,.35)}
+.player-directory li:hover{background:rgba(225,29,72,.14); border-color:rgba(225,29,72,.38); transform:translateX(2px)}
+.player-directory li.active{background:rgba(225,29,72,.18); border-color:rgba(225,29,72,.45); box-shadow:0 16px 32px rgba(225,29,72,.22)}
 .player-directory li:focus-visible{outline:2px solid rgba(225,29,72,.6); outline-offset:2px}
 .player-directory strong{font-weight:600}
 .player-directory .muted{color:var(--muted)}
@@ -282,10 +288,12 @@ main.grid{
   position:fixed; inset:0; z-index:90;
   background:rgba(6,9,15,.72);
   backdrop-filter:blur(12px);
-  display:flex; align-items:flex-start; justify-content:center;
-  padding:60px 16px 30px; overflow:auto;
+  display:flex; align-items:center; justify-content:center;
+  padding:40px 16px; overflow:auto;
+  opacity:0; pointer-events:none; transition:opacity .18s ease;
 }
 .player-modal-backdrop.hidden{display:none}
+.player-modal-backdrop[aria-hidden="false"]{opacity:1; pointer-events:auto}
 .player-modal{
   width:min(560px, 100%);
   background:linear-gradient(180deg, #121722 0%, #0b0f19 100%);
@@ -294,6 +302,7 @@ main.grid{
   box-shadow:0 20px 48px rgba(0,0,0,.55);
   display:flex; flex-direction:column; overflow:hidden;
   animation:playerModalIn .18s ease;
+  max-height:min(720px, calc(100vh - 80px));
 }
 .player-modal-header{
   padding:20px 22px; display:flex; align-items:center; justify-content:space-between;
