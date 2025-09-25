@@ -1,12 +1,9 @@
+<script>
 (() => {
   const settingsRoot = document.getElementById('discord-settings');
-  const serverId = document.body?.dataset?.serverId;
-  if (!settingsRoot || !serverId) return;
+  if (!settingsRoot) return;
 
-  const API_BASE = typeof window !== 'undefined' && window.API_BASE
-    ? String(window.API_BASE).replace(/\/+$/g, '')
-    : '';
-  const endpoint = `${API_BASE}/api/servers/${encodeURIComponent(serverId)}/discord`;
+  const serverIdFromDataset = document.body?.dataset?.serverId || null;
 
   const badgeEl = document.getElementById('discord-bot-status');
   const playersEl = document.getElementById('discord-current-players');
@@ -20,9 +17,30 @@
   const removeBtn = document.getElementById('discord-remove');
   const noticeEl = document.getElementById('discord-notice');
 
+  // Preserve existing non-status classes on the badge, while letting us toggle status styles.
+  const badgeBaseClasses = badgeEl
+    ? Array.from(badgeEl.classList).filter((cls) => !['online', 'offline', 'degraded', 'success'].includes(cls))
+    : ['status-pill'];
+
+  function sanitizeBase(value) {
+    return value ? String(value).trim().replace(/\/+$/, '') : '';
+  }
+
+  function detectInitialApiBase() {
+    if (typeof window !== 'undefined' && window.API_BASE) {
+      return sanitizeBase(window.API_BASE);
+    }
+    const meta = document.querySelector('meta[name="panel-api-base"]')?.content;
+    if (meta) return sanitizeBase(meta);
+    return '';
+  }
+
   const state = {
     integration: null,
-    pollTimer: null
+    pollTimer: null,
+    serverId: null,
+    apiBase: detectInitialApiBase(),
+    refreshToken: 0
   };
 
   function buildError(message, code) {
@@ -33,6 +51,10 @@
 
   function setNotice(message, variant = 'info') {
     if (!noticeEl) return;
+    if (!message) {
+      clearNotice();
+      return;
+    }
     noticeEl.textContent = message || '';
     noticeEl.classList.remove('hidden', 'error', 'success');
     if (variant === 'error') noticeEl.classList.add('error');
@@ -48,31 +70,34 @@
 
   function disableForm(disabled) {
     if (!form) return;
-    const elements = form.querySelectorAll('input, button');
-    elements.forEach((el) => { el.disabled = !!disabled; });
-    if (removeBtn) removeBtn.disabled = !!disabled || !state.integration;
+    const shouldDisable = !!disabled || !state.serverId;
+    form.querySelectorAll('input, button').forEach((el) => {
+      if (el === removeBtn) return;
+      el.disabled = shouldDisable;
+    });
+    if (removeBtn) removeBtn.disabled = shouldDisable || !state.integration;
   }
 
   function updateBadge(presenceLabel, presence) {
     if (!badgeEl) return;
-    const status = presence === 'online' ? 'online' : 'offline';
-    badgeEl.textContent = presenceLabel || (status === 'online' ? 'Online' : 'Do Not Disturb');
-    badgeEl.classList.remove('success', 'offline');
-    if (status === 'online') badgeEl.classList.add('success');
-    else badgeEl.classList.add('offline');
+    const isOnline = String(presence || '').toLowerCase() === 'online';
+    const classes = [...badgeBaseClasses, isOnline ? 'online' : 'offline'];
+    if (!classes.includes('status-pill')) classes.unshift('status-pill');
+    badgeEl.className = classes.join(' ');
+    badgeEl.textContent = presenceLabel || (isOnline ? 'Online' : 'Do Not Disturb');
   }
 
   function updateStatusView(status = {}) {
     const players = Number(status?.players?.current);
     const maxPlayers = Number(status?.players?.max);
     const joining = Number(status?.joining);
+
     if (playersEl) playersEl.textContent = Number.isFinite(players) && players >= 0 ? String(players) : '0';
-    if (maxPlayersEl) {
-      if (Number.isFinite(maxPlayers) && maxPlayers >= 0) maxPlayersEl.textContent = String(maxPlayers);
-      else maxPlayersEl.textContent = '—';
-    }
+    if (maxPlayersEl) maxPlayersEl.textContent = Number.isFinite(maxPlayers) && maxPlayers >= 0 ? String(maxPlayers) : '—';
     if (joiningEl) joiningEl.textContent = Number.isFinite(joining) && joining >= 0 ? String(joining) : '0';
+
     updateBadge(status?.presenceLabel, status?.presence);
+
     if (lastCheckEl) {
       const value = status?.lastCheck ? new Date(status.lastCheck) : null;
       if (value && !Number.isNaN(value.getTime())) {
@@ -93,7 +118,7 @@
         ? 'Token stored — enter to replace'
         : 'Paste bot token';
     }
-    if (removeBtn) removeBtn.disabled = !integration;
+    if (removeBtn) removeBtn.disabled = !state.serverId || !integration;
   }
 
   function describeError(code) {
@@ -112,34 +137,48 @@
         return 'Unable to reach the server. Check your connection.';
       case 'db_error':
         return 'The server could not save the Discord settings.';
+      case 'missing_server':
+        return 'Select a server to manage the Discord bot.';
       default:
         return 'An unexpected error occurred while updating Discord integration.';
     }
   }
 
+  function ensureApiBase() {
+    if (!state.apiBase) state.apiBase = detectInitialApiBase();
+    return state.apiBase;
+  }
+
   async function apiRequest(method = 'GET', body = null) {
     const token = localStorage.getItem('token');
-    if (!token) {
-      throw buildError('unauthorized', 'unauthorized');
-    }
-    const headers = { 'Authorization': 'Bearer ' + token };
+    if (!token) throw buildError('unauthorized', 'unauthorized');
+    if (!state.serverId) throw buildError('missing_server', 'missing_server');
+
+    const base = ensureApiBase();
+    if (!base) throw buildError('network_error', 'network_error');
+
+    const endpoint = `${base}/api/servers/${encodeURIComponent(state.serverId)}/discord`;
+    const headers = { Authorization: 'Bearer ' + token };
     const options = { method, headers };
+
     if (body !== null && body !== undefined) {
       headers['Content-Type'] = 'application/json';
       options.body = JSON.stringify(body);
     }
+
     let response;
     try {
       response = await fetch(endpoint, options);
     } catch {
       throw buildError('network_error', 'network_error');
     }
+
     let payload = null;
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      try { payload = await response.json(); }
-      catch { payload = null; }
+      try { payload = await response.json(); } catch { payload = null; }
     }
+
     if (response.status === 401) {
       throw buildError('unauthorized', 'unauthorized');
     }
@@ -155,7 +194,7 @@
 
   function handleError(err, { silent = false } = {}) {
     const code = err?.code || err?.message || 'api_error';
-    if (code === 'unauthorized') {
+    if (code === 'unauthorized' || code === 'missing_server') {
       disableForm(true);
       if (!silent) setNotice(describeError(code), 'error');
       return;
@@ -168,16 +207,45 @@
     if (!silent) setNotice(describeError(code), 'error');
   }
 
+  function stopPolling() {
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  function schedulePolling() {
+    stopPolling();
+    if (!state.serverId) return;
+    state.pollTimer = setInterval(() => {
+      refresh({ silent: true });
+    }, 15000);
+  }
+
   async function refresh(options = {}) {
     const { silent = false } = options;
+
+    if (!state.serverId) {
+      handleError(buildError('missing_server', 'missing_server'), { silent });
+      return;
+    }
+
+    const activeServer = state.serverId;
+    const token = ++state.refreshToken;
+
+    if (!silent) setNotice('Loading Discord integration…');
+    disableForm(true);
+
     try {
-      if (!silent) setNotice('Loading Discord integration…');
       const data = await apiRequest('GET');
+      if (state.serverId !== activeServer || state.refreshToken !== token) return;
       applyIntegration(data.integration || null);
       updateStatusView(data.status || {});
       disableForm(false);
       clearNotice();
     } catch (err) {
+      if (state.serverId !== activeServer || state.refreshToken !== token) return;
+      disableForm(false);
       handleError(err, { silent });
     }
   }
@@ -185,20 +253,27 @@
   async function saveIntegration(event) {
     event?.preventDefault();
     if (!form) return;
+    if (!state.serverId) {
+      setNotice(describeError('missing_server'), 'error');
+      return;
+    }
+
     const payload = {
       botToken: tokenInput?.value?.trim() || '',
       guildId: guildInput?.value?.trim() || '',
       channelId: channelInput?.value?.trim() || ''
     };
+
     disableForm(true);
     setNotice('Saving Discord integration…');
+
     try {
       const data = await apiRequest('POST', payload);
       applyIntegration(data.integration || null);
       updateStatusView(data.status || {});
       if (tokenInput) tokenInput.value = '';
-      setNotice('Discord integration saved.', 'success');
       disableForm(false);
+      setNotice('Discord integration saved.', 'success');
     } catch (err) {
       disableForm(false);
       handleError(err);
@@ -206,38 +281,103 @@
   }
 
   async function removeIntegration() {
+    if (!state.serverId) {
+      setNotice(describeError('missing_server'), 'error');
+      return;
+    }
     if (!state.integration) {
       setNotice('No Discord integration is configured for this server.', 'error');
       return;
     }
+
     disableForm(true);
     setNotice('Removing Discord integration…');
+
     try {
       const data = await apiRequest('DELETE');
       applyIntegration(null);
       updateStatusView(data.status || {});
-      setNotice('Discord integration removed.', 'success');
       disableForm(false);
+      setNotice('Discord integration removed.', 'success');
     } catch (err) {
       disableForm(false);
       handleError(err);
     }
   }
 
-  function schedulePolling() {
-    if (state.pollTimer) clearInterval(state.pollTimer);
-    state.pollTimer = setInterval(() => {
-      refresh({ silent: true });
-    }, 15000);
+  function resetView() {
+    applyIntegration(null);
+    updateStatusView({ presence: 'dnd', presenceLabel: 'Do Not Disturb' });
+  }
+
+  function selectServer(id) {
+    const normalized = id == null ? null : String(id);
+    if (normalized === state.serverId) {
+      if (normalized) refresh({ silent: true });
+      return;
+    }
+    state.serverId = normalized;
+    state.integration = null;
+    stopPolling();
+
+    if (!normalized) {
+      disableForm(true);
+      resetView();
+      setNotice(describeError('missing_server'));
+      return;
+    }
+
+    resetView();
+    disableForm(true);
+    setNotice('Loading Discord integration…');
+    refresh().finally(() => {
+      if (state.serverId === normalized) schedulePolling();
+    });
   }
 
   if (form) form.addEventListener('submit', saveIntegration);
   if (removeBtn) removeBtn.addEventListener('click', removeIntegration);
+
   window.addEventListener('beforeunload', () => {
-    if (state.pollTimer) clearInterval(state.pollTimer);
+    stopPolling();
   });
 
-  refresh().finally(() => {
-    schedulePolling();
+  // Workspace integration: react to server selection / status pushes / API base changes.
+  window.addEventListener('workspace:server-selected', (event) => {
+    const id = event?.detail?.serverId;
+    if (typeof id === 'number' || typeof id === 'string') {
+      selectServer(id);
+    }
   });
+
+  window.addEventListener('workspace:server-cleared', () => {
+    selectServer(null);
+  });
+
+  window.addEventListener('workspace:server-status', (event) => {
+    const detail = event?.detail;
+    if (!detail) return;
+    if (state.serverId == null || String(detail.serverId) !== state.serverId) return;
+    updateStatusView(detail.status || {});
+  });
+
+  window.addEventListener('workspace:api-base', (event) => {
+    const base = event?.detail?.base;
+    if (typeof base === 'string' && base) {
+      state.apiBase = sanitizeBase(base);
+      if (state.serverId) refresh({ silent: true });
+    }
+  });
+
+  // Initial selection priority: dataset -> preselected global -> missing_server
+  if (serverIdFromDataset) {
+    selectServer(serverIdFromDataset);
+  } else if (typeof window !== 'undefined' && typeof window.__workspaceSelectedServer !== 'undefined') {
+    selectServer(window.__workspaceSelectedServer);
+  } else {
+    disableForm(true);
+    resetView();
+    setNotice(describeError('missing_server'));
+  }
 })();
+</script>

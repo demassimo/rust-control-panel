@@ -149,6 +149,7 @@
         <nav id="workspaceMenu" class="workspace-menu" aria-label="Server sections">
           <button type="button" class="menu-tab active" data-view="players" aria-pressed="true">Players</button>
           <button type="button" class="menu-tab" data-view="map" aria-pressed="false">Map</button>
+          <button type="button" class="menu-tab" data-view="settings" aria-pressed="false">Settings</button>
           <button type="button" class="menu-tab" data-view="console" aria-pressed="false">Console</button>
           <button type="button" class="menu-tab" data-view="dashboard" aria-pressed="false">Dashboard</button>
         </nav>
@@ -195,6 +196,61 @@
                 </div>
               </div>
               <div class="module-host map-body" data-module-slot="live-map"></div>
+            </div>
+          </section>
+
+          <section id="workspaceViewSettings" class="workspace-view" data-view="settings" aria-hidden="true">
+            <div class="card settings-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3>Discord Integration</h3>
+                  <p class="muted small">Run one Discord bot per server and surface live activity in your channels.</p>
+                </div>
+                <span id="discord-bot-status" class="status-pill offline bot-status-pill">Do Not Disturb</span>
+              </div>
+              <div id="discord-settings" class="discord-settings-grid" aria-live="polite">
+                <section class="discord-status">
+                  <h4 class="discord-section-title">Live status</h4>
+                  <div class="discord-status-summary">
+                    <article class="discord-stat">
+                      <span class="label">Current players</span>
+                      <strong class="value" id="discord-current-players">0</strong>
+                    </article>
+                    <article class="discord-stat">
+                      <span class="label">Max players</span>
+                      <strong class="value" id="discord-max-players">—</strong>
+                    </article>
+                    <article class="discord-stat">
+                      <span class="label">Joining</span>
+                      <strong class="value" id="discord-joining">0</strong>
+                    </article>
+                  </div>
+                  <p class="discord-last-check" id="discord-last-check">Last check: —</p>
+                </section>
+                <section class="discord-form-wrap">
+                  <h4 class="discord-section-title">Configure bot</h4>
+                  <form id="discord-form" class="discord-form">
+                    <label class="field">
+                      <span class="field-label">Discord bot token</span>
+                      <input type="password" id="discord-bot-token" name="botToken" autocomplete="off" placeholder="Paste bot token" />
+                      <small class="muted">Leave blank to keep the existing token.</small>
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Discord server (guild) ID</span>
+                      <input type="text" id="discord-guild-id" name="guildId" inputmode="numeric" autocomplete="off" placeholder="e.g. 123456789012345678" />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Discord channel ID</span>
+                      <input type="text" id="discord-channel-id" name="channelId" inputmode="numeric" autocomplete="off" placeholder="e.g. 123456789012345678" />
+                    </label>
+                    <div class="form-actions">
+                      <button type="submit" class="accent">Save integration</button>
+                      <button type="button" class="ghost" id="discord-remove">Remove</button>
+                    </div>
+                    <p class="notice hidden discord-notice" id="discord-notice"></p>
+                  </form>
+                </section>
+              </div>
             </div>
           </section>
 
@@ -366,6 +422,7 @@
   <script src="assets/modules/players.js"></script>
   <script src="assets/modules/map.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script src="assets/js/server-settings.js"></script>
   <script src="assets/app.js"></script>
 </body>
 </html>
