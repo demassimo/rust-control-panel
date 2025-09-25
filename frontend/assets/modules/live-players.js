@@ -19,6 +19,14 @@
     return `${hours.toFixed(1)} h`;
   }
 
+  function formatLastBan(days) {
+    const value = Number(days);
+    if (!Number.isFinite(value) || value < 0) return '';
+    if (value === 0) return 'Today';
+    if (value === 1) return '1 day ago';
+    return `${value} days ago`;
+  }
+
   function mapPlayerForDirectory(player) {
     if (!player) return null;
     const profile = player.steamProfile || {};
@@ -359,10 +367,11 @@
             gameBan.textContent = `${profile.gameBans} game ban${profile.gameBans > 1 ? 's' : ''}`;
             badges.appendChild(gameBan);
           }
-          if (Number.isFinite(profile.daysSinceLastBan)) {
+          const lastBanLabel = formatLastBan(profile.daysSinceLastBan);
+          if (lastBanLabel) {
             const last = document.createElement('span');
             last.className = 'badge warn';
-            last.textContent = `${profile.daysSinceLastBan}d since last ban`;
+            last.textContent = `Last ban: ${lastBanLabel}`;
             badges.appendChild(last);
           }
           if (badges.childElementCount > 0) details.appendChild(badges);

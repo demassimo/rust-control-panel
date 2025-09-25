@@ -598,13 +598,31 @@
 
       function updateActions(combined) {
         const profileUrl = combined.profileurl || combined.profile_url || '';
-        if (modal.elements.profileLink) {
-          if (profileUrl) {
-            modal.elements.profileLink.classList.remove('hidden');
-            modal.elements.profileLink.href = profileUrl;
+        const steamid = typeof combined.steamid === 'string'
+          ? combined.steamid.trim()
+          : String(combined.steamid || '').trim();
+        const steamProfileUrl = profileUrl || (steamid ? `https://steamcommunity.com/profiles/${encodeURIComponent(steamid)}` : '');
+        const serverArmourUrl = steamid ? `https://serverarmour.com/profile/${encodeURIComponent(steamid)}` : '';
+        if (modal.elements.steamProfileBtn) {
+          if (steamProfileUrl) {
+            modal.elements.steamProfileBtn.classList.remove('hidden');
+            modal.elements.steamProfileBtn.dataset.url = steamProfileUrl;
+            modal.elements.steamProfileBtn.disabled = false;
           } else {
-            modal.elements.profileLink.classList.add('hidden');
-            modal.elements.profileLink.removeAttribute('href');
+            modal.elements.steamProfileBtn.classList.add('hidden');
+            modal.elements.steamProfileBtn.dataset.url = '';
+            modal.elements.steamProfileBtn.disabled = true;
+          }
+        }
+        if (modal.elements.serverArmourBtn) {
+          if (serverArmourUrl) {
+            modal.elements.serverArmourBtn.classList.remove('hidden');
+            modal.elements.serverArmourBtn.dataset.url = serverArmourUrl;
+            modal.elements.serverArmourBtn.disabled = false;
+          } else {
+            modal.elements.serverArmourBtn.classList.add('hidden');
+            modal.elements.serverArmourBtn.dataset.url = '';
+            modal.elements.serverArmourBtn.disabled = true;
           }
         }
         if (modal.elements.refreshBtn) {
@@ -831,12 +849,16 @@
         refreshBtn.className = 'btn small';
         refreshBtn.textContent = 'Force Steam Refresh';
         actions.appendChild(refreshBtn);
-        const profileLink = document.createElement('a');
-        profileLink.className = 'btn ghost small hidden';
-        profileLink.textContent = 'Open Steam Profile';
-        profileLink.target = '_blank';
-        profileLink.rel = 'noreferrer';
-        actions.appendChild(profileLink);
+        const steamProfileBtn = document.createElement('button');
+        steamProfileBtn.type = 'button';
+        steamProfileBtn.className = 'btn ghost small hidden';
+        steamProfileBtn.textContent = 'Open Steam Profile';
+        actions.appendChild(steamProfileBtn);
+        const serverArmourBtn = document.createElement('button');
+        serverArmourBtn.type = 'button';
+        serverArmourBtn.className = 'btn ghost small hidden';
+        serverArmourBtn.textContent = 'Server Armour';
+        actions.appendChild(serverArmourBtn);
         footer.appendChild(actions);
 
         document.body.appendChild(overlay);
@@ -849,11 +871,23 @@
           if (ev.key === 'Escape') hide();
         };
 
+        const openSteamProfile = () => {
+          const url = steamProfileBtn.dataset.url;
+          if (url) window.open(url, '_blank', 'noopener,noreferrer');
+        };
+
+        const openServerArmour = () => {
+          const url = serverArmourBtn.dataset.url;
+          if (url) window.open(url, '_blank', 'noopener,noreferrer');
+        };
+
         overlay.addEventListener('click', onBackdrop);
         dialog.addEventListener('click', (ev) => ev.stopPropagation());
         closeBtn.addEventListener('click', hide);
         refreshBtn.addEventListener('click', forceSteamRefresh);
         forceNameBtn.addEventListener('click', forceDisplayName);
+        steamProfileBtn.addEventListener('click', openSteamProfile);
+        serverArmourBtn.addEventListener('click', openServerArmour);
 
         return {
           show() {
@@ -881,7 +915,8 @@
             status,
             refreshBtn,
             forceNameBtn,
-            profileLink,
+            steamProfileBtn,
+            serverArmourBtn,
             loading
           },
           overlay,
@@ -891,6 +926,8 @@
             closeBtn.removeEventListener('click', hide);
             refreshBtn.removeEventListener('click', forceSteamRefresh);
             forceNameBtn.removeEventListener('click', forceDisplayName);
+            steamProfileBtn.removeEventListener('click', openSteamProfile);
+            serverArmourBtn.removeEventListener('click', openServerArmour);
             overlay.remove();
           }
         };
