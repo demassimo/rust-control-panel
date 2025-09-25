@@ -212,7 +212,7 @@ function parseStatusMessage(message) {
   for (const line of lines) {
     const hostnameMatch = line.match(/hostname\s*[:=]\s*(.+)$/i);
     if (hostnameMatch) info.hostname = hostnameMatch[1].trim();
-    const playersMatch = line.match(/players?\s*[:=]\s*(\d+)(?:\s*\/\s*(\d+))?/i);
+    const playersMatch = line.match(/players?\s*(?:[:=]\s*|\s+)(\d+)(?:\s*\/\s*(\d+))?/i);
     if (playersMatch) {
       info.players = {
         online: parseInt(playersMatch[1], 10),
@@ -283,6 +283,11 @@ function parseServerInfoMessage(message) {
   if (!parsedJson) {
     const lines = trimmed.split(/\r?\n/);
     for (const line of lines) {
+      const match = line.match(/^\s*([^:=\t]+?)\s*(?:[:=]\s*|\s{2,}|\t+)(.+)$/);
+      if (match) {
+        assign(match[1], match[2]);
+        continue;
+      }
       const parts = line.split(':');
       if (parts.length < 2) continue;
       const key = parts.shift();
@@ -299,6 +304,24 @@ function parseServerInfoMessage(message) {
   if (result.mapName && result.size == null) {
     const size = extractInteger(result.mapName);
     if (size != null) result.size = size;
+  }
+
+  if (result.size == null) {
+    const sizeMatch = trimmed.match(/world\s*\.\s*size\s*(?:[:=]\s*|\s+)(\d+)/i)
+      || trimmed.match(/\b(?:map|world)?\s*size\s*(?:[:=]\s*|\s+)(\d{3,})/i);
+    if (sizeMatch) {
+      const parsed = parseInt(sizeMatch[1], 10);
+      if (Number.isFinite(parsed)) result.size = parsed;
+    }
+  }
+
+  if (result.seed == null) {
+    const seedMatch = trimmed.match(/world\s*\.\s*seed\s*(?:[:=]\s*|\s+)(\d+)/i)
+      || trimmed.match(/\bseed\s*(?:[:=]\s*|\s+)(-?\d+)/i);
+    if (seedMatch) {
+      const parsed = parseInt(seedMatch[1], 10);
+      if (Number.isFinite(parsed)) result.seed = parsed;
+    }
   }
 
   const output = { ...fields, ...result };
