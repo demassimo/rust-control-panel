@@ -277,6 +277,8 @@
       }
 
       let searchListener = null;
+      let externalOpenListener = null;
+      let externalCloseListener = null;
       if (typeof window !== 'undefined') {
         searchListener = (event) => {
           if (!event) return;
@@ -285,6 +287,34 @@
           setSearch(event.detail?.query || '', { skipBroadcast: true });
         };
         window.addEventListener('players:search', searchListener);
+        externalOpenListener = (event) => {
+          const detail = event?.detail || {};
+          if (detail.source === moduleId) return;
+          const rawId = detail.steamId ?? detail.steamid ?? detail.player?.steamid ?? detail.player?.steamId ?? '';
+          const steamid = String(rawId || '').trim();
+          const existing = steamid
+            ? state.players.find((p) => String(p.steamid || '').trim() === steamid)
+            : null;
+          if (existing) {
+            openModal(existing);
+            return;
+          }
+          if (!detail.player && !steamid) return;
+          const normalized = normalizeExternalPlayer(detail.player || {}, steamid);
+          openModal(normalized);
+        };
+        externalCloseListener = (event) => {
+          const detail = event?.detail || {};
+          if (detail.source === moduleId) return;
+          if (!modalState.open) return;
+          const rawId = detail.steamId ?? detail.steamid ?? '';
+          const target = String(rawId || '').trim();
+          if (!target || !modalState.steamid || modalState.steamid === target) {
+            closeModal();
+          }
+        };
+        window.addEventListener('players:open-profile', externalOpenListener);
+        window.addEventListener('players:close-profile', externalCloseListener);
       }
 
       async function refresh(reason, serverIdOverride){
@@ -375,6 +405,36 @@
         const trimmed = String(name || '').trim();
         if (!trimmed) return '?';
         return String.fromCodePoint(trimmed.codePointAt(0) || 63).toUpperCase();
+      }
+
+      function normalizeExternalPlayer(external, steamid) {
+        const base = external ? { ...external } : {};
+        const resolvedId = typeof steamid === 'string' ? steamid : String(steamid || '').trim();
+        base.steamid = resolvedId;
+        const candidateName = base.display_name || base.displayName || base.persona || base.personaName || resolvedId || '';
+        if (!base.display_name) base.display_name = candidateName || 'Unknown player';
+        if (!base.persona) base.persona = base.personaName || base.display_name || '';
+        if (!base.raw_display_name) base.raw_display_name = base.rawDisplayName || base.display_name || '';
+        const profileUrl = base.profileurl || base.profile_url || base.profileUrl || base.profileURL || '';
+        if (profileUrl) {
+          base.profileurl = profileUrl;
+          base.profile_url = profileUrl;
+        }
+        if (!base.avatarfull) base.avatarfull = base.avatarFull || base.avatar_full || '';
+        if (!base.avatar && base.avatarfull) base.avatar = base.avatarfull;
+        if (base.vac_banned == null && base.vacBanned != null) base.vac_banned = base.vacBanned ? 1 : 0;
+        if (base.game_bans == null && base.gameBans != null) base.game_bans = base.gameBans;
+        if (base.last_ban_days == null && base.daysSinceLastBan != null) base.last_ban_days = base.daysSinceLastBan;
+        if (base.rust_playtime_minutes == null && base.rustPlaytimeMinutes != null) base.rust_playtime_minutes = base.rustPlaytimeMinutes;
+        if (base.visibility == null && base.profile_visibility != null) base.visibility = base.profile_visibility;
+        if (!base.last_ip && base.lastIp) base.last_ip = base.lastIp;
+        if (!base.last_port && base.lastPort != null) base.last_port = base.lastPort;
+        if (!base.last_ip && base.ip) base.last_ip = base.ip;
+        if (!base.last_port && base.port != null) base.last_port = base.port;
+        if (!base.first_seen && base.firstSeen) base.first_seen = base.firstSeen;
+        if (!base.last_seen && base.lastSeen) base.last_seen = base.lastSeen;
+        if (base.forced_display_name == null && base.forcedDisplayName != null) base.forced_display_name = base.forcedDisplayName;
+        return base;
       }
 
       function openModal(player) {
@@ -873,6 +933,8 @@
       ctx.onCleanup?.(() => closeModal());
       ctx.onCleanup?.(() => {
         if (searchListener) window.removeEventListener('players:search', searchListener);
+        if (externalOpenListener) window.removeEventListener('players:open-profile', externalOpenListener);
+        if (externalCloseListener) window.removeEventListener('players:close-profile', externalCloseListener);
       });
 
       // Initial state when module mounts
