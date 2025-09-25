@@ -1,4 +1,3 @@
-<script>
 (() => {
   const settingsRoot = document.getElementById('discord-settings');
   if (!settingsRoot) return;
@@ -380,4 +379,3 @@
     setNotice(describeError('missing_server'));
   }
 })();
-</script>
