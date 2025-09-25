@@ -245,6 +245,7 @@ await fs.mkdir(MAP_GLOBAL_CACHE_DIR, { recursive: true });
 await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
 const auth = authMiddleware(JWT_SECRET);
+const authWithQuery = authMiddleware(JWT_SECRET, { allowQueryToken: true });
 const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
@@ -1056,15 +1057,20 @@ async function purgeExpiredMapCaches(now = new Date()) {
   await purgeGlobalCacheIfDue(resetPoint, now, activeImages);
 }
 
-function mapRecordToPayload(serverId, record) {
+function mapRecordToPayload(serverId, record, options = {}) {
   if (!record) return null;
+  const { authToken = null } = options;
   let meta = {};
   if (record.data) {
     try { meta = JSON.parse(record.data); } catch { /* ignore parse errors */ }
   }
   const updatedAt = record.updated_at || record.updatedAt || record.created_at || record.createdAt || null;
   const hasRemote = mapMetadataHasRemote(meta);
-  const version = encodeURIComponent(updatedAt || '');
+  const params = new URLSearchParams();
+  params.set('v', updatedAt ? String(updatedAt) : '');
+  if (authToken) params.set('token', authToken);
+  const query = params.toString();
+  const imageUrl = `/api/servers/${serverId}/map-image${query ? `?${query}` : ''}`;
   const payload = {
     ...meta,
     mapKey: record.map_key || meta.mapKey || null,
@@ -1073,10 +1079,10 @@ function mapRecordToPayload(serverId, record) {
     custom: !!record.custom
   };
   if (record.image_path) {
-    payload.imageUrl = `/api/servers/${serverId}/map-image?v=${version}`;
+    payload.imageUrl = imageUrl;
     payload.localImage = true;
   } else if (hasRemote) {
-    payload.imageUrl = `/api/servers/${serverId}/map-image?v=${version}`;
+    payload.imageUrl = imageUrl;
     payload.remoteImage = true;
   } else {
     payload.imageUrl = null;
@@ -1089,9 +1095,14 @@ function deriveMapKey(info = {}, metadata = null) {
   const rawSize = Number(metadata?.size ?? info.size);
   const rawSeed = Number(metadata?.seed ?? info.seed);
   const saveVersion = metadata?.saveVersion || null;
+  if (Number.isFinite(rawSeed) && Number.isFinite(rawSize)) {
+    let key = `${rawSeed}_${rawSize}`;
+    if (saveVersion) key = `${key}_v${saveVersion}`;
+    return key;
+  }
   const parts = [];
-  if (Number.isFinite(rawSize)) parts.push(`size${rawSize}`);
   if (Number.isFinite(rawSeed)) parts.push(`seed${rawSeed}`);
+  if (Number.isFinite(rawSize)) parts.push(`size${rawSize}`);
   if (saveVersion) parts.push(`v${saveVersion}`);
   if (!parts.length && info.mapName) parts.push(`name-${info.mapName}`);
   if (!parts.length && metadata?.id) parts.push(`id${metadata.id}`);
@@ -1191,18 +1202,55 @@ rconEventBus.on('monitor_status', (serverId, payload) => {
 
   const serverInfoReply = findReply('serverinfo');
   const serverInfoMessage = serverInfoReply?.Message || serverInfoReply?.message || '';
+  let info = null;
   if (serverInfoMessage) {
     try {
-      const info = parseServerInfoMessage(serverInfoMessage);
+      info = parseServerInfoMessage(serverInfoMessage) || null;
       if (info) {
-        cacheServerInfo(id, info);
-        details.serverInfo = info;
-        details.serverinfo = info;
         details.serverInfoRaw = serverInfoMessage;
       }
     } catch (err) {
       console.warn('Failed to parse serverinfo response', err);
     }
+  }
+
+  const cachedInfo = getCachedServerInfo(id);
+  if (cachedInfo) {
+    info = { ...cachedInfo, ...(info || {}) };
+  }
+
+  const ensureInfo = () => {
+    if (!info) {
+      info = cachedInfo ? { ...cachedInfo } : { raw: null, mapName: null, size: null, seed: null };
+    }
+  };
+
+  const worldSizeReply = findReply('server.worldsize');
+  const worldSizeMessage = worldSizeReply?.Message || worldSizeReply?.message || '';
+  const worldSizeMatch = String(worldSizeMessage).match(/(?:world\s*\.\s*size|world\s*size|worldsize)\s*[:=]\s*(\d+)/i);
+  if (worldSizeMatch) {
+    const parsed = parseInt(worldSizeMatch[1], 10);
+    if (Number.isFinite(parsed)) {
+      ensureInfo();
+      info.size = parsed;
+    }
+  }
+
+  const worldSeedReply = findReply('server.seed');
+  const worldSeedMessage = worldSeedReply?.Message || worldSeedReply?.message || '';
+  const worldSeedMatch = String(worldSeedMessage).match(/seed\s*[:=]\s*(-?\d+)/i);
+  if (worldSeedMatch) {
+    const parsed = parseInt(worldSeedMatch[1], 10);
+    if (Number.isFinite(parsed)) {
+      ensureInfo();
+      info.seed = parsed;
+    }
+  }
+
+  if (info) {
+    cacheServerInfo(id, info);
+    details.serverInfo = info;
+    details.serverinfo = info;
   }
 
   recordStatus(id, {
@@ -1281,7 +1329,7 @@ async function refreshMonitoredServers() {
         monitorController = startAutoMonitor(list, {
           intervalMs: MONITOR_INTERVAL,
           timeoutMs: MONITOR_TIMEOUT,
-          commands: ['status', 'playerlist', 'serverinfo']
+          commands: ['playerlist', 'server.worldsize', 'server.seed', 'status', 'serverinfo']
         });
       } else {
         monitorController.update(list);
@@ -1624,29 +1672,6 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (!server) return res.status(404).json({ error: 'not_found' });
     logger.debug('Loaded server details', { name: server?.name, host: server?.host, port: server?.port });
     ensureRconBinding(server);
-    let info = getCachedServerInfo(id);
-    if (!info) {
-      try {
-        const reply = await sendRconCommand(server, 'serverinfo');
-        info = parseServerInfoMessage(reply?.Message || '');
-        cacheServerInfo(id, info);
-        logger.debug('Fetched serverinfo via RCON', { size: info?.size, seed: info?.seed, mapName: info?.mapName });
-      } catch (err) {
-        info = { raw: null, mapName: null, size: null, seed: null };
-        logger.warn('Failed to fetch serverinfo via RCON', err);
-      }
-    }
-    if (!info?.size || !info?.seed) {
-      try {
-        const { size, seed } = await fetchSizeAndSeedViaRcon(server);
-        if (!info.size && Number.isFinite(size)) info.size = size;
-        if (!info.seed && Number.isFinite(seed)) info.seed = seed;
-        cacheServerInfo(id, info);
-        logger.debug('Augmented server info with world settings', { size: info?.size, seed: info?.seed });
-      } catch {
-        // leave info as-is if lookups fail
-      }
-    }
     let playerPayload = '';
     try {
       const reply = await sendRconCommand(server, 'playerlist');
@@ -1659,6 +1684,56 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     players = await enrichLivePlayers(players);
     await syncServerPlayerDirectory(id, players);
     logger.debug('Processed live players', { count: players.length });
+    const authToken = req.authToken || null;
+    const cachedInfo = getCachedServerInfo(id);
+    let info = cachedInfo ? { ...cachedInfo } : { raw: null, mapName: null, size: null, seed: null };
+    let infoCacheDirty = !cachedInfo;
+
+    const worldDetails = await fetchSizeAndSeedViaRcon(server);
+    if (Number.isFinite(worldDetails.size) && worldDetails.size !== info.size) {
+      info.size = worldDetails.size;
+      infoCacheDirty = true;
+    }
+    if (Number.isFinite(worldDetails.seed) && worldDetails.seed !== info.seed) {
+      info.seed = worldDetails.seed;
+      infoCacheDirty = true;
+    }
+    if (Number.isFinite(worldDetails.size) || Number.isFinite(worldDetails.seed)) {
+      logger.debug('Fetched world settings via RCON', { size: info.size, seed: info.seed });
+    } else if (!cachedInfo) {
+      logger.debug('World settings unavailable via RCON', { size: info.size ?? null, seed: info.seed ?? null });
+    }
+
+    const needsServerInfo = !cachedInfo || !cachedInfo.raw || !cachedInfo.mapName;
+    if (needsServerInfo) {
+      try {
+        const reply = await sendRconCommand(server, 'serverinfo');
+        const parsed = parseServerInfoMessage(reply?.Message || '');
+        if (parsed.raw && parsed.raw !== info.raw) {
+          info.raw = parsed.raw;
+          infoCacheDirty = true;
+        }
+        if (parsed.mapName && parsed.mapName !== info.mapName) {
+          info.mapName = parsed.mapName;
+          infoCacheDirty = true;
+        }
+        if (Number.isFinite(parsed.size) && parsed.size !== info.size) {
+          info.size = parsed.size;
+          infoCacheDirty = true;
+        }
+        if (Number.isFinite(parsed.seed) && parsed.seed !== info.seed) {
+          info.seed = parsed.seed;
+          infoCacheDirty = true;
+        }
+        logger.debug('Fetched serverinfo via RCON', { size: info?.size, seed: info?.seed, mapName: info?.mapName });
+      } catch (err) {
+        logger.warn('Failed to fetch serverinfo via RCON', err);
+      }
+    }
+
+    if (infoCacheDirty) {
+      cacheServerInfo(id, info);
+    }
     const now = new Date();
     let mapRecord = await db.getServerMap(id);
     if (mapRecord && shouldResetMapRecord(mapRecord, now)) {
@@ -1674,8 +1749,36 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       await db.deleteServerMap(id);
       mapRecord = null;
     }
-    let map = mapRecordToPayload(id, mapRecord);
+    const mapOptions = { authToken };
+    let map = mapRecordToPayload(id, mapRecord, mapOptions);
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
+    const allowGlobalCache = info?.size && info?.seed && infoMapKey && (!mapRecord || !mapRecord.custom);
+    if (allowGlobalCache && (!map || !map.imageUrl)) {
+      const cached = await findGlobalMapImage(infoMapKey);
+      if (cached?.path) {
+        logger.info('Using cached global map image', { cacheKey: infoMapKey });
+        let existingMeta = {};
+        if (mapRecord?.data) {
+          try { existingMeta = JSON.parse(mapRecord.data); } catch { existingMeta = {}; }
+        }
+        const storedMeta = {
+          ...existingMeta,
+          mapKey: infoMapKey,
+          size: info.size,
+          seed: info.seed,
+          isCustomMap: false,
+          source: existingMeta?.source || 'global-cache'
+        };
+        await db.saveServerMap(id, {
+          map_key: infoMapKey,
+          data: JSON.stringify(storedMeta),
+          image_path: cached.path,
+          custom: 0
+        });
+        mapRecord = await db.getServerMap(id);
+        map = mapRecordToPayload(id, mapRecord, mapOptions);
+      }
+    }
     if (!map) {
       if (info?.size && info?.seed) {
         const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
@@ -1720,7 +1823,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
             custom: metadata.isCustomMap ? 1 : 0
           });
           mapRecord = await db.getServerMap(id);
-          map = mapRecordToPayload(id, mapRecord);
+          map = mapRecordToPayload(id, mapRecord, mapOptions);
           if (map && !map.mapKey) map.mapKey = finalKey || infoMapKey;
           if (!cachedImage && mapMetadataHasRemote(storedMeta)) {
             logger.info('Map imagery available remotely, awaiting proxy fetch', { mapKey: finalKey || infoMapKey });
@@ -1762,7 +1865,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
           }
         }
       } else if (mapRecord) {
-        map = mapRecordToPayload(id, mapRecord);
+        map = mapRecordToPayload(id, mapRecord, mapOptions);
       }
     }
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
@@ -1921,7 +2024,7 @@ app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
       custom: metadata?.isCustomMap ? 1 : 0
     });
     record = await db.getServerMap(id);
-    let map = mapRecordToPayload(id, record);
+    let map = mapRecordToPayload(id, record, { authToken: req.authToken || null });
     if (map && !map.mapKey) map.mapKey = finalKey;
     if (map && typeof map.cached === 'undefined') map.cached = !!imagePath;
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
@@ -1982,7 +2085,7 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
       custom: 1
     });
     record = await db.getServerMap(id);
-    const map = mapRecordToPayload(id, record);
+    const map = mapRecordToPayload(id, record, { authToken: req.authToken || null });
     res.json({ map, updatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('map upload failed', err);
@@ -1990,7 +2093,7 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
   }
 });
 
-app.get('/api/servers/:id/map-image', auth, async (req, res) => {
+app.get('/api/servers/:id/map-image', authWithQuery, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   const logger = createLogger(`map-image:${id}`);

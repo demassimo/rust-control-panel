@@ -48,7 +48,7 @@
       configWrap.className = 'map-config hidden';
       const configIntro = document.createElement('p');
       configIntro.className = 'map-config-intro';
-      configIntro.textContent = 'Enter the world size and seed to generate a live map from RustMaps.';
+      configIntro.textContent = 'Waiting for world details from the server…';
       const configForm = document.createElement('form');
       configForm.className = 'map-config-form';
       const sizeInput = document.createElement('input');
@@ -284,20 +284,21 @@
 
       function updateConfigPanel() {
         if (!configWrap) return;
-        const needsWorld = !!(state.requirements && state.requirements.world);
+        const needsWorld = state.status === 'awaiting_world_details';
         const shouldShow = needsWorld || state.pendingGeneration;
         configWrap.classList.toggle('hidden', !shouldShow);
         if (!shouldShow) {
           hideConfigStatus();
+          if (configForm) configForm.classList.add('hidden');
           return;
         }
-        if (!sizeInput.value && Number.isFinite(state.serverInfo?.size)) sizeInput.value = state.serverInfo.size;
-        if (!seedInput.value && Number.isFinite(state.serverInfo?.seed)) seedInput.value = state.serverInfo.seed;
-        sizeInput.disabled = state.pendingGeneration;
-        seedInput.disabled = state.pendingGeneration;
-        configSubmit.disabled = state.pendingGeneration;
+        if (configForm) configForm.classList.add('hidden');
+        if (sizeInput) sizeInput.disabled = true;
+        if (seedInput) seedInput.disabled = true;
+        if (configSubmit) configSubmit.disabled = true;
         if (needsWorld) {
-          configIntro.textContent = 'Enter the world size and seed to generate a live map from RustMaps.';
+          configIntro.textContent = 'Waiting for world details from the server…';
+          hideConfigStatus();
         } else if (state.pendingGeneration) {
           configIntro.textContent = 'RustMaps is generating this map. We’ll refresh automatically.';
         }
@@ -322,7 +323,7 @@
       function updateStatusMessage(hasImageOverride) {
         const hasImage = typeof hasImageOverride === 'boolean' ? hasImageOverride : hasMapImage(state.mapMeta);
         if (state.status === 'awaiting_world_details') {
-          setMessage('Enter the world size and seed to generate a live map from RustMaps.');
+          setMessage('Waiting for world details from the server…');
         } else if (state.status === 'awaiting_upload') {
           setMessage('Upload your rendered map image to enable the live map.');
         } else if (state.status === 'rustmaps_not_found' || state.mapMeta?.notFound) {
@@ -357,7 +358,7 @@
         const size = Number(sizeInput.value);
         const seed = Number(seedInput.value);
         if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(seed)) {
-          showConfigStatus('Enter a valid world size and seed.', 'error');
+          showConfigStatus('World details missing or invalid. Verify the server is reachable.', 'error');
           return;
         }
         hideConfigStatus();
@@ -412,7 +413,7 @@
           } else if (code === 'rustmaps_not_found') {
             showConfigStatus('RustMaps has not published imagery for this seed yet. Try again shortly.', 'error');
           } else if (code === 'invalid_world_config') {
-            showConfigStatus('Enter a valid world size and seed.', 'error');
+            showConfigStatus('World details missing or invalid. Verify the server is reachable.', 'error');
           } else {
             showConfigStatus(ctx.describeError?.(err) || 'Unable to request imagery from RustMaps.', 'error');
           }
@@ -792,9 +793,8 @@
           const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
 
           if (state.status === 'awaiting_world_details') {
-            // Need size/seed from user; don't poll for imagery yet
             state.pendingGeneration = false;
-            clearPendingRefresh();
+            schedulePendingRefresh();
           } else if (state.status === 'pending' || awaitingImagery) {
             // RustMaps is generating or we're waiting for imagery
             if (!state.pendingGeneration) schedulePendingRefresh();
