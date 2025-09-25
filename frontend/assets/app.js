@@ -83,6 +83,13 @@
   const workspaceViewDefault = 'players';
   let activeWorkspaceView = workspaceViewDefault;
 
+  function emitWorkspaceEvent(name, detail) {
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+    try {
+      window.dispatchEvent(new CustomEvent(name, { detail }));
+    } catch { /* ignore */ }
+  }
+
   const moduleSlots = new Map();
   document.querySelectorAll('[data-module-card]').forEach((card) => {
     const id = card?.dataset?.moduleCard;
@@ -440,6 +447,10 @@
     if (!trimmed) return;
     state.API = trimmed;
     localStorage.setItem('apiBase', trimmed);
+    if (typeof window !== 'undefined') {
+      window.API_BASE = trimmed;
+    }
+    emitWorkspaceEvent('workspace:api-base', { base: trimmed });
     loadPublicConfig();
   }
 
@@ -555,6 +566,8 @@
     }
     moduleBus.emit('server:disconnected', { serverId: previous, reason });
     state.currentServerId = null;
+    if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
+    emitWorkspaceEvent('workspace:server-cleared', { reason });
     highlightSelectedServer();
   }
 
@@ -725,6 +738,20 @@
     if (workspaceInfoSaveCreatedTime) {
       workspaceInfoSaveCreatedTime.textContent = formatDateTime(lastSave);
     }
+
+    const playersCurrent = Number.isFinite(playersOnline) && playersOnline >= 0 ? playersOnline : 0;
+    const playersMaxSafe = Number.isFinite(maxPlayers) && maxPlayers >= 0 ? maxPlayers : null;
+    const joiningValue = Number.isFinite(joiningCount) && joiningCount >= 0 ? joiningCount : 0;
+    emitWorkspaceEvent('workspace:server-status', {
+      serverId: numericId,
+      status: {
+        players: { current: playersCurrent, max: playersMaxSafe },
+        joining: joiningValue,
+        presence: online ? 'online' : 'dnd',
+        presenceLabel: online ? 'Online' : 'Do Not Disturb',
+        lastCheck: status?.lastCheck || null
+      }
+    });
   }
 
   function showWorkspaceForServer(id) {
@@ -1252,6 +1279,8 @@
     if (previous === numericId) {
       showWorkspaceForServer(numericId);
       updateWorkspaceDisplay(entry);
+      if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
+      emitWorkspaceEvent('workspace:server-selected', { serverId: numericId, repeat: true });
       return;
     }
     if (previous != null && previous !== numericId) {
@@ -1262,6 +1291,8 @@
       moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
     }
     state.currentServerId = numericId;
+    if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
+    emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
     highlightSelectedServer();
     ui.clearConsole();
     const name = entry?.data?.name || `Server #${numericId}`;

@@ -1125,6 +1125,131 @@ button.menu-tab.active {
   gap: 14px;
 }
 
+.settings-card .card-header p {
+  max-width: 420px;
+}
+
+.bot-status-pill {
+  white-space: nowrap;
+}
+
+.discord-settings-grid {
+  display: grid;
+  gap: 24px;
+  align-items: stretch;
+}
+
+@media (min-width: 960px) {
+  .discord-settings-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.discord-status,
+.discord-form-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 22px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.08);
+}
+
+.discord-section-title {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.discord-status-summary {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.discord-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 120px;
+}
+
+.discord-stat .label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.discord-stat .value {
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.discord-last-check {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.discord-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.discord-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.discord-form .field-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.discord-form .field small {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.discord-form .form-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.discord-form .form-actions button {
+  min-width: 150px;
+}
+
+.discord-notice {
+  margin: 0;
+}
+
+.discord-notice.success {
+  border-color: rgba(74, 222, 128, 0.38);
+  background: rgba(74, 222, 128, 0.15);
+  color: #c8fddc;
+}
+
+.discord-notice.error {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(248, 113, 113, 0.16);
+  color: #fed7d7;
+}
+
 .map-summary {
   display: grid;
   gap: 6px;

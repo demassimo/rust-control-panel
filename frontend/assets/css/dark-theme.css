@@ -46,6 +46,7 @@ body.modal-open{overflow:hidden}
   border:1px solid var(--border); background:var(--surface)
 }
 .badge.success{background:rgba(34,197,94,.12); color:#a3ffbf; border-color:rgba(34,197,94,.25)}
+.badge.offline{background:rgba(239,68,68,.2); color:#fecaca; border-color:rgba(239,68,68,.45)}
 
 .btn{
   appearance:none; border:1px solid var(--border); border-radius:10px;
@@ -235,6 +236,9 @@ main.grid{
 .map-upload .notice{padding:10px 12px; border-radius:10px; font-size:13px}
 .map-upload .notice.error{background:rgba(239,68,68,.18); color:#fecaca; border:1px solid rgba(239,68,68,.4)}
 .map-upload .notice.success{background:rgba(34,197,94,.18); color:#bbf7d0; border:1px solid rgba(34,197,94,.35)}
+.discord-notice{padding:10px 12px; border-radius:10px; font-size:.85rem; background:rgba(59,130,246,.16); color:#bfdbfe; border:1px solid rgba(59,130,246,.35)}
+.discord-notice.error{background:rgba(239,68,68,.18); color:#fecaca; border-color:rgba(239,68,68,.4)}
+.discord-notice.success{background:rgba(34,197,94,.18); color:#bbf7d0; border-color:rgba(34,197,94,.35)}
 
 .players-list{max-height:260px; overflow:auto}
 .live-players-list{display:flex; flex-direction:column}
@@ -262,6 +266,21 @@ main.grid{
 .badge.gameban{background:rgba(249,115,22,.2); color:#fed7aa; border-color:rgba(249,115,22,.45)}
 .badge.country{background:rgba(59,130,246,.2); color:#bfdbfe; border-color:rgba(59,130,246,.45)}
 .badge.warn{background:rgba(245,158,11,.18); color:#fde68a; border-color:rgba(245,158,11,.4)}
+.discord-settings-grid{display:grid; gap:24px; align-items:start}
+@media(min-width:960px){.discord-settings-grid{grid-template-columns:1fr 1fr}}
+.section-title{margin:0 0 12px; font-size:.85rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.discord-status-summary{display:flex; flex-wrap:wrap; gap:16px; align-items:stretch}
+.discord-stat{background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; min-width:160px; flex:1 1 140px}
+.discord-stat .label{display:block; font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:6px}
+.discord-stat .value{font-size:1.6rem; font-weight:700}
+.discord-last-check{margin:12px 0 0; font-size:.85rem; color:var(--muted)}
+.discord-form{display:grid; gap:16px; max-width:420px}
+.discord-form .field{display:flex; flex-direction:column; gap:6px}
+.discord-form .field-label{font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.discord-form input{background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; color:var(--text); font-size:.95rem}
+.discord-form input:focus{outline:2px solid rgba(59,130,246,.35); outline-offset:2px}
+.discord-form .form-actions{display:flex; gap:12px; flex-wrap:wrap}
+.discord-form .form-actions .btn{min-width:150px}
 .player-row{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 14px; border-bottom:1px solid var(--border);
