@@ -1,0 +1,18 @@
+[Unit]
+Description=RustAdmin Discord Bot Service
+After=network.target rustadmin-backend.service
+Wants=rustadmin-backend.service
+
+[Service]
+Type=simple
+User=rustadmin
+Group=rustadmin
+WorkingDirectory=/opt/rustadmin/backend
+Environment=NODE_ENV=production
+EnvironmentFile=-/opt/rustadmin/backend/.env
+ExecStart=/usr/bin/env node src/discord-bot-service.js
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
