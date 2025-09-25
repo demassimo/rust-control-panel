@@ -77,6 +77,19 @@
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
   const moduleFallback = $('#moduleFallback');
+  const userDetailsOverlay = $('#userDetailsOverlay');
+  const userDetailsPanel = $('#userDetailsPanel');
+  const userDetailsClose = $('#userDetailsClose');
+  const userDetailsName = $('#userDetailsName');
+  const userDetailsSubtitle = $('#userDetailsSubtitle');
+  const userDetailsRole = $('#userDetailsRole');
+  const userDetailsRoleBadge = $('#userDetailsRoleBadge');
+  const userDetailsCreated = $('#userDetailsCreated');
+  const userDetailsId = $('#userDetailsId');
+  const userDetailsToggleRole = $('#userDetailsToggleRole');
+  const userDetailsResetPassword = $('#userDetailsResetPassword');
+  const userDetailsDelete = $('#userDetailsDelete');
+  const userDetailsSelfNotice = $('#userDetailsSelfNotice');
 
   const workspaceViewSections = Array.from(document.querySelectorAll('.workspace-view'));
   const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
@@ -133,6 +146,13 @@
 
   let socket = null;
   let addServerPinned = false;
+  let activeUserDetails = null;
+  let lastUserDetailsTrigger = null;
+
+  const userDetailsDateFormatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
 
   function setProfileMenuOpen(open) {
     if (!userBox) return;
@@ -158,6 +178,141 @@
   function closeProfileMenu() {
     setProfileMenuOpen(false);
   }
+
+  function formatUserRole(role) {
+    return role === 'admin' ? 'Administrator' : 'User';
+  }
+
+  function formatUserJoined(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    try {
+      return userDetailsDateFormatter.format(date);
+    } catch {
+      return date.toLocaleString();
+    }
+  }
+
+  function isUserDetailsOpen() {
+    return !!(userDetailsPanel && !userDetailsPanel.classList.contains('hidden'));
+  }
+
+  function renderUserDetails(user) {
+    if (!userDetailsPanel || !user) return;
+    const isSelf = user.id === state.currentUser?.id;
+    if (userDetailsName) userDetailsName.textContent = user.username;
+    if (userDetailsSubtitle) {
+      userDetailsSubtitle.textContent = isSelf
+        ? 'Signed in with this account'
+        : 'Review access and credentials';
+    }
+    if (userDetailsRole) userDetailsRole.textContent = formatUserRole(user.role);
+    if (userDetailsRoleBadge) userDetailsRoleBadge.textContent = user.role === 'admin' ? 'Admin' : 'User';
+    if (userDetailsCreated) userDetailsCreated.textContent = formatUserJoined(user.created_at);
+    if (userDetailsId) userDetailsId.textContent = user.id != null ? String(user.id) : '—';
+    if (userDetailsSelfNotice) userDetailsSelfNotice.classList.toggle('hidden', !isSelf);
+    if (userDetailsToggleRole) {
+      userDetailsToggleRole.textContent = user.role === 'admin' ? 'Make user' : 'Promote to admin';
+      userDetailsToggleRole.disabled = isSelf;
+    }
+    if (userDetailsResetPassword) userDetailsResetPassword.disabled = !state.currentUser || user.id === state.currentUser.id;
+    if (userDetailsDelete) userDetailsDelete.disabled = isSelf;
+  }
+
+  function openUserDetails(user) {
+    if (!userDetailsPanel || !userDetailsOverlay) return;
+    activeUserDetails = { ...user };
+    renderUserDetails(activeUserDetails);
+    userDetailsOverlay.classList.remove('hidden');
+    userDetailsOverlay.setAttribute('aria-hidden', 'false');
+    userDetailsPanel.classList.remove('hidden');
+    userDetailsPanel.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => {
+      userDetailsPanel?.focus();
+    });
+  }
+
+  function closeUserDetails() {
+    if (!userDetailsPanel || !userDetailsOverlay) return;
+    if (userDetailsPanel.classList.contains('hidden')) return;
+    userDetailsOverlay.classList.add('hidden');
+    userDetailsOverlay.setAttribute('aria-hidden', 'true');
+    userDetailsPanel.classList.add('hidden');
+    userDetailsPanel.setAttribute('aria-hidden', 'true');
+    activeUserDetails = null;
+    if (lastUserDetailsTrigger && document.body.contains(lastUserDetailsTrigger)) {
+      requestAnimationFrame(() => lastUserDetailsTrigger?.focus());
+    }
+    lastUserDetailsTrigger = null;
+  }
+
+  async function handleUserDetailsRoleToggle() {
+    if (!activeUserDetails) return;
+    const targetRole = activeUserDetails.role === 'admin' ? 'user' : 'admin';
+    try {
+      await api(`/api/users/${activeUserDetails.id}`, { role: targetRole }, 'PATCH');
+      showNotice(userFeedback, 'Updated role for ' + activeUserDetails.username, 'success');
+      activeUserDetails = { ...activeUserDetails, role: targetRole };
+      renderUserDetails(activeUserDetails);
+      loadUsers();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(userFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleUserDetailsPasswordReset() {
+    if (!activeUserDetails) return;
+    const newPass = prompt(`Enter a new password for ${activeUserDetails.username} (min 8 chars):`);
+    if (!newPass) return;
+    if (newPass.length < 8) {
+      showNotice(userFeedback, 'Password must be at least 8 characters.', 'error');
+      return;
+    }
+    try {
+      await api(`/api/users/${activeUserDetails.id}/password`, { newPassword: newPass }, 'POST');
+      showNotice(userFeedback, 'Password updated for ' + activeUserDetails.username, 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(userFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleUserDetailsDelete() {
+    if (!activeUserDetails) return;
+    if (!confirm(`Remove ${activeUserDetails.username}? This cannot be undone.`)) return;
+    try {
+      await api(`/api/users/${activeUserDetails.id}`, null, 'DELETE');
+      showNotice(userFeedback, 'Removed ' + activeUserDetails.username, 'success');
+      closeUserDetails();
+      loadUsers();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(userFeedback, describeError(err), 'error');
+    }
+  }
+
+  userDetailsOverlay?.addEventListener('click', (event) => {
+    if (event.target === userDetailsOverlay) {
+      closeUserDetails();
+    }
+  });
+
+  userDetailsClose?.addEventListener('click', () => {
+    closeUserDetails();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && isUserDetailsOpen()) {
+      event.preventDefault();
+      closeUserDetails();
+    }
+  });
+
+  userDetailsToggleRole?.addEventListener('click', handleUserDetailsRoleToggle);
+  userDetailsResetPassword?.addEventListener('click', handleUserDetailsPasswordReset);
+  userDetailsDelete?.addEventListener('click', handleUserDetailsDelete);
 
   function setAddServerPromptState(open) {
     if (!addServerPrompt) return;
@@ -1420,6 +1575,7 @@
     ui.clearConsole();
     ui.setUser(null);
     userCard.classList.add('hidden');
+    closeUserDetails();
     hideNotice(userFeedback);
     hideNotice(settingsStatus);
     hideNotice(passwordStatus);
@@ -1494,76 +1650,61 @@
     try {
       const list = await api('/api/users');
       userList.innerHTML = '';
+      let activeMatch = null;
       for (const user of list) {
         const li = document.createElement('li');
-        const left = document.createElement('div');
-        const strong = document.createElement('strong');
-        strong.textContent = user.username;
-        left.appendChild(strong);
-        const meta = document.createElement('div');
-        meta.className = 'muted small';
-        meta.textContent = `Role: ${user.role}`;
-        left.appendChild(meta);
-        const right = document.createElement('div');
-        right.className = 'server-actions';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'user-item';
+        const primary = document.createElement('div');
+        primary.className = 'user-item-primary';
+        const name = document.createElement('span');
+        name.className = 'user-item-name';
+        name.textContent = user.username;
+        primary.appendChild(name);
+        const meta = document.createElement('span');
+        meta.className = 'user-item-meta';
+        meta.textContent = `Role: ${formatUserRole(user.role)}`;
+        primary.appendChild(meta);
+        button.appendChild(primary);
+
+        const trailing = document.createElement('div');
+        trailing.className = 'user-item-trailing';
         if (user.id === state.currentUser.id) {
           const badge = document.createElement('span');
           badge.className = 'badge';
           badge.textContent = 'You';
-          right.appendChild(badge);
-        } else {
-          const roleBtn = document.createElement('button');
-          roleBtn.className = 'ghost small';
-          roleBtn.textContent = user.role === 'admin' ? 'Make user' : 'Promote to admin';
-          roleBtn.onclick = async () => {
-            try {
-              await api(`/api/users/${user.id}`, { role: user.role === 'admin' ? 'user' : 'admin' }, 'PATCH');
-              showNotice(userFeedback, 'Updated role for ' + user.username, 'success');
-              loadUsers();
-            } catch (err) {
-              if (errorCode(err) === 'unauthorized') handleUnauthorized();
-              else showNotice(userFeedback, describeError(err), 'error');
-            }
-          };
-          const resetBtn = document.createElement('button');
-          resetBtn.className = 'ghost small';
-          resetBtn.textContent = 'Reset password';
-          resetBtn.onclick = async () => {
-            const newPass = prompt(`Enter a new password for ${user.username} (min 8 chars):`);
-            if (!newPass) return;
-            if (newPass.length < 8) {
-              showNotice(userFeedback, 'Password must be at least 8 characters.', 'error');
-              return;
-            }
-            try {
-              await api(`/api/users/${user.id}/password`, { newPassword: newPass }, 'POST');
-              showNotice(userFeedback, 'Password updated for ' + user.username, 'success');
-            } catch (err) {
-              if (errorCode(err) === 'unauthorized') handleUnauthorized();
-              else showNotice(userFeedback, describeError(err), 'error');
-            }
-          };
-          const deleteBtn = document.createElement('button');
-          deleteBtn.className = 'ghost small';
-          deleteBtn.textContent = 'Remove';
-          deleteBtn.onclick = async () => {
-            if (!confirm(`Remove ${user.username}? This cannot be undone.`)) return;
-            try {
-              await api(`/api/users/${user.id}`, null, 'DELETE');
-              showNotice(userFeedback, 'Removed ' + user.username, 'success');
-              loadUsers();
-            } catch (err) {
-              if (errorCode(err) === 'unauthorized') handleUnauthorized();
-              else showNotice(userFeedback, describeError(err), 'error');
-            }
-          };
-          right.appendChild(roleBtn);
-          right.appendChild(resetBtn);
-          right.appendChild(deleteBtn);
+          trailing.appendChild(badge);
         }
-        li.appendChild(left);
-        li.appendChild(right);
+        const chevron = document.createElement('span');
+        chevron.className = 'user-item-chevron';
+        chevron.setAttribute('aria-hidden', 'true');
+        chevron.textContent = '›';
+        trailing.appendChild(chevron);
+        button.appendChild(trailing);
+
+        button.addEventListener('click', () => {
+          lastUserDetailsTrigger = button;
+          openUserDetails(user);
+        });
+
+        li.appendChild(button);
         userList.appendChild(li);
+
+        if (activeUserDetails && user.id === activeUserDetails.id) {
+          activeMatch = user;
+          if (isUserDetailsOpen()) {
+            lastUserDetailsTrigger = button;
+          }
+        }
+      }
+      if (activeUserDetails) {
+        if (activeMatch) {
+          activeUserDetails = { ...activeMatch };
+          renderUserDetails(activeUserDetails);
+        } else {
+          closeUserDetails();
+        }
       }
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -1578,6 +1719,7 @@
     } else {
       userCard.classList.add('hidden');
       userList.innerHTML = '';
+      closeUserDetails();
     }
   }
 
