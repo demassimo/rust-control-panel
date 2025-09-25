@@ -65,15 +65,6 @@
       summary.className = 'map-summary';
       sidebar.appendChild(summary);
 
-      const filterRow = document.createElement('div');
-      filterRow.className = 'row';
-      const clearBtn = document.createElement('button');
-      clearBtn.className = 'ghost small';
-      clearBtn.textContent = 'Show everyone';
-      clearBtn.disabled = true;
-      filterRow.appendChild(clearBtn);
-      sidebar.appendChild(filterRow);
-
       const listWrap = document.createElement('div');
       listWrap.className = 'map-player-list';
       sidebar.appendChild(listWrap);
@@ -299,10 +290,14 @@
         }
       }
 
-      function shouldDisplay(player) {
+      function selectionActive() {
+        return !!(state.selectedSolo || state.selectedTeam);
+      }
+
+      function isPlayerFocused(player) {
         if (state.selectedSolo) return player.steamId === state.selectedSolo;
         if (state.selectedTeam) return Number(player.teamId) === state.selectedTeam;
-        return true;
+        return false;
       }
 
       function renderMarkers() {
@@ -317,9 +312,9 @@
           marker.style.left = position.left + '%';
           marker.style.top = position.top + '%';
           marker.title = player.displayName || player.persona || player.steamId;
-          if (!shouldDisplay(player)) marker.classList.add('dimmed');
-          if (state.selectedSolo && state.selectedSolo === player.steamId) marker.classList.add('active');
-          if (!state.selectedSolo && state.selectedTeam && Number(player.teamId) === state.selectedTeam) marker.classList.add('active');
+          const focused = isPlayerFocused(player);
+          if (selectionActive() && !focused) marker.classList.add('dimmed');
+          if (focused) marker.classList.add('active');
           marker.addEventListener('click', (e) => {
             e.stopPropagation();
             selectPlayer(player);
@@ -330,11 +325,11 @@
 
       function renderPlayerList() {
         listWrap.innerHTML = '';
-        const players = state.players.filter((p) => shouldDisplay(p));
+        const players = [...state.players];
         if (players.length === 0) {
           const empty = document.createElement('p');
           empty.className = 'module-message';
-          empty.textContent = state.serverId ? 'No players online for this selection.' : 'Connect to a server to view live positions.';
+          empty.textContent = state.serverId ? 'No players connected right now.' : 'Connect to a server to view live positions.';
           listWrap.appendChild(empty);
           return;
         }
@@ -346,8 +341,9 @@
           tag.className = 'map-player-tag';
           tag.innerHTML = `<span>${formatPing(player.ping)}</span><span>${formatHealth(player.health)} hp</span>`;
           btn.appendChild(tag);
-          if (state.selectedSolo && state.selectedSolo === player.steamId) btn.classList.add('active');
-          if (!state.selectedSolo && state.selectedTeam && Number(player.teamId) === state.selectedTeam) btn.classList.add('active');
+          const focused = isPlayerFocused(player);
+          if (focused) btn.classList.add('active');
+          else if (selectionActive()) btn.classList.add('dimmed');
           btn.style.borderLeft = `4px solid ${colorForPlayer(player)}`;
           btn.addEventListener('click', () => selectPlayer(player));
           listWrap.appendChild(btn);
@@ -449,7 +445,6 @@
         renderSummary();
         renderTeamInfo();
         updateUploadSection();
-        clearBtn.disabled = !state.selectedSolo && !state.selectedTeam;
       }
 
       function broadcastPlayers() {
@@ -503,7 +498,6 @@
         }
       }
 
-      clearBtn.addEventListener('click', () => clearSelection());
       mapView.addEventListener('click', () => clearSelection());
 
       async function refreshData(reason) {

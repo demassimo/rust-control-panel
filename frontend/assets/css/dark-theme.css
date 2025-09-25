@@ -204,6 +204,7 @@ main.grid{
 }
 .map-player-list button:hover{background:rgba(225,29,72,.12); border-color:rgba(225,29,72,.35)}
 .map-player-list button.active{background:rgba(225,29,72,.18); border-color:rgba(225,29,72,.55)}
+.map-player-list button.dimmed{opacity:.6}
 .map-player-tag{display:flex; gap:8px; color:var(--muted); font-size:12px}
 .map-team-info{display:flex; flex-direction:column; gap:10px; background:rgba(15,19,28,.78); border-radius:12px; padding:14px; border:1px solid rgba(148,163,184,.1)}
 .map-team-info .team-row{display:flex; align-items:center; justify-content:space-between; gap:12px}

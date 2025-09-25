@@ -7,7 +7,6 @@
   const infoTitle = document.getElementById('info-title');
   const infoContent = document.getElementById('info-content');
   const playerCount = document.getElementById('player-count');
-  const showAllBtn = document.getElementById('show-all');
 
   // When map or list selects a player → show Player Info panel
   window.addEventListener('player:selected', (ev) => {
@@ -55,11 +54,6 @@
   window.addEventListener('players:list', (ev) => {
     const { players } = ev.detail || {};
     if (Array.isArray(players)) playerCount.textContent = `(${players.length})`;
-  });
-
-  showAllBtn?.addEventListener('click', () => {
-    // notify map/list modules to clear filters
-    window.dispatchEvent(new CustomEvent('team:clear'));
   });
 
   function escapeHtml(str = '') {

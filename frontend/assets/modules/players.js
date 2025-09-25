@@ -16,25 +16,6 @@
 
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
-        const syncBtn = document.createElement('button');
-        syncBtn.id = 'moduleSyncPlayers';
-        syncBtn.className = 'ghost small';
-        syncBtn.textContent = 'Sync from Steam';
-        syncBtn.addEventListener('click', async () => {
-          const raw = window.prompt('Enter comma-separated Steam64 IDs to sync:');
-          if (!raw) return;
-          const steamids = raw.split(',').map((s) => s.trim()).filter(Boolean);
-          if (steamids.length === 0) return;
-          try {
-            await ctx.api('/api/steam/sync', { steamids }, 'POST');
-            ctx.log?.(`Requested Steam sync for ${steamids.length} player(s).`);
-            await refresh('steam-sync');
-          } catch (err) {
-            if (ctx.errorCode?.(err) === 'unauthorized') ctx.handleUnauthorized?.();
-            else ctx.log?.('Steam sync failed: ' + (ctx.describeError?.(err) || err?.message || String(err)));
-          }
-        });
-        ctx.actions.appendChild(syncBtn);
       }
 
       function setMessage(text, variant = 'info') {

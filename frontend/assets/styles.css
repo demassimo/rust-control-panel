@@ -1157,6 +1157,10 @@ button.menu-tab.active {
   color: var(--accent-strong);
 }
 
+.map-player-list button.dimmed {
+  opacity: 0.6;
+}
+
 .map-team-info {
   padding: 14px;
   border-radius: var(--radius-sm);
