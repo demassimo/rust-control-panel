@@ -1767,17 +1767,185 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
+    // keep cached flag consistent
     if (map && typeof map.cached === 'undefined') map.cached = !!(mapRecord?.image_path);
+
+
+    // unified response (keeps main's shape, adds richer status from codex)
+    const mapPayload = map || null;
+
+    // derive a status + requirements summary for the frontend
+    let status = 'ready';
+    const requirements = {};
+    if (!mapPayload) {
+      if (!info?.size || !info?.seed) {
+        status = 'awaiting_world_details';
+        requirements.world = {
+          sizeMissing: !info?.size,
+          seedMissing: !info?.seed
+        };
+      } else {
+        status = 'awaiting_imagery';
+      }
+    } else if (mapPayload.notFound) {
+      status = 'rustmaps_not_found';
+    } else if (mapPayload.custom && mapPayload.needsUpload) {
+      status = 'awaiting_upload';
+    } else if (!mapPayload.imageUrl) {
+      status = 'awaiting_imagery';
+    }
+
+    // structured log so you can see why the map didn't render
     logger.info('Live map payload ready', {
       players: players.length,
-      mapKey: map?.mapKey || null,
-      cached: !!map?.cached,
-      hasImage: !!map?.imageUrl
+      mapKey: mapPayload?.mapKey || null,
+      cached: !!mapPayload?.cached,
+      hasImage: !!mapPayload?.imageUrl,
+      status
     });
-    res.json({ players, map, info, fetchedAt: new Date().toISOString() });
+
+    // backward-compatible shape + richer fields
+    const responsePayload = {
+      players,
+      map: mapPayload,
+      info,
+      status,                    // <-- new
+      fetchedAt: new Date().toISOString()
+    };
+    if (Object.keys(requirements).length > 0) {
+      responsePayload.requirements = requirements;   // <-- new
+    }
+
+    res.json(responsePayload);
   } catch (err) {
     logger.error('live-map route error', err);
     res.status(500).json({ error: 'live_map_failed' });
+  }
+});
+
+app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const { size, seed } = req.body || {};
+  const numericSize = Number(size);
+  const numericSeed = Number(seed);
+  if (!Number.isFinite(numericSize) || numericSize <= 0 || !Number.isFinite(numericSeed)) {
+    return res.status(400).json({ error: 'invalid_world_config' });
+  }
+  const logger = createLogger(`live-map-config:${id}`);
+  logger.info('Manual RustMaps request received', { size: numericSize, seed: numericSeed });
+  try {
+    const server = await db.getServer(id);
+    if (!server) return res.status(404).json({ error: 'not_found' });
+    const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
+    const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
+    if (!apiKey) {
+      logger.warn('RustMaps API key missing for manual request');
+      return res.status(400).json({ error: 'rustmaps_api_key_missing' });
+    }
+
+    const info = { ...(getCachedServerInfo(id) || {}) };
+    info.size = numericSize;
+    info.seed = numericSeed;
+
+    let metadata;
+    try {
+      metadata = await fetchRustMapMetadata(numericSize, numericSeed, apiKey, {
+        logger,
+        timeoutMs: Math.max(30000, toInt(process.env.RUSTMAPS_CONFIG_TIMEOUT_MS) || 45000)
+      });
+    } catch (err) {
+      const code = err?.code || err?.message;
+      if (code === 'rustmaps_generation_timeout') {
+        cacheServerInfo(id, info);
+        logger.info('RustMaps still generating map after timeout');
+        return res.status(202).json({
+          status: 'pending',
+          info,
+          map: null
+        });
+      }
+      if (code === 'rustmaps_api_key_missing' || code === 'rustmaps_unauthorized' || code === 'rustmaps_invalid_parameters') {
+        logger.warn('RustMaps rejected manual request', { code });
+        return res.status(400).json({ error: code });
+      }
+      if (code === 'rustmaps_not_found') {
+        cacheServerInfo(id, info);
+        logger.info('RustMaps has no data for requested map');
+        return res.status(404).json({ error: code });
+      }
+      throw err;
+    }
+
+    const enrichedInfo = { ...info };
+    if (Number.isFinite(metadata?.size)) enrichedInfo.size = metadata.size;
+    if (Number.isFinite(metadata?.seed)) enrichedInfo.seed = metadata.seed;
+    if (metadata?.mapName) enrichedInfo.mapName = metadata.mapName;
+    cacheServerInfo(id, enrichedInfo);
+
+    const finalKey = deriveMapKey(enrichedInfo, metadata) || deriveMapKey(enrichedInfo) || `server-${id}`;
+    const storedMeta = { ...metadata, mapKey: finalKey };
+    if (!storedMeta.size && Number.isFinite(enrichedInfo.size)) storedMeta.size = enrichedInfo.size;
+    if (!storedMeta.seed && Number.isFinite(enrichedInfo.seed)) storedMeta.seed = enrichedInfo.seed;
+
+    let record = await db.getServerMap(id);
+    if (record) await removeMapImage(record);
+
+    let imagePath = null;
+    if (!metadata?.isCustomMap) {
+      const cacheKey = finalKey;
+      const cached = await findGlobalMapImage(cacheKey);
+      if (cached?.path) {
+        logger.info('Using cached global map image for manual request', { cacheKey });
+        imagePath = cached.path;
+      } else {
+        try {
+          const download = await downloadRustMapImage(metadata, apiKey);
+          if (download?.buffer) {
+            const filePath = globalMapImageFilePath(cacheKey, download.extension);
+            await fs.mkdir(path.dirname(filePath), { recursive: true });
+            await fs.writeFile(filePath, download.buffer);
+            logger.info('Downloaded RustMaps image for manual request', { cacheKey, path: filePath });
+            imagePath = filePath;
+          }
+        } catch (imageErr) {
+          logger.warn('RustMaps image download failed during manual request', imageErr);
+        }
+      }
+    }
+
+    await db.saveServerMap(id, {
+      map_key: finalKey,
+      data: JSON.stringify(storedMeta),
+      image_path: imagePath,
+      custom: metadata?.isCustomMap ? 1 : 0
+    });
+    record = await db.getServerMap(id);
+    let map = mapRecordToPayload(id, record);
+    if (map && !map.mapKey) map.mapKey = finalKey;
+    if (map && typeof map.cached === 'undefined') map.cached = !!imagePath;
+    if (map && map.custom && !map.imageUrl) map.needsUpload = true;
+
+    logger.info('Manual RustMaps request completed', {
+      mapKey: map?.mapKey || finalKey,
+      cached: !!map?.cached,
+      hasImage: !!map?.imageUrl
+    });
+
+    res.json({
+      status: map?.imageUrl ? 'ready' : 'awaiting_imagery',
+      map,
+      info: enrichedInfo,
+      fetchedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    const code = err?.code || err?.message;
+    if (code === 'rustmaps_image_error') {
+      logger.warn('RustMaps image download failed', err);
+      return res.status(502).json({ error: 'rustmaps_image_error' });
+    }
+    logger.error('Manual RustMaps request failed', err);
+    res.status(502).json({ error: 'rustmaps_error' });
   }
 });
 
