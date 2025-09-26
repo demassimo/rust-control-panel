@@ -71,6 +71,7 @@ function createApi(pool, dialect) {
         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_ip VARCHAR(128) NULL,
         last_port INT NULL,
+        total_playtime_seconds BIGINT NULL,
         UNIQUE KEY server_steam (server_id, steamid),
         INDEX idx_server_players_server (server_id),
         CONSTRAINT fk_server_players_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
@@ -87,6 +88,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_ip VARCHAR(128) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
+      await ensureColumn('ALTER TABLE server_players ADD COLUMN total_playtime_seconds BIGINT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN queued INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN sleepers INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN joining INT NULL');
@@ -200,19 +202,71 @@ function createApi(pool, dialect) {
       if (!Number.isFinite(serverIdNum)) return;
       const sid = String(steamid || '').trim();
       if (!sid) return;
-      const seen = seen_at || new Date().toISOString().slice(0, 19).replace('T', ' ');
+      let seenDate = null;
+      if (seen_at instanceof Date) {
+        seenDate = Number.isNaN(seen_at.getTime()) ? null : seen_at;
+      } else if (typeof seen_at === 'string') {
+        const parsed = new Date(seen_at);
+        seenDate = Number.isNaN(parsed.getTime()) ? null : parsed;
+      }
+      if (!seenDate) seenDate = new Date();
+      const seen = seenDate.toISOString().slice(0, 19).replace('T', ' ');
       const ipValue = typeof ip === 'string' && ip ? ip : null;
       const portNum = Number(port);
       const portValue = Number.isFinite(portNum) ? Math.max(0, Math.trunc(portNum)) : null;
+      const parseStoredDate = (value) => {
+        if (!value) return null;
+        if (value instanceof Date) {
+          return Number.isNaN(value.getTime()) ? null : value;
+        }
+        if (typeof value === 'string') {
+          let normalized = value.trim();
+          if (!normalized) return null;
+          if (!normalized.includes('T') && normalized.includes(' ')) {
+            normalized = normalized.replace(' ', 'T');
+          }
+          if (!/[zZ]$/.test(normalized) && !/[+-]\d{2}:?\d{2}$/.test(normalized)) {
+            normalized += 'Z';
+          }
+          const parsed = new Date(normalized);
+          if (!Number.isNaN(parsed.getTime())) return parsed;
+        }
+        const fallback = new Date(value);
+        return Number.isNaN(fallback.getTime()) ? null : fallback;
+      };
+      const rows = await exec(
+        'SELECT last_seen, total_playtime_seconds FROM server_players WHERE server_id=? AND steamid=? LIMIT 1',
+        [serverIdNum, sid]
+      );
+      const existing = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+      let totalSeconds = Number.isFinite(Number(existing?.total_playtime_seconds))
+        ? Number(existing.total_playtime_seconds)
+        : 0;
+      const prevDate = parseStoredDate(existing?.last_seen);
+      const nextMs = Number.isNaN(seenDate.getTime()) ? null : seenDate.getTime();
+      if (prevDate && nextMs != null && nextMs > prevDate.getTime()) {
+        const prevMs = prevDate.getTime();
+        const deltaSeconds = Math.floor((nextMs - prevMs) / 1000);
+        const MAX_SESSION_GAP_SECONDS = 10 * 60;
+        if (deltaSeconds > 0) {
+          if (deltaSeconds <= MAX_SESSION_GAP_SECONDS) {
+            totalSeconds += deltaSeconds;
+          } else if (deltaSeconds <= MAX_SESSION_GAP_SECONDS * 6) {
+            totalSeconds += MAX_SESSION_GAP_SECONDS;
+          }
+        }
+      }
+      totalSeconds = Math.max(0, Math.round(totalSeconds));
       await exec(`
-        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port)
-        VALUES(?,?,?,?,?,?,?,?)
+        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port, total_playtime_seconds)
+        VALUES(?,?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
           display_name=COALESCE(VALUES(display_name), server_players.display_name),
           last_seen=VALUES(last_seen),
           last_ip=COALESCE(VALUES(last_ip), server_players.last_ip),
-          last_port=COALESCE(VALUES(last_port), server_players.last_port)
-      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
+          last_port=COALESCE(VALUES(last_port), server_players.last_port),
+          total_playtime_seconds=VALUES(total_playtime_seconds)
+      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue,totalSeconds]);
     },
     async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, joining=null, fps=null, online=1, recorded_at=null }){
       const serverIdNum = Number(server_id);
@@ -293,9 +347,9 @@ function createApi(pool, dialect) {
       if (!Number.isFinite(serverIdNum)) return [];
       return await exec(`
         SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
-               sp.last_ip, sp.last_port,
-               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
-               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+                sp.last_ip, sp.last_port, sp.total_playtime_seconds,
+                p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+                p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
         FROM server_players sp
         LEFT JOIN players p ON p.steamid = sp.steamid
         WHERE sp.server_id=?

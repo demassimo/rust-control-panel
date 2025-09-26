@@ -190,6 +190,8 @@
             parts.push(endpoint);
           }
           if (lastSeen) parts.push(`Last seen ${lastSeen}`);
+          const serverPlaytime = formatServerPlaytime(p.total_playtime_seconds, p.total_playtime_minutes);
+          if (serverPlaytime) parts.push(`Time on server ${serverPlaytime}`);
           meta.textContent = parts.join(' · ');
           info.appendChild(meta);
 
@@ -381,6 +383,26 @@
         return `${hours.toFixed(1)} h`;
       }
 
+      function formatServerPlaytime(seconds, minutesFallback) {
+        let totalSeconds = Number(seconds);
+        if (!Number.isFinite(totalSeconds) && minutesFallback != null) {
+          const minutes = Number(minutesFallback);
+          if (Number.isFinite(minutes)) totalSeconds = minutes * 60;
+        }
+        if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '';
+        if (totalSeconds < 60) return `${Math.max(1, Math.round(totalSeconds))} s`;
+        const totalMinutes = totalSeconds / 60;
+        if (totalMinutes < 60) return `${Math.round(totalMinutes)} min`;
+        const hours = totalMinutes / 60;
+        if (hours >= 72) {
+          const days = hours / 24;
+          if (days >= 10) return `${Math.round(days)} d`;
+          return `${days.toFixed(1)} d`;
+        }
+        if (hours >= 100) return `${Math.round(hours)} h`;
+        return `${hours.toFixed(1)} h`;
+      }
+
       function formatVisibility(visibility) {
         const value = Number(visibility);
         switch (value) {
@@ -450,6 +472,12 @@
         if (!base.first_seen && base.firstSeen) base.first_seen = base.firstSeen;
         if (!base.last_seen && base.lastSeen) base.last_seen = base.lastSeen;
         if (base.forced_display_name == null && base.forcedDisplayName != null) base.forced_display_name = base.forcedDisplayName;
+        if (base.total_playtime_seconds == null && base.totalPlaytimeSeconds != null) {
+          base.total_playtime_seconds = base.totalPlaytimeSeconds;
+        }
+        if (base.total_playtime_minutes == null && base.totalPlaytimeMinutes != null) {
+          base.total_playtime_minutes = base.totalPlaytimeMinutes;
+        }
         return base;
       }
 
@@ -569,6 +597,8 @@
           entries.push(['First seen', formatTimestamp(combined.first_seen) || '—']);
           entries.push(['Last seen', formatTimestamp(combined.last_seen) || '—']);
           entries.push(['Last address', combined.last_ip ? `${combined.last_ip}${combined.last_port ? ':' + combined.last_port : ''}` : '—']);
+          const serverPlaytime = formatServerPlaytime(combined.total_playtime_seconds, combined.total_playtime_minutes);
+          entries.push(['Server playtime', serverPlaytime || '—']);
           entries.push(['Rust playtime', formatPlaytime(combined.rust_playtime_minutes, combined.visibility)]);
           entries.push(['Profile visibility', formatVisibility(combined.visibility)]);
           entries.push(['VAC ban', Number(combined.vac_banned) > 0 ? 'Yes' : 'No']);

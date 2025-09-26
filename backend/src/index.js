@@ -891,6 +891,8 @@ function normaliseServerPlayer(row) {
     : (typeof row.lastIp === 'string' && row.lastIp ? row.lastIp : null);
   const portRaw = row.last_port ?? row.lastPort;
   const portNum = Number(portRaw);
+  const totalSecondsRaw = row.total_playtime_seconds ?? row.totalPlaytimeSeconds;
+  const totalSeconds = Number.isFinite(Number(totalSecondsRaw)) ? Number(totalSecondsRaw) : null;
   const forced = typeof row.forced_display_name === 'string' && row.forced_display_name
     ? row.forced_display_name
     : (typeof row.forcedDisplayName === 'string' && row.forcedDisplayName ? row.forcedDisplayName : null);
@@ -905,6 +907,8 @@ function normaliseServerPlayer(row) {
     last_seen: toIso(row.last_seen || row.lastSeen),
     last_ip: ip || null,
     last_port: Number.isFinite(portNum) ? portNum : null,
+    total_playtime_seconds: totalSeconds,
+    total_playtime_minutes: Number.isFinite(totalSeconds) ? Math.floor(totalSeconds / 60) : null,
     ...base
   };
 }
