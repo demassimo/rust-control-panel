@@ -383,7 +383,7 @@
         configSubmit.disabled = true;
         showConfigStatus('Requesting map from RustMaps…');
         try {
-          const response = await ctx.api(`/api/servers/${state.serverId}/live-map/world`, { size, seed }, 'POST');
+          const response = await ctx.api(`/servers/${state.serverId}/live-map/world`, { size, seed }, 'POST');
           if (response?.info) {
             state.serverInfo = { ...(state.serverInfo || {}), ...response.info };
           } else {
@@ -464,7 +464,7 @@
           const dataUrl = await readFileAsDataURL(file);
           const activeMeta = getActiveMapMeta();
           const payload = { image: dataUrl, mapKey: activeMeta?.mapKey || null };
-          const response = await ctx.api(`/api/servers/${state.serverId}/map-image`, payload, 'POST');
+          const response = await ctx.api(`/servers/${state.serverId}/map-image`, payload, 'POST');
           if (response?.map) {
             state.mapMeta = response.map;
             state.mapMetaServerId = state.serverId;
@@ -1084,7 +1084,7 @@
         hideUploadNotice();
         if (reason !== 'poll' && reason !== 'map-pending') setMessage('Loading live map data…');
         try {
-          const data = await ctx.api(`/api/servers/${state.serverId}/live-map`);
+          const data = await ctx.api(`/servers/${state.serverId}/live-map`);
           state.players = Array.isArray(data?.players) ? data.players : [];
           const previousMeta = getActiveMapMeta();
           const previousKey = previousMeta?.mapKey ?? null;

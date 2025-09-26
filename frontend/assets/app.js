@@ -258,7 +258,7 @@
     if (!activeUserDetails) return;
     const targetRole = activeUserDetails.role === 'admin' ? 'user' : 'admin';
     try {
-      await api(`/api/users/${activeUserDetails.id}`, { role: targetRole }, 'PATCH');
+      await api(`/users/${activeUserDetails.id}`, { role: targetRole }, 'PATCH');
       showNotice(userFeedback, 'Updated role for ' + activeUserDetails.username, 'success');
       activeUserDetails = { ...activeUserDetails, role: targetRole };
       renderUserDetails(activeUserDetails);
@@ -278,7 +278,7 @@
       return;
     }
     try {
-      await api(`/api/users/${activeUserDetails.id}/password`, { newPassword: newPass }, 'POST');
+      await api(`/users/${activeUserDetails.id}/password`, { newPassword: newPass }, 'POST');
       showNotice(userFeedback, 'Password updated for ' + activeUserDetails.username, 'success');
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -290,7 +290,7 @@
     if (!activeUserDetails) return;
     if (!confirm(`Remove ${activeUserDetails.username}? This cannot be undone.`)) return;
     try {
-      await api(`/api/users/${activeUserDetails.id}`, null, 'DELETE');
+      await api(`/users/${activeUserDetails.id}`, null, 'DELETE');
       showNotice(userFeedback, 'Removed ' + activeUserDetails.username, 'success');
       closeUserDetails();
       loadUsers();
@@ -583,7 +583,7 @@
       btnChangePassword.textContent = 'Updating…';
     }
     try {
-      await api('/api/password', { currentPassword: currentValue, newPassword: nextValue }, 'POST');
+      await api('/password', { currentPassword: currentValue, newPassword: nextValue }, 'POST');
       showNotice(passwordStatus, 'Password updated successfully.', 'success');
       clearPasswordInputs();
     } catch (err) {
@@ -597,61 +597,75 @@
     }
   }
 
-  function setApiBase(value) {
-    const trimmed = (value || '').trim().replace(/\/$/, '');
-    if (!trimmed) return;
-    state.API = trimmed;
-    localStorage.setItem('apiBase', trimmed);
-    if (typeof window !== 'undefined') {
-      window.API_BASE = trimmed;
+  function normalizeApiBase(value) {
+    const raw = (value || '').trim();
+    if (!raw) return '';
+    const trimmed = raw.replace(/\/+$/, '');
+    if (!trimmed) return raw ? '/api' : '';
+    if (/\/api$/i.test(trimmed)) return trimmed;
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const url = new URL(trimmed);
+        if (!url.pathname || url.pathname === '/' || url.pathname === '') {
+          url.pathname = '/api';
+          return url.href.replace(/\/$/, '');
+        }
+        return trimmed;
+      } catch {
+        return trimmed;
+      }
     }
-    emitWorkspaceEvent('workspace:api-base', { base: trimmed });
+    if (trimmed.startsWith('/')) return trimmed;
+    return trimmed + '/api';
+  }
+
+  function setApiBase(value) {
+    const normalized = normalizeApiBase(value);
+    if (!normalized) return;
+    state.API = normalized;
+    localStorage.setItem('apiBase', normalized);
+    if (typeof window !== 'undefined') {
+      window.API_BASE = normalized;
+    }
+    emitWorkspaceEvent('workspace:api-base', { base: normalized });
     loadPublicConfig();
   }
 
-  function isLocalHostname(value) {
-    return value === 'localhost' || value === '127.0.0.1' || value === '::1';
-  }
-
   function detectDefaultApiBase() {
-    const stored = localStorage.getItem('apiBase');
+    const stored = normalizeApiBase(localStorage.getItem('apiBase'));
     if (stored) return stored;
 
-    const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
     const hasWindow = typeof window !== 'undefined' && window?.location;
+    const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
 
     if (metaContent) {
       if (hasWindow) {
         try {
           const metaUrl = new URL(metaContent, window.location.origin);
-          const windowHost = window.location.hostname;
-          if (windowHost && !isLocalHostname(windowHost) && isLocalHostname(metaUrl.hostname)) {
-            metaUrl.hostname = windowHost;
-            return metaUrl.href.replace(/\/$/, '');
-          }
-          return metaUrl.href.replace(/\/$/, '');
+          const normalizedMeta = normalizeApiBase(metaUrl.href);
+          if (normalizedMeta) return normalizedMeta;
         } catch {
-          return metaContent;
+          const normalizedFallback = normalizeApiBase(metaContent);
+          if (normalizedFallback) return normalizedFallback;
         }
+      } else {
+        const normalizedMeta = normalizeApiBase(metaContent);
+        if (normalizedMeta) return normalizedMeta;
       }
-      return metaContent;
     }
 
-    if (hasWindow) {
-      const { protocol, hostname } = window.location;
-      if (isLocalHostname(hostname)) {
-        return `${protocol}//${hostname}:8787`;
-      }
-      return window.location.origin;
+    if (hasWindow && window.location?.origin) {
+      const normalizedOrigin = normalizeApiBase(window.location.origin);
+      if (normalizedOrigin) return normalizedOrigin;
     }
 
-    return 'http://localhost:8787';
+    return normalizeApiBase('http://localhost');
   }
 
   async function loadPublicConfig() {
     if (!state.API) return;
     try {
-      const res = await fetch(state.API + '/api/public-config');
+      const res = await fetch(state.API + '/public-config');
       if (!res.ok) throw new Error('fetch_failed');
       const data = await res.json();
       state.allowRegistration = !!data.allowRegistration;
@@ -971,9 +985,23 @@
     setWorkspaceView(workspaceViewDefault);
   }
 
+  function resolveSocketBase() {
+    const base = state.API || '';
+    if (/^https?:\/\//i.test(base)) {
+      try {
+        const url = new URL(base);
+        return url.origin;
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  }
+
   function ensureSocket() {
     if (socket || !state.API) return socket;
-    socket = io(state.API, { transports: ['websocket'] });
+    const socketBase = resolveSocketBase();
+    socket = io(socketBase || undefined, { transports: ['websocket'] });
     socket.on('connect', () => {
       ui.log('Realtime link established.');
       if (state.currentServerId != null) socket.emit('join-server', state.currentServerId);
@@ -1114,7 +1142,7 @@
 
   async function fetchServerStatuses() {
     try {
-      return await api('/api/servers/status');
+      return await api('/servers/status');
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         handleUnauthorized();
@@ -1306,7 +1334,7 @@
       saveBtn.disabled = true;
       showFeedback('Removing…');
       try {
-        await api(`/api/servers/${server.id}`, null, 'DELETE');
+        await api(`/servers/${server.id}`, null, 'DELETE');
         ui.log('Server removed: ' + label);
         const wasActive = state.currentServerId === server.id;
         toggleEdit(false);
@@ -1357,7 +1385,7 @@
       cancelBtn.disabled = true;
       showFeedback('Saving…');
       try {
-        await api(`/api/servers/${server.id}`, payload, 'PATCH');
+        await api(`/servers/${server.id}`, payload, 'PATCH');
         entry.data = { ...entry.data, name, host, port, tls: useTls ? 1 : 0 };
         nameEl.textContent = name;
         metaEl.textContent = `${host}:${port}${useTls ? ' · TLS' : ''}`;
@@ -1418,7 +1446,7 @@
 
   async function refreshServers() {
     try {
-      const list = await api('/api/servers');
+      const list = await api('/servers');
       serversEl.innerHTML = '';
       state.serverItems.clear();
       if (addServerPrompt) {
@@ -1725,7 +1753,7 @@
     if (!state.currentUser || state.currentUser.role !== 'admin') return;
     hideNotice(userFeedback);
     try {
-      const list = await api('/api/users');
+      const list = await api('/users');
       userList.innerHTML = '';
       let activeMatch = null;
       for (const user of list) {
@@ -1804,7 +1832,7 @@
     if (!state.TOKEN) return;
     hideNotice(settingsStatus);
     try {
-      const data = await api('/api/me/settings');
+      const data = await api('/me/settings');
       state.settings = data || {};
       if (rustMapsKeyInput) rustMapsKeyInput.value = state.settings.rustmaps_api_key || '';
       moduleBus.emit('settings:updated', { settings: { ...state.settings } });
@@ -1822,7 +1850,7 @@
     hideNotice(settingsStatus);
     const payload = { rustmaps_api_key: rustMapsKeyInput?.value?.trim() || '' };
     try {
-      const data = await api('/api/me/settings', payload, 'POST');
+      const data = await api('/me/settings', payload, 'POST');
       state.settings = data || {};
       showNotice(settingsStatus, 'Settings saved.', 'success');
       moduleBus.emit('settings:updated', { settings: { ...state.settings } });
@@ -1838,7 +1866,7 @@
       return;
     }
     try {
-      const me = await api('/api/me');
+      const me = await api('/me');
       state.currentUser = me;
       await loadSettings();
       ui.setUser(me);
@@ -1873,7 +1901,7 @@
       btnLogin.textContent = 'Signing in…';
     }
     try {
-      const data = await publicJson('/api/login', { method: 'POST', body: { username, password } });
+      const data = await publicJson('/login', { method: 'POST', body: { username, password } });
       state.TOKEN = data.token;
       localStorage.setItem('token', state.TOKEN);
       state.currentUser = { id: data.id, username: data.username, role: data.role };
@@ -1917,7 +1945,7 @@
       return;
     }
     try {
-      await publicJson('/api/register', { method: 'POST', body: { username, password } });
+      await publicJson('/register', { method: 'POST', body: { username, password } });
       showNotice(registerSuccess, 'Account created. You can now sign in.', 'success');
       if (loginUsername) loginUsername.value = username;
       if (loginPassword) loginPassword.value = '';
@@ -1939,7 +1967,7 @@
       return;
     }
     try {
-      await api('/api/servers', { name, host, port, password, tls: useTls }, 'POST');
+      await api('/servers', { name, host, port, password, tls: useTls }, 'POST');
       ui.log('Server added: ' + name);
       if (svName) svName.value = '';
       if (svHost) svHost.value = '';
@@ -1959,7 +1987,7 @@
     const cmd = (command || '').toString().trim();
     if (!cmd) throw new Error('missing_command');
     if (state.currentServerId == null) throw new Error('no_server_selected');
-    return await api(`/api/rcon/${state.currentServerId}`, { cmd }, 'POST');
+    return await api(`/rcon/${state.currentServerId}`, { cmd }, 'POST');
   }
 
   async function sendCommand() {
@@ -2045,7 +2073,7 @@
         return;
       }
       try {
-        await api('/api/users', { username, password, role }, 'POST');
+        await api('/users', { username, password, role }, 'POST');
         showNotice(userFeedback, 'Created user ' + username, 'success');
         if (newUserName) newUserName.value = '';
         if (newUserPassword) newUserPassword.value = '';
