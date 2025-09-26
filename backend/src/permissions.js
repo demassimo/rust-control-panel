@@ -1,4 +1,4 @@
-const SERVER_CAPABILITIES = ['view', 'console', 'commands', 'liveMap', 'players', 'manage', 'discord', 'uploadMap'];
+const SERVER_CAPABILITIES = ['view', 'console', 'commands', 'liveMap', 'players', 'manage', 'discord'];
 const GLOBAL_PERMISSIONS = ['manageUsers', 'manageServers', 'manageRoles'];
 
 const DEFAULT_TEMPLATE = {
