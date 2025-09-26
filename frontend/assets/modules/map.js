@@ -143,6 +143,7 @@
         serverId: null,
         players: [],
         mapMeta: null,
+        mapMetaServerId: null,
         serverInfo: null,
         teamColors: new Map(),
         selectedTeam: null,
@@ -152,7 +153,9 @@
         requirements: null,
         pendingGeneration: false,
         status: null,
-        pendingRefresh: null
+        pendingRefresh: null,
+        projectionMode: null,
+        horizontalAxis: null
       };
 
       let mapImageSource = null;
@@ -248,6 +251,12 @@
         }
       }
 
+      function getActiveMapMeta() {
+        if (!state.mapMeta) return null;
+        if (state.mapMetaServerId && state.mapMetaServerId !== state.serverId) return null;
+        return state.mapMeta;
+      }
+
       function colorForPlayer(player) {
         const key = teamKey(player);
         if (key > 0 && state.teamColors.has(key)) return state.teamColors.get(key);
@@ -270,14 +279,16 @@
       }
 
       function mapReady() {
-        if (!state.mapMeta || !hasMapImage(state.mapMeta)) return false;
-        const size = Number(state.mapMeta.size ?? state.serverInfo?.size);
+        const meta = getActiveMapMeta();
+        if (!meta || !hasMapImage(meta)) return false;
+        const size = resolveWorldSize();
         return Number.isFinite(size) && size > 0;
       }
 
       function updateUploadSection() {
         if (!uploadWrap) return;
-        const needsUpload = !!(state.mapMeta && state.mapMeta.custom && !hasMapImage(state.mapMeta));
+        const meta = getActiveMapMeta();
+        const needsUpload = !!(meta && meta.custom && !hasMapImage(meta));
         if (needsUpload) {
           uploadWrap.classList.remove('hidden');
         } else {
@@ -324,12 +335,13 @@
       }
 
       function updateStatusMessage(hasImageOverride) {
-        const hasImage = typeof hasImageOverride === 'boolean' ? hasImageOverride : hasMapImage(state.mapMeta);
+        const meta = getActiveMapMeta();
+        const hasImage = typeof hasImageOverride === 'boolean' ? hasImageOverride : hasMapImage(meta);
         if (state.status === 'awaiting_world_details') {
           setMessage('Enter the world size and seed to generate a live map from RustMaps.');
         } else if (state.status === 'awaiting_upload') {
           setMessage('Upload your rendered map image to enable the live map.');
-        } else if (state.status === 'rustmaps_not_found' || state.mapMeta?.notFound) {
+        } else if (state.status === 'rustmaps_not_found' || meta?.notFound) {
           const wrap = document.createElement('span');
           wrap.textContent = 'RustMaps has not published imagery for this seed yet. Try again shortly or upload your render below.';
           setMessage(wrap);
@@ -339,9 +351,9 @@
           } else {
             setMessage('Map imagery is still being prepared. Try again shortly.');
           }
-        } else if (state.mapMeta?.custom && !hasImage) {
+        } else if (meta?.custom && !hasImage) {
           setMessage('Upload your rendered map image to enable the live map.');
-        } else if (!state.mapMeta) {
+        } else if (!meta) {
           setMessage('Waiting for map metadata…');
         } else if (!hasImage) {
           setMessage('Map imagery is still being prepared. Try again shortly.');
@@ -378,10 +390,16 @@
             state.serverInfo = { ...(state.serverInfo || {}), size, seed };
           }
           state.mapMeta = response?.map || null;
+          state.mapMetaServerId = state.serverId;
+          state.projectionMode = null;
+          state.horizontalAxis = null;
+          cancelMapImageRequest();
+          clearMapImage();
           state.status = response?.status || null;
           state.requirements = response?.requirements || null;
           state.lastUpdated = response?.fetchedAt || new Date().toISOString();
-          const hasImage = hasMapImage(state.mapMeta);
+          const activeMeta = getActiveMapMeta();
+          const hasImage = hasMapImage(activeMeta);
           const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
           state.pendingGeneration = state.status === 'pending' || awaitingImagery;
           if (state.pendingGeneration) {
@@ -444,10 +462,16 @@
         uploadBtn.textContent = 'Uploading…';
         try {
           const dataUrl = await readFileAsDataURL(file);
-          const payload = { image: dataUrl, mapKey: state.mapMeta?.mapKey || null };
+          const activeMeta = getActiveMapMeta();
+          const payload = { image: dataUrl, mapKey: activeMeta?.mapKey || null };
           const response = await ctx.api(`/api/servers/${state.serverId}/map-image`, payload, 'POST');
           if (response?.map) {
             state.mapMeta = response.map;
+            state.mapMetaServerId = state.serverId;
+            state.projectionMode = null;
+            state.horizontalAxis = null;
+            cancelMapImageRequest();
+            clearMapImage();
             showUploadNotice('Map image uploaded successfully.', 'success');
             clearMessage();
             updateUploadSection();
@@ -472,14 +496,188 @@
         }
       }
 
-      function projectPosition(position) {
+      function toNumber(value) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+      }
+
+      function resolveWorldSize() {
+        const meta = getActiveMapMeta();
+        const candidates = [
+          meta?.worldSize,
+          meta?.size,
+          meta?.mapSize,
+          meta?.dimensions?.worldSize,
+          state.serverInfo?.worldSize,
+          state.serverInfo?.size,
+          state.serverInfo?.mapSize
+        ];
+        for (const candidate of candidates) {
+          const numeric = toNumber(candidate);
+          if (numeric != null && numeric > 0) return numeric;
+        }
+        return null;
+      }
+
+      function collectPlayerPositions() {
+        if (!Array.isArray(state.players) || state.players.length === 0) return [];
+        const positions = [];
+        for (const player of state.players) {
+          const pos = player?.position;
+          const x = toNumber(pos?.x);
+          const y = toNumber(pos?.y);
+          const z = toNumber(pos?.z);
+          if (x == null) continue;
+          const sample = { x };
+          if (y != null) sample.y = y;
+          if (z != null) sample.z = z;
+          if (sample.y == null && sample.z == null) continue;
+          positions.push(sample);
+        }
+        return positions;
+      }
+
+      function axisValue(sample, axis) {
+        if (!sample) return null;
+        if (axis === 'y') return typeof sample.y === 'number' ? sample.y : null;
+        return typeof sample.z === 'number' ? sample.z : null;
+      }
+
+      function determineHorizontalAxis(samples) {
+        if (!Array.isArray(samples) || samples.length === 0) return state.horizontalAxis || 'z';
+        const stats = {
+          y: { min: Infinity, max: -Infinity, count: 0 },
+          z: { min: Infinity, max: -Infinity, count: 0 }
+        };
+        for (const sample of samples) {
+          if (typeof sample.y === 'number') {
+            stats.y.count += 1;
+            if (sample.y < stats.y.min) stats.y.min = sample.y;
+            if (sample.y > stats.y.max) stats.y.max = sample.y;
+          }
+          if (typeof sample.z === 'number') {
+            stats.z.count += 1;
+            if (sample.z < stats.z.min) stats.z.min = sample.z;
+            if (sample.z > stats.z.max) stats.z.max = sample.z;
+          }
+        }
+        const range = {
+          y: stats.y.count > 0 ? stats.y.max - stats.y.min : null,
+          z: stats.z.count > 0 ? stats.z.max - stats.z.min : null
+        };
+        const MIN_RANGE = 100;
+        const zValid = range.z != null && range.z >= MIN_RANGE;
+        const yValid = range.y != null && range.y >= MIN_RANGE;
+        if (zValid && yValid) {
+          return range.y > range.z * 1.5 ? 'y' : 'z';
+        }
+        if (zValid) return 'z';
+        if (yValid) return 'y';
+        if (range.z != null) return 'z';
+        if (range.y != null) return 'y';
+        return state.horizontalAxis || 'z';
+      }
+
+      function inferProjectionMode(samples, axis) {
+        const size = resolveWorldSize();
+        if (!Number.isFinite(size) || size <= 0) return state.projectionMode || 'centered';
+        const list = Array.isArray(samples) ? samples : collectPlayerPositions();
+        if (list.length === 0) return state.projectionMode || 'centered';
+        const chosenAxis = axis || determineHorizontalAxis(list);
+
+        const usable = [];
+        for (const sample of list) {
+          const x = typeof sample.x === 'number' ? sample.x : null;
+          const other = axisValue(sample, chosenAxis);
+          if (x == null || other == null) continue;
+          usable.push({ x, other });
+        }
+        if (usable.length === 0) return state.projectionMode || 'centered';
+
+        const half = size / 2;
+        const tolerance = Math.max(size * 0.02, 16);
+        let centeredOut = 0;
+        let zeroOut = 0;
+        let minX = Infinity;
+        let minOther = Infinity;
+        let maxX = -Infinity;
+        let maxOther = -Infinity;
+
+        for (const { x, other } of usable) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (other < minOther) minOther = other;
+          if (other > maxOther) maxOther = other;
+
+          if (x < -half - tolerance || x > half + tolerance) centeredOut++;
+          if (other < -half - tolerance || other > half + tolerance) centeredOut++;
+          if (x < -tolerance || x > size + tolerance) zeroOut++;
+          if (other < -tolerance || other > size + tolerance) zeroOut++;
+        }
+
+        const total = usable.length * 2;
+        const centeredRatio = total > 0 ? centeredOut / total : 1;
+        const zeroRatio = total > 0 ? zeroOut / total : 1;
+        const margin = 0.05;
+
+        if (centeredRatio <= margin && zeroRatio > centeredRatio + margin) return 'centered';
+        if (zeroRatio <= margin && centeredRatio > zeroRatio + margin) return 'zero_based';
+        if (centeredRatio < zeroRatio) return 'centered';
+        if (zeroRatio < centeredRatio) return 'zero_based';
+
+        if (state.projectionMode) return state.projectionMode;
+        if (minX >= -tolerance && minOther >= -tolerance) return 'zero_based';
+        if (
+          maxX <= half + tolerance &&
+          maxOther <= half + tolerance &&
+          minX >= -half - tolerance &&
+          minOther >= -half - tolerance
+        ) {
+          return 'centered';
+        }
+        return 'centered';
+      }
+
+      function updateProjectionMode() {
+        const samples = collectPlayerPositions();
+        const axis = determineHorizontalAxis(samples);
+        if (axis && axis !== state.horizontalAxis) state.horizontalAxis = axis;
+        const mode = inferProjectionMode(samples, axis);
+        if (mode && mode !== state.projectionMode) state.projectionMode = mode;
+      }
+
+      function resolveHorizontalAxis() {
+        if (state.horizontalAxis) return state.horizontalAxis;
+        const samples = collectPlayerPositions();
+        const axis = determineHorizontalAxis(samples);
+        if (axis) state.horizontalAxis = axis;
+        return state.horizontalAxis || 'z';
+      }
+
+      function projectPosition(position, axisOverride) {
         if (!mapReady()) return null;
-        const size = Number(state.mapMeta?.size ?? state.serverInfo?.size);
+        const size = resolveWorldSize();
         if (!Number.isFinite(size) || size <= 0) return null;
-        const x = Number(position?.x) || 0;
-        const z = Number(position?.z) || 0;
-        const px = clamp(((x + size / 2) / size) * 100, 0, 100);
-        const pz = clamp(((z + size / 2) / size) * 100, 0, 100);
+        const x = toNumber(position?.x);
+        const axis = axisOverride || resolveHorizontalAxis();
+        const z = axis === 'y' ? toNumber(position?.y) : toNumber(position?.z);
+        if (x == null || z == null) return null;
+
+        const half = size / 2;
+        const mode = state.projectionMode || inferProjectionMode();
+        let normalizedX;
+        let normalizedZ;
+
+        if (mode === 'zero_based') {
+          normalizedX = x / size;
+          normalizedZ = z / size;
+        } else {
+          normalizedX = (x + half) / size;
+          normalizedZ = (z + half) / size;
+        }
+
+        const px = clamp(normalizedX * 100, 0, 100);
+        const pz = clamp(normalizedZ * 100, 0, 100);
         return { left: px, top: 100 - pz };
       }
 
@@ -513,7 +711,11 @@
         if (typeof ctx.authorizedFetch !== 'function') {
           return { url: resolveImageUrl(path) };
         }
-        const res = await ctx.authorizedFetch(path, { signal: controller.signal, cache: 'no-store' });
+        const res = await ctx.authorizedFetch(path, {
+          signal: controller.signal,
+          cache: 'no-store',
+          credentials: 'include'
+        });
         if (!res.ok) {
           const error = new Error('map_image_unavailable');
           error.status = res.status;
@@ -535,6 +737,11 @@
       }
 
       async function updateMapImage(meta) {
+        if (!meta || state.mapMetaServerId && state.mapMetaServerId !== state.serverId) {
+          cancelMapImageRequest();
+          clearMapImage();
+          return;
+        }
         if (!hasMapImage(meta)) {
           cancelMapImageRequest();
           clearMapImage();
@@ -547,6 +754,7 @@
           return;
         }
         if (mapImageSource === next) return;
+        const previousSource = mapImageSource;
         mapImageSource = next;
         cancelMapImageRequest();
 
@@ -566,14 +774,18 @@
         } catch (err) {
           if (mapImageAbort !== controller) return;
           if (err?.name === 'AbortError') return;
-          if (ctx.errorCode?.(err) === 'unauthorized') {
+          if (err?.status === 401 || ctx.errorCode?.(err) === 'unauthorized') {
             ctx.handleUnauthorized?.();
             return;
           }
           ctx.log?.('Failed to load map image: ' + (err?.message || err));
-          clearMapImage();
-          mapImage.src = resolveImageUrl(next);
-          mapImageSource = next;
+          if (typeof ctx.authorizedFetch !== 'function') {
+            clearMapImage();
+            mapImage.src = resolveImageUrl(next);
+            mapImageSource = next;
+          } else {
+            mapImageSource = previousSource;
+          }
         } finally {
           if (mapImageAbort === controller) mapImageAbort = null;
         }
@@ -592,8 +804,9 @@
       function renderMarkers() {
         overlay.innerHTML = '';
         if (!mapReady()) return;
+        const axis = resolveHorizontalAxis();
         for (const player of state.players) {
-          const position = projectPosition(player.position);
+          const position = projectPosition(player.position, axis);
           if (!position) continue;
           const marker = document.createElement('div');
           marker.className = 'map-marker';
@@ -723,22 +936,23 @@
           if (key > 0) teamCounts.set(key, (teamCounts.get(key) || 0) + 1);
           else soloCount += 1;
         }
-        const mapName = state.serverInfo?.mapName || state.serverInfo?.map || 'Procedural Map';
+        const meta = getActiveMapMeta();
+        const mapName = meta?.mapName || state.serverInfo?.mapName || state.serverInfo?.map || 'Procedural Map';
         const metaLines = [
           { label: 'Players online', value: total },
           { label: 'Teams', value: teamCounts.size },
           { label: 'Solo players', value: soloCount }
         ];
-        const mapSize = state.mapMeta?.size ?? state.serverInfo?.size;
+        const mapSize = resolveWorldSize();
         if (mapSize) metaLines.push({ label: 'World size', value: mapSize });
-        const mapSeed = state.mapMeta?.seed ?? state.serverInfo?.seed;
+        const mapSeed = meta?.seed ?? state.serverInfo?.seed;
         if (mapSeed) metaLines.push({ label: 'Seed', value: mapSeed });
-        if (state.mapMeta?.cachedAt) {
-          const cachedTs = new Date(state.mapMeta.cachedAt);
+        if (meta?.cachedAt) {
+          const cachedTs = new Date(meta.cachedAt);
           metaLines.push({ label: 'Cached', value: cachedTs.toLocaleString() });
         }
-        if (hasMapImage(state.mapMeta)) {
-          const source = state.mapMeta.custom ? 'Uploaded image' : state.mapMeta.localImage ? 'Cached copy' : 'RustMaps';
+        if (hasMapImage(meta)) {
+          const source = meta.custom ? 'Uploaded image' : meta.localImage ? 'Cached copy' : 'RustMaps';
           metaLines.push({ label: 'Source', value: source });
         }
         if (state.lastUpdated) {
@@ -802,7 +1016,8 @@
 
       function renderAll() {
         ensureTeamColors(state.players);
-        updateMapImage(state.mapMeta);
+        const activeMeta = getActiveMapMeta();
+        updateMapImage(activeMeta);
         renderMarkers();
         renderPlayerList();
         renderSummary();
@@ -871,13 +1086,54 @@
         try {
           const data = await ctx.api(`/api/servers/${state.serverId}/live-map`);
           state.players = Array.isArray(data?.players) ? data.players : [];
-          state.mapMeta = data?.map || null;
+          const previousMeta = getActiveMapMeta();
+          const previousKey = previousMeta?.mapKey ?? null;
+          const previousImage = previousMeta?.imageUrl ?? null;
+          const previousCached = previousMeta?.cachedAt ?? null;
+          const previousLocal = previousMeta?.localImage ?? null;
+          const previousRemote = previousMeta?.remoteImage ?? null;
+          const previousCustom = previousMeta?.custom ?? null;
+          let mapChanged = false;
+          const hasMapField = data && Object.prototype.hasOwnProperty.call(data, 'map');
+          if (hasMapField) {
+            const nextMeta = data?.map || null;
+            const nextKey = nextMeta?.mapKey ?? null;
+            const nextImage = nextMeta?.imageUrl ?? null;
+            const nextCached = nextMeta?.cachedAt ?? null;
+            const nextLocal = nextMeta?.localImage ?? null;
+            const nextRemote = nextMeta?.remoteImage ?? null;
+            const nextCustom = nextMeta?.custom ?? null;
+            mapChanged = !!(previousMeta || nextMeta)
+              && (
+                (!!previousMeta) !== (!!nextMeta)
+                || previousKey !== nextKey
+                || previousImage !== nextImage
+                || previousCached !== nextCached
+                || !!previousLocal !== !!nextLocal
+                || !!previousRemote !== !!nextRemote
+                || !!previousCustom !== !!nextCustom
+              );
+            state.mapMeta = nextMeta;
+            state.mapMetaServerId = state.serverId;
+          } else if (state.mapMetaServerId !== state.serverId) {
+            state.mapMeta = null;
+            state.mapMetaServerId = state.serverId;
+            mapChanged = true;
+          }
+          if (mapChanged) {
+            state.projectionMode = null;
+            state.horizontalAxis = null;
+            cancelMapImageRequest();
+            clearMapImage();
+          }
           state.serverInfo = data?.info || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
           state.status = data?.status || null;
           state.requirements = data?.requirements || null;
+          updateProjectionMode();
           broadcastPlayers();
-          const hasImage = hasMapImage(state.mapMeta);
+          const activeMeta = getActiveMapMeta();
+          const hasImage = hasMapImage(activeMeta);
           const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
 
           if (state.status === 'awaiting_world_details') {
@@ -943,6 +1199,16 @@
         state.pendingRefresh = null;
         state.requirements = null;
         state.status = null;
+        state.players = [];
+        state.mapMeta = null;
+        state.mapMetaServerId = null;
+        state.serverInfo = null;
+        state.lastUpdated = null;
+        state.projectionMode = null;
+        state.horizontalAxis = null;
+        overlay.innerHTML = '';
+        cancelMapImageRequest();
+        clearMapImage();
         hideConfigStatus();
         updateConfigPanel();
         clearSelection();
@@ -957,14 +1223,18 @@
           state.serverId = null;
           state.players = [];
           state.mapMeta = null;
+          state.mapMetaServerId = null;
           state.serverInfo = null;
           state.lastUpdated = null;
           state.pendingGeneration = false;
           state.pendingRefresh = null;
           state.requirements = null;
           state.status = null;
+          state.projectionMode = null;
+          state.horizontalAxis = null;
           clearSelection();
           overlay.innerHTML = '';
+          cancelMapImageRequest();
           clearMapImage();
           renderPlayerList();
           renderSummary();
@@ -984,14 +1254,18 @@
         state.serverId = null;
         state.players = [];
         state.mapMeta = null;
+        state.mapMetaServerId = null;
         state.serverInfo = null;
         state.lastUpdated = null;
         state.pendingGeneration = false;
         state.pendingRefresh = null;
         state.requirements = null;
         state.status = null;
+        state.projectionMode = null;
+        state.horizontalAxis = null;
         clearSelection();
         overlay.innerHTML = '';
+        cancelMapImageRequest();
         clearMapImage();
         renderPlayerList();
         renderSummary();
@@ -1019,7 +1293,7 @@
       });
 
       const offSettingsUpdate = ctx.on?.('settings:updated', () => {
-        if (state.serverId && (!state.mapMeta || !mapReady())) {
+        if (state.serverId && (!getActiveMapMeta() || !mapReady())) {
           refreshData('settings');
         }
       });
