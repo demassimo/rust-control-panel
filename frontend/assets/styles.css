@@ -1344,6 +1344,15 @@ button.menu-tab.active {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  max-width: 1120px;
+  margin-right: auto;
+  width: 100%;
+  align-self: flex-start;
+}
+
+.players-card .card-body {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .players-graph-card .card-body,
@@ -1506,7 +1515,9 @@ button.menu-tab.active {
 .live-players-list {
   display: grid;
   gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 360px));
+  justify-content: flex-start;
+  align-content: start;
 }
 
 .live-player-row {
@@ -1707,6 +1718,9 @@ button.menu-tab.active {
   padding: 0;
   border: none;
   background: none;
+  max-width: 1120px;
+  margin-right: auto;
+  width: 100%;
 }
 
 .player-directory {
