@@ -21,17 +21,57 @@
     ? Array.from(badgeEl.classList).filter((cls) => !['online', 'offline', 'degraded', 'success'].includes(cls))
     : ['status-pill'];
 
-  function sanitizeBase(value) {
-    return value ? String(value).trim().replace(/\/+$/, '') : '';
+  function normalizeApiBase(value) {
+    const raw = (value || '').trim();
+    if (!raw) return '';
+    const trimmed = raw.replace(/\/+$/, '');
+    if (!trimmed) return raw ? '/api' : '';
+    if (/\/api$/i.test(trimmed)) return trimmed;
+    if (/^https?:\/\//i.test(trimmed)) {
+      try {
+        const url = new URL(trimmed);
+        if (!url.pathname || url.pathname === '/' || url.pathname === '') {
+          url.pathname = '/api';
+          return url.href.replace(/\/$/, '');
+        }
+        return trimmed;
+      } catch {
+        return trimmed;
+      }
+    }
+    if (trimmed.startsWith('/')) return trimmed;
+    return trimmed + '/api';
   }
 
   function detectInitialApiBase() {
     if (typeof window !== 'undefined' && window.API_BASE) {
-      return sanitizeBase(window.API_BASE);
+      const normalizedWindowBase = normalizeApiBase(window.API_BASE);
+      if (normalizedWindowBase) return normalizedWindowBase;
     }
+
     const meta = document.querySelector('meta[name="panel-api-base"]')?.content;
-    if (meta) return sanitizeBase(meta);
-    return '';
+    if (meta) {
+      if (typeof window !== 'undefined' && window.location) {
+        try {
+          const metaUrl = new URL(meta, window.location.origin);
+          const normalizedMeta = normalizeApiBase(metaUrl.href);
+          if (normalizedMeta) return normalizedMeta;
+        } catch {
+          const normalizedMeta = normalizeApiBase(meta);
+          if (normalizedMeta) return normalizedMeta;
+        }
+      } else {
+        const normalizedMeta = normalizeApiBase(meta);
+        if (normalizedMeta) return normalizedMeta;
+      }
+    }
+
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      const normalizedOrigin = normalizeApiBase(window.location.origin);
+      if (normalizedOrigin) return normalizedOrigin;
+    }
+
+    return normalizeApiBase('http://localhost');
   }
 
   const state = {
@@ -173,6 +213,7 @@
 
   function ensureApiBase() {
     if (!state.apiBase) state.apiBase = detectInitialApiBase();
+    if (!state.apiBase) state.apiBase = '/api';
     return state.apiBase;
   }
 
@@ -184,7 +225,7 @@
     const base = ensureApiBase();
     if (!base) throw buildError('network_error', 'network_error');
 
-    const endpoint = `${base}/api/servers/${encodeURIComponent(state.serverId)}/discord`;
+    const endpoint = `${base}/servers/${encodeURIComponent(state.serverId)}/discord`;
     const headers = { Authorization: 'Bearer ' + token };
     const options = { method, headers };
 
@@ -398,7 +439,8 @@
   window.addEventListener('workspace:api-base', (event) => {
     const base = event?.detail?.base;
     if (typeof base === 'string' && base) {
-      state.apiBase = sanitizeBase(base);
+      const normalized = normalizeApiBase(base);
+      if (normalized) state.apiBase = normalized;
       if (state.serverId) refresh({ silent: true });
     }
   });

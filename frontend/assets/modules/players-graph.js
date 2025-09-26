@@ -385,7 +385,7 @@
         setMessage('Loading player history…');
         try {
           const params = new URLSearchParams({ range: state.rangeParam, interval: state.intervalParam });
-          const result = await (typeof ctx.api === 'function' ? ctx.api(`/api/servers/${state.serverId}/player-counts?${params}`) : defaultApi(`/api/servers/${state.serverId}/player-counts?${params}`));
+          const result = await (typeof ctx.api === 'function' ? ctx.api(`/servers/${state.serverId}/player-counts?${params}`) : defaultApi(`/servers/${state.serverId}/player-counts?${params}`));
           state.buckets = Array.isArray(result?.buckets) ? result.buckets : [];
           state.summary = result?.summary || null;
           state.intervalSeconds = safeNumber(result?.intervalSeconds);

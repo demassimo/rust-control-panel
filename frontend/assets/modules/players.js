@@ -344,7 +344,7 @@
         setMessage('Loading players…');
         updateCount(null, null);
         try {
-          const players = await ctx.api(`/api/servers/${serverId}/players?limit=200`);
+          const players = await ctx.api(`/servers/${serverId}/players?limit=200`);
           render(players);
         } catch (err) {
           if (ctx.errorCode?.(err) === 'unauthorized') {
@@ -672,7 +672,7 @@
         if (basePlayer) renderModal(basePlayer, null);
         if (showLoading) setModalLoading(true);
         try {
-          const details = await ctx.api(`/api/players/${steamid}`);
+          const details = await ctx.api(`/players/${steamid}`);
           if (!modalState.open || modalState.steamid !== target) return;
           renderModal(null, details);
           setModalStatus('');
@@ -694,7 +694,7 @@
         renderModal(null, null);
         setModalStatus('Requesting fresh Steam profile…');
         try {
-          await ctx.api('/api/steam/sync', { steamids: [modalState.steamid] }, 'POST');
+          await ctx.api('/steam/sync', { steamids: [modalState.steamid] }, 'POST');
           setModalStatus('Steam profile refresh requested. Updating record…', 'success');
           await refresh('steam-refresh');
           const updated = state.players.find((p) => String(p.steamid || '') === modalState.steamid);
@@ -738,7 +738,7 @@
         renderModal(null, null);
         setModalStatus(clearing ? 'Clearing forced display name…' : 'Saving display name…');
         try {
-          await ctx.api(`/api/servers/${serverId}/players/${modalState.steamid}`, { display_name: clearing ? null : next }, 'PATCH');
+          await ctx.api(`/servers/${serverId}/players/${modalState.steamid}`, { display_name: clearing ? null : next }, 'PATCH');
           setModalStatus(clearing ? 'Forced name cleared.' : 'Display name saved.', 'success');
           await refresh('display-name-change', serverId);
           const updated = state.players.find((player) => String(player.steamid || '') === modalState.steamid);
