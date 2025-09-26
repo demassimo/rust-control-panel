@@ -165,7 +165,13 @@
                 </label>
                 <input id="roleName" placeholder="Display name">
                 <input id="roleDescription" placeholder="Description (optional)">
-                <input id="roleServers" placeholder="Allowed server IDs (* for all)">
+                <div class="role-access">
+                  <div class="role-access-head">
+                    <h5>Server access</h5>
+                    <p class="muted small">Choose which servers this role can access.</p>
+                  </div>
+                  <div id="roleServersList" class="role-checkbox-list" role="group" aria-label="Allowed servers"></div>
+                </div>
                 <fieldset id="roleCapabilities" class="role-fieldset">
                   <legend>Server capabilities</legend>
                 </fieldset>

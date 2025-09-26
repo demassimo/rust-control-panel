@@ -54,7 +54,7 @@
   const roleSelect = $('#roleSelect');
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
-  const roleServersInput = $('#roleServers');
+  const roleServersList = $('#roleServersList');
   const roleCapabilitiesFieldset = $('#roleCapabilities');
   const roleGlobalFieldset = $('#roleGlobalPermissions');
   const newRoleKey = $('#newRoleKey');
@@ -207,6 +207,8 @@
   let activeUserDetails = null;
   let lastUserDetailsTrigger = null;
   let activeRoleEditKey = null;
+  let roleServersSelection = [];
+  let roleServersPreviousSelection = [];
 
   function currentUserPermissions() {
     return state.currentUser?.permissions || {};
@@ -2306,18 +2308,151 @@
     }
   }
 
-  function formatAllowedServersList(list) {
-    if (!Array.isArray(list) || list.length === 0) return '';
-    if (list.includes('*')) return '*';
-    return list.map((entry) => String(entry)).join(', ');
+  function normalizeRoleServerSelection(list) {
+    if (!Array.isArray(list) || list.length === 0) return [];
+    const normalized = [];
+    const seen = new Set();
+    let allowAll = false;
+    list.forEach((value) => {
+      if (value == null) return;
+      const key = String(value).trim();
+      if (!key) return;
+      if (key === '*') {
+        allowAll = true;
+        return;
+      }
+      if (!seen.has(key)) {
+        seen.add(key);
+        normalized.push(key);
+      }
+    });
+    if (allowAll) return ['*'];
+    return normalized;
   }
 
-  function parseAllowedServersInput(text) {
-    const value = (text || '').trim();
-    if (!value) return [];
-    if (value === '*') return ['*'];
-    return value.split(',').map((part) => part.trim()).filter(Boolean);
+  function setRoleServersSelection(list) {
+    roleServersSelection = normalizeRoleServerSelection(list);
+    if (!roleServersSelection.includes('*')) {
+      roleServersPreviousSelection = [...roleServersSelection];
+    } else {
+      roleServersPreviousSelection = [];
+    }
+    syncRoleServerCheckboxState();
   }
+
+  function getRoleServersSelection() {
+    if (roleServersSelection.includes('*')) return ['*'];
+    return [...roleServersSelection];
+  }
+
+  function createRoleServerOption(value, title, description, { missing = false } = {}) {
+    const label = document.createElement('label');
+    label.className = `role-checkbox${missing ? ' missing' : ''}`;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.dataset.roleServer = value;
+    label.appendChild(input);
+    const content = document.createElement('div');
+    content.className = 'role-checkbox-content';
+    const heading = document.createElement('span');
+    heading.className = 'role-checkbox-title';
+    heading.textContent = title;
+    content.appendChild(heading);
+    if (description) {
+      const desc = document.createElement('span');
+      desc.className = 'role-checkbox-description';
+      desc.textContent = description;
+      content.appendChild(desc);
+    }
+    label.appendChild(content);
+    return label;
+  }
+
+  function syncRoleServerCheckboxState() {
+    if (!roleServersList) return;
+    const allowAll = roleServersSelection.includes('*');
+    roleServersList.querySelectorAll('input[type="checkbox"][data-role-server]').forEach((input) => {
+      const value = input.dataset.roleServer;
+      if (!value) return;
+      const shouldCheck = allowAll ? value === '*' : roleServersSelection.includes(value);
+      input.checked = shouldCheck;
+      if (value === '*') {
+        input.indeterminate = false;
+      } else {
+        input.disabled = allowAll;
+      }
+    });
+  }
+
+  function renderRoleServersOptions() {
+    if (!roleServersList) return;
+    const servers = getServerList();
+    const knownIds = new Set(servers.map((server) => String(server.id)));
+    roleServersList.innerHTML = '';
+    const allOption = createRoleServerOption('*', 'All servers', 'Grant access to every server you add.');
+    roleServersList.appendChild(allOption);
+    if (!servers.length) {
+      const empty = document.createElement('p');
+      empty.className = 'muted small role-checkbox-empty';
+      empty.textContent = 'No servers available yet. Create a server to assign access.';
+      roleServersList.appendChild(empty);
+    } else {
+      servers.forEach((server) => {
+        const value = String(server.id);
+        const host = server.host || server.address || '';
+        const port = server.port != null ? `:${server.port}` : '';
+        const tls = server.tls ? ' · TLS' : '';
+        const description = host ? `${host}${port}${tls}` : '';
+        roleServersList.appendChild(
+          createRoleServerOption(value, server.name || `Server #${value}`, description || null)
+        );
+      });
+    }
+    const missing = roleServersSelection.filter((value) => value !== '*' && !knownIds.has(value));
+    missing.forEach((value) => {
+      roleServersList.appendChild(
+        createRoleServerOption(value, `Server #${value}`, 'No longer available', { missing: true })
+      );
+    });
+    syncRoleServerCheckboxState();
+  }
+
+  function handleRoleServersChange(event) {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.type !== 'checkbox') return;
+    const value = target.dataset.roleServer;
+    if (!value) return;
+    hideNotice(roleFeedback);
+    if (value === '*') {
+      if (target.checked) {
+        roleServersPreviousSelection = roleServersSelection.includes('*')
+          ? []
+          : roleServersSelection.filter((entry) => entry !== '*');
+        roleServersSelection = ['*'];
+      } else {
+        roleServersSelection = [...roleServersPreviousSelection];
+        roleServersPreviousSelection = [];
+      }
+    } else {
+      const current = new Set(roleServersSelection.filter((entry) => entry !== '*'));
+      if (target.checked) {
+        current.add(value);
+      } else {
+        current.delete(value);
+      }
+      roleServersSelection = [...current];
+      roleServersPreviousSelection = [...roleServersSelection];
+      const allOption = roleServersList?.querySelector('input[type="checkbox"][data-role-server="*"]');
+      if (allOption && allOption.checked) {
+        allOption.checked = false;
+      }
+    }
+    syncRoleServerCheckboxState();
+  }
+
+  moduleBus.on('servers:updated', () => {
+    renderRoleServersOptions();
+  });
 
   function renderRoleEditorFields() {
     if (roleCapabilitiesFieldset) {
@@ -2413,7 +2548,8 @@
     if (roleSelect && roleSelect.value !== role.key) roleSelect.value = role.key;
     if (roleNameInput) roleNameInput.value = role.name || '';
     if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
-    if (roleServersInput) roleServersInput.value = formatAllowedServersList(role.permissions?.servers?.allowed);
+    setRoleServersSelection(role.permissions?.servers?.allowed);
+    renderRoleServersOptions();
     if (roleCapabilitiesFieldset) {
       const caps = role.permissions?.servers?.capabilities || {};
       roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
@@ -2491,7 +2627,7 @@
     const payload = {
       name: nameValue,
       description: roleDescriptionInput?.value?.trim() || null,
-      allowedServers: parseAllowedServersInput(roleServersInput?.value || ''),
+      allowedServers: getRoleServersSelection(),
       capabilities: collectRoleCapabilities(),
       global: collectRoleGlobalPermissions()
     };
@@ -2633,7 +2769,8 @@
     if (roleSelect && roleSelect.value !== role.key) roleSelect.value = role.key;
     if (roleNameInput) roleNameInput.value = role.name || '';
     if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
-    if (roleServersInput) roleServersInput.value = formatAllowedServersList(role.permissions?.servers?.allowed);
+    setRoleServersSelection(role.permissions?.servers?.allowed);
+    renderRoleServersOptions();
     if (roleCapabilitiesFieldset) {
       const caps = role.permissions?.servers?.capabilities || {};
       roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
@@ -2711,7 +2848,7 @@
     const payload = {
       name: nameValue,
       description: roleDescriptionInput?.value?.trim() || null,
-      allowedServers: parseAllowedServersInput(roleServersInput?.value || ''),
+      allowedServers: getRoleServersSelection(),
       capabilities: collectRoleCapabilities(),
       global: collectRoleGlobalPermissions()
     };
@@ -3161,7 +3298,8 @@
     newRoleName?.addEventListener('input', () => hideNotice(roleFeedback));
     roleNameInput?.addEventListener('input', () => hideNotice(roleFeedback));
     roleDescriptionInput?.addEventListener('input', () => hideNotice(roleFeedback));
-    roleServersInput?.addEventListener('input', () => hideNotice(roleFeedback));
+    roleServersList?.addEventListener('change', handleRoleServersChange);
+    renderRoleServersOptions();
     setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));
     document.addEventListener('click', (ev) => {
       const target = ev.target instanceof Node ? ev.target : null;

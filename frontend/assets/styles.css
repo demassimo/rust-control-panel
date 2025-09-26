@@ -177,6 +177,73 @@ select {
 
 label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; color: var(--muted); }
 
+.role-fieldset {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.role-fieldset legend {
+  padding: 0 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+
+label.inline { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 0.92rem; color: var(--muted); }
+
+.role-fieldset label.inline { margin-top: 0; }
+
+.role-fieldset label.inline + label.inline { margin-top: 6px; }
+
+label.inline input[type="checkbox"],
+.role-checkbox input[type="checkbox"] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(12, 2, 5, 0.75);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+label.inline input[type="checkbox"]::after,
+.role-checkbox input[type="checkbox"]::after {
+  content: '';
+  width: 9px;
+  height: 5px;
+  border: 2px solid transparent;
+  border-top: 0;
+  border-left: 0;
+  transform: rotate(45deg) scale(0);
+  transition: transform 0.12s ease;
+}
+
+label.inline input[type="checkbox"]:checked,
+.role-checkbox input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: rgba(251, 113, 133, 0.75);
+  box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.3);
+}
+
+label.inline input[type="checkbox"]:checked::after,
+.role-checkbox input[type="checkbox"]:checked::after {
+  border-color: #1f0206;
+  transform: rotate(45deg) scale(1);
+}
+
+label.inline input[type="checkbox"]:focus-visible,
+.role-checkbox input[type="checkbox"]:focus-visible {
+  outline: 2px solid rgba(251, 113, 133, 0.6);
+  outline-offset: 2px;
+}
+
 .notice {
   border-radius: var(--radius-sm);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -194,8 +261,6 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 .row.quick-row { margin-bottom: 4px; }
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .grid2.stack-sm { grid-template-columns: 1fr; }
-.inline { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 0.92rem; color: var(--muted); }
-
 .login-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
@@ -822,6 +887,95 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; col
 
 .team-section-head h4 { font-size: 1.15rem; }
 .team-section-head p { margin: 0; }
+
+.role-access {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.role-access-head h5 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+
+.role-access-head p { margin: 0; }
+
+.role-checkbox-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.role-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.role-checkbox:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.role-checkbox input[type="checkbox"] { margin-top: 2px; }
+
+.role-checkbox input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.role-checkbox input[type="checkbox"]:disabled + .role-checkbox-content {
+  opacity: 0.65;
+}
+
+.role-checkbox-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.role-checkbox-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.role-checkbox-description {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.role-checkbox.missing {
+  border-style: dashed;
+  border-color: rgba(250, 204, 21, 0.35);
+}
+
+.role-checkbox.missing .role-checkbox-description {
+  color: var(--warning);
+}
+
+.role-checkbox-empty {
+  margin: 0;
+  padding: 6px 0 4px;
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 640px) {
+  .role-checkbox-list { grid-template-columns: 1fr; }
+}
 
 .users {
   list-style: none;
