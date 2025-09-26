@@ -355,9 +355,8 @@
           ctx2d.strokeRect(backdropX, backdropY, backdropW, backdropH);
         }
 
-        const getSeriesValue = (key, bucket) => {
-          if (!bucket) return null;
-          if (bucket.offline) return 0;
+        const readSeriesValue = (key, bucket) => {
+          if (!bucket || bucket.offline) return null;
           switch (key) {
             case 'players':
               return safeNumber(bucket?.playerCount);
@@ -382,11 +381,38 @@
         }
         const activeKeys = activeSeries.map((def) => def.key);
 
+        const bucketCount = state.buckets.length;
+        const bucketWidth = bucketCount > 1 ? chartWidth / (bucketCount - 1) : chartWidth;
+
+        const computedSeriesValues = {};
+        const lastKnownValues = {};
+        SERIES_DEFS.forEach((def) => {
+          computedSeriesValues[def.key] = new Array(bucketCount).fill(null);
+          lastKnownValues[def.key] = null;
+        });
+        state.buckets.forEach((bucket, idx) => {
+          SERIES_DEFS.forEach((def) => {
+            let value = null;
+            if (bucket?.offline) {
+              value = lastKnownValues[def.key];
+            } else {
+              value = readSeriesValue(def.key, bucket);
+              lastKnownValues[def.key] = value != null ? value : null;
+            }
+            computedSeriesValues[def.key][idx] = value;
+          });
+        });
+
+        const getSeriesValue = (key, idx) => {
+          if (!Number.isInteger(idx) || idx < 0 || idx >= bucketCount) return null;
+          return computedSeriesValues[key]?.[idx] ?? null;
+        };
+
         let hasData = false;
         let upperBound = 0;
-        state.buckets.forEach((bucket) => {
+        state.buckets.forEach((bucket, idx) => {
           for (const key of activeKeys) {
-            const value = getSeriesValue(key, bucket);
+            const value = getSeriesValue(key, idx);
             if (value != null) hasData = true;
             if (Number.isFinite(value) && value > upperBound) upperBound = value;
           }
@@ -400,9 +426,6 @@
           return originX + (index / (state.buckets.length - 1)) * chartWidth;
         };
         const yForValue = (value) => originY - value * yScale;
-
-        const bucketCount = state.buckets.length;
-        const bucketWidth = bucketCount > 1 ? chartWidth / (bucketCount - 1) : chartWidth;
 
         if (state.buckets.some((bucket) => bucket?.offline)) {
           ctx2d.fillStyle = 'rgba(248, 113, 113, 0.16)';
@@ -483,7 +506,7 @@
             ctx2d.beginPath();
             let drawing = false;
             state.buckets.forEach((bucket, idx) => {
-              const value = getSeriesValue(def.key, bucket);
+              const value = getSeriesValue(def.key, idx);
               if (value == null) {
                 drawing = false;
                 return;
@@ -506,7 +529,7 @@
               ctx2d.beginPath();
               drawing = false;
               state.buckets.forEach((bucket, idx) => {
-                const value = getSeriesValue(def.key, bucket);
+                const value = getSeriesValue(def.key, idx);
                 if (value == null) {
                   if (drawing) {
                     const x = xForIndex(idx - 1);
@@ -539,10 +562,12 @@
 
           // Highlight latest point when online
           if (state.summary?.latest?.playerCount != null && state.summary?.latest?.online !== false) {
-            const latestIndex = [...state.buckets].reverse().findIndex((bucket) => getSeriesValue('players', bucket) != null);
+            const latestIndex = [...state.buckets]
+              .reverse()
+              .findIndex((_, revIdx) => getSeriesValue('players', state.buckets.length - 1 - revIdx) != null);
             if (latestIndex >= 0) {
               const idx = state.buckets.length - 1 - latestIndex;
-              const value = getSeriesValue('players', state.buckets[idx]);
+              const value = getSeriesValue('players', idx);
               if (value != null) {
                 const x = xForIndex(idx);
                 const y = yForValue(value);
