@@ -55,8 +55,8 @@
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
   const roleServersList = $('#roleServersList');
-  const roleCapabilitiesFieldset = $('#roleCapabilities');
-  const roleGlobalFieldset = $('#roleGlobalPermissions');
+  const roleCapabilitiesContainer = $('#roleCapabilities');
+  const roleGlobalContainer = $('#roleGlobalPermissions');
   const newRoleKey = $('#newRoleKey');
   const newRoleName = $('#newRoleName');
   const btnCreateRole = $('#btnCreateRole');
@@ -187,6 +187,52 @@
   if (workspaceViewSections.length) {
     setWorkspaceView(workspaceViewDefault);
   }
+
+  const ROLE_CAPABILITY_INFO = {
+    view: {
+      name: 'View status',
+      description: 'See live server status, player counts, and performance metrics.'
+    },
+    console: {
+      name: 'View console',
+      description: 'Open the live console stream to monitor server output.'
+    },
+    commands: {
+      name: 'Run commands',
+      description: 'Send RCON commands and use quick actions from the panel.'
+    },
+    liveMap: {
+      name: 'View live map',
+      description: 'Access the interactive in-game map with player positions.'
+    },
+    players: {
+      name: 'Manage players',
+      description: 'Kick, ban, and manage player information for the server.'
+    },
+    manage: {
+      name: 'Manage server',
+      description: 'Change server settings, restarts, and configuration details.'
+    },
+    discord: {
+      name: 'Discord link',
+      description: 'Manage the Discord integration for status updates and commands.'
+    }
+  };
+
+  const ROLE_GLOBAL_PERMISSION_INFO = {
+    manageUsers: {
+      name: 'Manage team',
+      description: 'Invite, remove, and edit teammates across the panel.'
+    },
+    manageServers: {
+      name: 'Manage servers',
+      description: 'Add, edit, or remove servers and their connection settings.'
+    },
+    manageRoles: {
+      name: 'Manage roles',
+      description: 'Create, edit, and delete roles or adjust their permissions.'
+    }
+  };
 
   const state = {
     API: '',
@@ -2345,6 +2391,15 @@
     return [...roleServersSelection];
   }
 
+  function formatPermissionLabel(value) {
+    if (!value) return '';
+    return String(value)
+      .replace(/([A-Z])/g, ' $1')
+      .replace(/[-_]/g, ' ')
+      .replace(/^\s+|\s+$/g, '')
+      .replace(/^./, (c) => c.toUpperCase());
+  }
+
   function createRoleServerOption(value, title, description, { missing = false } = {}) {
     const label = document.createElement('label');
     label.className = `role-checkbox${missing ? ' missing' : ''}`;
@@ -2362,6 +2417,30 @@
       const desc = document.createElement('span');
       desc.className = 'role-checkbox-description';
       desc.textContent = description;
+      content.appendChild(desc);
+    }
+    label.appendChild(content);
+    return label;
+  }
+
+  function createRolePermissionOption(type, value, info = {}) {
+    const label = document.createElement('label');
+    label.className = 'role-checkbox role-permission';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    if (type === 'capability') input.dataset.roleCapability = value;
+    else if (type === 'global') input.dataset.roleGlobal = value;
+    label.appendChild(input);
+    const content = document.createElement('div');
+    content.className = 'role-checkbox-content';
+    const heading = document.createElement('span');
+    heading.className = 'role-checkbox-title';
+    heading.textContent = info.name || formatPermissionLabel(value);
+    content.appendChild(heading);
+    if (info.description) {
+      const desc = document.createElement('span');
+      desc.className = 'role-checkbox-description';
+      desc.textContent = info.description;
       content.appendChild(desc);
     }
     label.appendChild(content);
@@ -2455,47 +2534,39 @@
   });
 
   function renderRoleEditorFields() {
-    if (roleCapabilitiesFieldset) {
-      roleCapabilitiesFieldset.innerHTML = '';
+    if (roleCapabilitiesContainer) {
+      roleCapabilitiesContainer.innerHTML = '';
       const caps = state.roleTemplates?.serverCapabilities || [];
       if (!caps.length) {
         const note = document.createElement('p');
-        note.className = 'muted small';
+        note.className = 'muted small role-checkbox-empty';
         note.textContent = 'No server capabilities available.';
-        roleCapabilitiesFieldset.appendChild(note);
+        roleCapabilitiesContainer.appendChild(note);
       } else {
         caps.forEach((cap) => {
-          const label = document.createElement('label');
-          label.className = 'inline';
-          const input = document.createElement('input');
-          input.type = 'checkbox';
-          input.dataset.roleCapability = cap;
-          input.addEventListener('change', () => hideNotice(roleFeedback));
-          label.appendChild(input);
-          label.append(` ${cap.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`);
-          roleCapabilitiesFieldset.appendChild(label);
+          const info = ROLE_CAPABILITY_INFO[cap] || { name: formatPermissionLabel(cap) };
+          const label = createRolePermissionOption('capability', cap, info);
+          const input = label.querySelector('input');
+          if (input) input.addEventListener('change', () => hideNotice(roleFeedback));
+          roleCapabilitiesContainer.appendChild(label);
         });
       }
     }
-    if (roleGlobalFieldset) {
-      roleGlobalFieldset.innerHTML = '';
+    if (roleGlobalContainer) {
+      roleGlobalContainer.innerHTML = '';
       const perms = state.roleTemplates?.globalPermissions || [];
       if (!perms.length) {
         const note = document.createElement('p');
-        note.className = 'muted small';
+        note.className = 'muted small role-checkbox-empty';
         note.textContent = 'No global permissions available.';
-        roleGlobalFieldset.appendChild(note);
+        roleGlobalContainer.appendChild(note);
       } else {
         perms.forEach((perm) => {
-          const label = document.createElement('label');
-          label.className = 'inline';
-          const input = document.createElement('input');
-          input.type = 'checkbox';
-          input.dataset.roleGlobal = perm;
-          input.addEventListener('change', () => hideNotice(roleFeedback));
-          label.appendChild(input);
-          label.append(` ${perm.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`);
-          roleGlobalFieldset.appendChild(label);
+          const info = ROLE_GLOBAL_PERMISSION_INFO[perm] || { name: formatPermissionLabel(perm) };
+          const label = createRolePermissionOption('global', perm, info);
+          const input = label.querySelector('input');
+          if (input) input.addEventListener('change', () => hideNotice(roleFeedback));
+          roleGlobalContainer.appendChild(label);
         });
       }
     }
@@ -2550,16 +2621,16 @@
     if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
     setRoleServersSelection(role.permissions?.servers?.allowed);
     renderRoleServersOptions();
-    if (roleCapabilitiesFieldset) {
+    if (roleCapabilitiesContainer) {
       const caps = role.permissions?.servers?.capabilities || {};
-      roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+      roleCapabilitiesContainer.querySelectorAll('input[data-role-capability]').forEach((input) => {
         const cap = input.dataset.roleCapability;
         input.checked = !!caps?.[cap];
       });
     }
-    if (roleGlobalFieldset) {
+    if (roleGlobalContainer) {
       const globals = role.permissions?.global || {};
-      roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+      roleGlobalContainer.querySelectorAll('input[data-role-global]').forEach((input) => {
         const perm = input.dataset.roleGlobal;
         input.checked = !!globals?.[perm];
       });
@@ -2574,8 +2645,8 @@
 
   function collectRoleCapabilities() {
     const result = {};
-    if (!roleCapabilitiesFieldset) return result;
-    roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+    if (!roleCapabilitiesContainer) return result;
+    roleCapabilitiesContainer.querySelectorAll('input[data-role-capability]').forEach((input) => {
       const cap = input.dataset.roleCapability;
       if (!cap) return;
       result[cap] = !!input.checked;
@@ -2585,8 +2656,8 @@
 
   function collectRoleGlobalPermissions() {
     const result = {};
-    if (!roleGlobalFieldset) return result;
-    roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+    if (!roleGlobalContainer) return result;
+    roleGlobalContainer.querySelectorAll('input[data-role-global]').forEach((input) => {
       const perm = input.dataset.roleGlobal;
       if (!perm) return;
       result[perm] = !!input.checked;
@@ -2771,16 +2842,16 @@
     if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
     setRoleServersSelection(role.permissions?.servers?.allowed);
     renderRoleServersOptions();
-    if (roleCapabilitiesFieldset) {
+    if (roleCapabilitiesContainer) {
       const caps = role.permissions?.servers?.capabilities || {};
-      roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+      roleCapabilitiesContainer.querySelectorAll('input[data-role-capability]').forEach((input) => {
         const cap = input.dataset.roleCapability;
         input.checked = !!caps?.[cap];
       });
     }
-    if (roleGlobalFieldset) {
+    if (roleGlobalContainer) {
       const globals = role.permissions?.global || {};
-      roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+      roleGlobalContainer.querySelectorAll('input[data-role-global]').forEach((input) => {
         const perm = input.dataset.roleGlobal;
         input.checked = !!globals?.[perm];
       });
@@ -2795,8 +2866,8 @@
 
   function collectRoleCapabilities() {
     const result = {};
-    if (!roleCapabilitiesFieldset) return result;
-    roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+    if (!roleCapabilitiesContainer) return result;
+    roleCapabilitiesContainer.querySelectorAll('input[data-role-capability]').forEach((input) => {
       const cap = input.dataset.roleCapability;
       if (!cap) return;
       result[cap] = !!input.checked;
@@ -2806,8 +2877,8 @@
 
   function collectRoleGlobalPermissions() {
     const result = {};
-    if (!roleGlobalFieldset) return result;
-    roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+    if (!roleGlobalContainer) return result;
+    roleGlobalContainer.querySelectorAll('input[data-role-global]').forEach((input) => {
       const perm = input.dataset.roleGlobal;
       if (!perm) return;
       result[perm] = !!input.checked;

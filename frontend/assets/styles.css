@@ -207,8 +207,10 @@ label.inline input[type="checkbox"],
   border-radius: 5px;
   border: 1px solid rgba(255, 255, 255, 0.25);
   background: rgba(12, 2, 5, 0.75);
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
   cursor: pointer;
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
@@ -216,12 +218,13 @@ label.inline input[type="checkbox"],
 label.inline input[type="checkbox"]::after,
 .role-checkbox input[type="checkbox"]::after {
   content: '';
-  width: 9px;
-  height: 5px;
-  border: 2px solid transparent;
-  border-top: 0;
-  border-left: 0;
+  width: 6px;
+  height: 10px;
+  border: solid #1f0206;
+  border-width: 0 2px 2px 0;
   transform: rotate(45deg) scale(0);
+  transform-origin: center;
+  position: absolute;
   transition: transform 0.12s ease;
 }
 
@@ -234,7 +237,6 @@ label.inline input[type="checkbox"]:checked,
 
 label.inline input[type="checkbox"]:checked::after,
 .role-checkbox input[type="checkbox"]:checked::after {
-  border-color: #1f0206;
   transform: rotate(45deg) scale(1);
 }
 
@@ -908,9 +910,9 @@ label.inline input[type="checkbox"]:focus-visible,
 .role-access-head p { margin: 0; }
 
 .role-checkbox-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .role-checkbox {
@@ -924,6 +926,7 @@ label.inline input[type="checkbox"]:focus-visible,
   color: var(--text);
   cursor: pointer;
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  width: 100%;
 }
 
 .role-checkbox:hover {
@@ -931,7 +934,7 @@ label.inline input[type="checkbox"]:focus-visible,
   background: rgba(255, 255, 255, 0.05);
 }
 
-.role-checkbox input[type="checkbox"] { margin-top: 2px; }
+.role-checkbox input[type="checkbox"] { margin-top: 0; }
 
 .role-checkbox input[type="checkbox"]:disabled {
   cursor: not-allowed;
@@ -970,11 +973,6 @@ label.inline input[type="checkbox"]:focus-visible,
 .role-checkbox-empty {
   margin: 0;
   padding: 6px 0 4px;
-  grid-column: 1 / -1;
-}
-
-@media (max-width: 640px) {
-  .role-checkbox-list { grid-template-columns: 1fr; }
 }
 
 .users {
