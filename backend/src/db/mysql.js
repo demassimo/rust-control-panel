@@ -141,10 +141,12 @@ function createApi(pool, dialect) {
         bot_token TEXT NULL,
         guild_id VARCHAR(64) NULL,
         channel_id VARCHAR(64) NULL,
+        status_message_id VARCHAR(64) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_discord FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
+      await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN status_message_id VARCHAR(64) NULL');
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
@@ -357,6 +359,50 @@ function createApi(pool, dialect) {
         LIMIT ? OFFSET ?
       `,[serverIdNum,limit,offset]);
     },
+    async searchServerPlayers(serverId, query, { limit = 10 } = {}){
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const term = typeof query === 'string' ? query.trim() : '';
+      if (!term) return [];
+      const escapeLike = (value) => String(value).replace(/[\\%_]/g, (m) => `\\${m}`);
+      const likeTerm = `%${escapeLike(term)}%`;
+      const limitValue = Number(limit);
+      const limitNum = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(Math.floor(limitValue), 25) : 10;
+      return await exec(`
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
+               sp.last_ip, sp.last_port,
+               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=?
+          AND (
+            sp.steamid = ? OR
+            sp.display_name LIKE ? ESCAPE '\\' OR
+            sp.forced_display_name LIKE ? ESCAPE '\\' OR
+            p.persona LIKE ? ESCAPE '\\'
+          )
+        ORDER BY sp.last_seen DESC
+        LIMIT ?
+      `,[serverIdNum, term, likeTerm, likeTerm, likeTerm, limitNum]);
+    },
+    async getServerPlayer(serverId, steamid){
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const sid = typeof steamid === 'string' ? steamid.trim() : '';
+      if (!sid) return null;
+      const rows = await exec(`
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
+               sp.last_ip, sp.last_port,
+               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=? AND sp.steamid=?
+        LIMIT 1
+      `,[serverIdNum, sid]);
+      return rows?.[0] ?? null;
+    },
     async setServerPlayerDisplayName({ server_id, steamid, display_name = null }){
       const serverIdNum = Number(server_id);
       if (!Number.isFinite(serverIdNum)) return 0;
@@ -417,15 +463,16 @@ function createApi(pool, dialect) {
       );
       return rows?.[0] ?? null;
     },
-    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null }){
       await exec(`
-        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id)
-        VALUES(?,?,?,?)
+        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id, status_message_id)
+        VALUES(?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
           bot_token=VALUES(bot_token),
           guild_id=VALUES(guild_id),
-          channel_id=VALUES(channel_id)
-      `,[serverId, bot_token, guild_id, channel_id]);
+          channel_id=VALUES(channel_id),
+          status_message_id=VALUES(status_message_id)
+      `,[serverId, bot_token, guild_id, channel_id, status_message_id]);
     },
     async deleteServerDiscordIntegration(serverId){
       const result = await exec('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
