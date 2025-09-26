@@ -727,7 +727,19 @@
           : '';
         const raw = combined.raw_display_name || combined.display_name || combined.persona || combined.steamid || '';
         const initial = forced || raw || '';
-        const input = window.prompt('Enter a display name for this server. Leave blank to restore the live name.', initial);
+        if (typeof ctx.prompt !== 'function') {
+          setModalStatus('Display name editor unavailable in this build.', 'error');
+          return;
+        }
+        const input = await ctx.prompt({
+          title: 'Set display name',
+          message: 'Enter a display name for this server. Leave blank to restore the live name.',
+          confirmText: 'Save display name',
+          cancelText: 'Cancel',
+          placeholder: 'Display name',
+          defaultValue: initial,
+          maxLength: 190
+        });
         if (input === null) return;
         const trimmedInput = input.trim();
         const next = trimmedInput.slice(0, 190);

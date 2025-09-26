@@ -117,24 +117,39 @@
         </div>
         <div id="userCard" class="team-card">
           <div class="team-card-body">
-            <div class="user-create" id="userCreateSection">
-              <h4>Invite a teammate</h4>
-              <div class="grid2 stack-sm">
-                <input id="newUserName" placeholder="Username">
-                <input id="newUserPassword" type="password" placeholder="Temporary password">
+            <aside id="userCreateSection" class="team-card-sidebar">
+              <div class="team-card-sidebar-head">
+                <h3>Invite a teammate</h3>
+                <p class="muted small">Generate credentials and assign a role in one place.</p>
               </div>
-              <label>Role
-                <select id="newUserRole"></select>
-              </label>
-              <div class="row">
-                <button id="btnCreateUser" class="accent">Create user</button>
+              <div class="team-card-sidebar-body">
+                <div class="grid2 stack-sm">
+                  <input id="newUserName" placeholder="Username">
+                  <input id="newUserPassword" type="password" placeholder="Temporary password">
+                </div>
+                <label>Role
+                  <select id="newUserRole"></select>
+                </label>
+                <div class="row">
+                  <button id="btnCreateUser" class="accent">Create user</button>
+                </div>
+                <p id="userFeedback" class="notice hidden"></p>
               </div>
-              <p id="userFeedback" class="notice hidden"></p>
-            </div>
-            <h4>Existing users</h4>
-            <ul id="userList" class="users"></ul>
-            <h4 class="roles-header" id="rolesHeader">Roles</h4>
-            <div id="roleManager" class="roles-manager">
+            </aside>
+            <div class="team-card-main">
+              <section class="team-section">
+                <div class="team-section-head">
+                  <h4>Existing users</h4>
+                  <p class="muted small">Manage passwords and roles for your operators.</p>
+                </div>
+                <ul id="userList" class="users"></ul>
+              </section>
+              <section class="team-section">
+                <div class="team-section-head">
+                  <h4 class="roles-header" id="rolesHeader">Roles</h4>
+                  <p id="rolesDescription" class="muted small">Define reusable access levels for your team.</p>
+                </div>
+                <div id="roleManager" class="roles-manager">
               <div class="role-create">
                 <div class="grid2 stack-sm">
                   <input id="newRoleKey" placeholder="New role key">
@@ -163,6 +178,8 @@
                 </div>
                 <p id="roleFeedback" class="notice hidden"></p>
               </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -218,6 +235,32 @@
           </div>
         </div>
       </aside>
+
+      <div id="dialogOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
+      <form
+        id="dialogModal"
+        class="dialog hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dialogTitle"
+        aria-hidden="true"
+        tabindex="-1"
+        novalidate
+      >
+        <div class="dialog-content">
+          <h3 id="dialogTitle">Confirm</h3>
+          <p id="dialogMessage" class="dialog-message"></p>
+          <label id="dialogInputWrap" class="dialog-field hidden">
+            <span id="dialogInputLabel">Value</span>
+            <input id="dialogInput" type="text" autocomplete="off" />
+          </label>
+          <p id="dialogError" class="dialog-error hidden" role="alert"></p>
+          <div class="dialog-actions">
+            <button type="button" id="dialogCancel" class="ghost">Cancel</button>
+            <button type="submit" id="dialogConfirm" class="accent">Confirm</button>
+          </div>
+        </div>
+      </form>
 
       <section id="workspacePanel" class="workspace hidden">
         <div class="workspace-header">

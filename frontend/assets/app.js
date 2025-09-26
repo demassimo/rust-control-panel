@@ -49,6 +49,8 @@
   const roleManager = $('#roleManager');
   const roleEditor = $('#roleEditor');
   const rolesHeader = $('#rolesHeader');
+  const rolesDescription = $('#rolesDescription');
+  const rolesSection = roleManager?.closest('.team-section') || null;
   const roleSelect = $('#roleSelect');
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
@@ -111,6 +113,16 @@
   const userDetailsDelete = $('#userDetailsDelete');
   const userDetailsSelfNotice = $('#userDetailsSelfNotice');
   const userDetailsRoleStatus = $('#userDetailsRoleStatus');
+  const dialogOverlay = $('#dialogOverlay');
+  const dialogModal = $('#dialogModal');
+  const dialogTitle = $('#dialogTitle');
+  const dialogMessage = $('#dialogMessage');
+  const dialogInputWrap = $('#dialogInputWrap');
+  const dialogInputLabel = $('#dialogInputLabel');
+  const dialogInput = $('#dialogInput');
+  const dialogError = $('#dialogError');
+  const dialogConfirmBtn = $('#dialogConfirm');
+  const dialogCancelBtn = $('#dialogCancel');
 
   const workspaceViewSections = Array.from(document.querySelectorAll('.workspace-view'));
   const workspaceViewSectionMap = new Map(workspaceViewSections.map((section) => [section.dataset.view, section]));
@@ -289,6 +301,205 @@
     return !!(userDetailsPanel && !userDetailsPanel.classList.contains('hidden'));
   }
 
+  const dialogState = {
+    open: false,
+    resolver: null,
+    options: null,
+    lastFocus: null
+  };
+
+  function isDialogSupported() {
+    return !!(dialogOverlay && dialogModal && dialogConfirmBtn);
+  }
+
+  function isDialogOpen() {
+    return dialogState.open;
+  }
+
+  function setDialogError(message = '') {
+    if (!dialogError) return;
+    dialogError.textContent = message;
+    if (message) dialogError.classList.remove('hidden');
+    else dialogError.classList.add('hidden');
+    if (dialogInputWrap) dialogInputWrap.classList.toggle('invalid', !!message);
+  }
+
+  function resetDialogUi() {
+    setDialogError('');
+    if (dialogInputWrap) dialogInputWrap.classList.remove('invalid');
+    if (dialogInput) {
+      dialogInput.value = '';
+      dialogInput.placeholder = '';
+      dialogInput.type = 'text';
+      dialogInput.removeAttribute('minlength');
+      dialogInput.removeAttribute('maxlength');
+      delete dialogInput.dataset.required;
+    }
+    if (dialogInputLabel) dialogInputLabel.textContent = 'Value';
+  }
+
+  function hideDialogElements() {
+    if (dialogOverlay) {
+      dialogOverlay.classList.add('hidden');
+      dialogOverlay.setAttribute('aria-hidden', 'true');
+    }
+    if (dialogModal) {
+      dialogModal.classList.add('hidden');
+      dialogModal.setAttribute('aria-hidden', 'true');
+    }
+    document.body.classList.remove('modal-open');
+  }
+
+  function finishDialog(result) {
+    if (!dialogState.open) return;
+    dialogState.open = false;
+    hideDialogElements();
+    resetDialogUi();
+    const resolver = dialogState.resolver;
+    dialogState.resolver = null;
+    dialogState.options = null;
+    const focusTarget = dialogState.lastFocus;
+    dialogState.lastFocus = null;
+    if (focusTarget && document.body.contains(focusTarget)) {
+      requestAnimationFrame(() => focusTarget.focus());
+    }
+    resolver?.(result);
+  }
+
+  function cancelDialog() {
+    finishDialog({ confirmed: false, cancelled: true });
+  }
+
+  function openDialog(options = {}) {
+    if (!isDialogSupported()) {
+      return Promise.resolve({ confirmed: false, cancelled: true });
+    }
+    if (dialogState.open) {
+      finishDialog({ confirmed: false, cancelled: true });
+    }
+    const opts = options || {};
+    resetDialogUi();
+    return new Promise((resolve) => {
+      dialogState.open = true;
+      dialogState.resolver = resolve;
+      dialogState.options = opts;
+      dialogState.lastFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+      if (dialogTitle) dialogTitle.textContent = opts.title || 'Confirm';
+      const messageText = opts.message || '';
+      if (dialogMessage) {
+        dialogMessage.textContent = messageText;
+        dialogMessage.classList.toggle('hidden', !messageText);
+      }
+      if (dialogModal) {
+        if (messageText) dialogModal.setAttribute('aria-describedby', 'dialogMessage');
+        else dialogModal.removeAttribute('aria-describedby');
+      }
+
+      const hasPrompt = !!opts.prompt;
+      if (dialogInputWrap) dialogInputWrap.classList.toggle('hidden', !hasPrompt);
+      if (hasPrompt && dialogInput) {
+        const prompt = opts.prompt || {};
+        dialogInput.type = prompt.type || 'text';
+        dialogInput.value = prompt.value != null ? String(prompt.value) : '';
+        dialogInput.placeholder = prompt.placeholder || '';
+        if (prompt.maxLength != null) dialogInput.maxLength = Number(prompt.maxLength);
+        else dialogInput.removeAttribute('maxlength');
+        if (prompt.minLength != null) dialogInput.minLength = Number(prompt.minLength);
+        else dialogInput.removeAttribute('minlength');
+        dialogInput.dataset.required = prompt.required ? 'true' : '';
+        if (dialogInputLabel) dialogInputLabel.textContent = prompt.label || 'Value';
+      }
+
+      if (dialogCancelBtn) {
+        const showCancel = opts.showCancel !== false;
+        dialogCancelBtn.classList.toggle('hidden', !showCancel);
+        dialogCancelBtn.textContent = opts.cancelText || 'Cancel';
+      }
+
+      if (dialogConfirmBtn) dialogConfirmBtn.textContent = opts.confirmText || 'Confirm';
+
+      if (dialogOverlay) {
+        dialogOverlay.classList.remove('hidden');
+        dialogOverlay.setAttribute('aria-hidden', 'false');
+      }
+      if (dialogModal) {
+        dialogModal.classList.remove('hidden');
+        dialogModal.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => {
+          if (hasPrompt && dialogInput) dialogInput.focus();
+          else dialogConfirmBtn?.focus();
+        });
+      }
+      document.body.classList.add('modal-open');
+    });
+  }
+
+  async function confirmDialog(options = {}) {
+    const result = await openDialog(options);
+    return !!result?.confirmed;
+  }
+
+  async function promptDialog(options = {}) {
+    const result = await openDialog({
+      title: options.title,
+      message: options.message,
+      confirmText: options.confirmText || 'Confirm',
+      cancelText: options.cancelText ?? 'Cancel',
+      showCancel: options.cancelText !== null,
+      prompt: {
+        label: options.label || 'Value',
+        placeholder: options.placeholder || '',
+        value: options.defaultValue != null ? options.defaultValue : '',
+        minLength: typeof options.minLength === 'number' ? options.minLength : null,
+        maxLength: typeof options.maxLength === 'number' ? options.maxLength : null,
+        required: !!options.required,
+        type: options.type || 'text',
+        requiredMessage: options.requiredMessage,
+        minMessage: options.minMessage
+      }
+    });
+    if (!result?.confirmed) return null;
+    return result.value != null ? result.value : '';
+  }
+
+  dialogOverlay?.addEventListener('click', (event) => {
+    if (event.target === dialogOverlay) cancelDialog();
+  });
+
+  dialogCancelBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    cancelDialog();
+  });
+
+  dialogModal?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!dialogState.open) return;
+    const opts = dialogState.options || {};
+    const prompt = opts.prompt || null;
+    if (prompt && dialogInput) {
+      const value = dialogInput.value;
+      if (prompt.required && value.length === 0) {
+        setDialogError(prompt.requiredMessage || 'This field is required.');
+        dialogInput.focus();
+        return;
+      }
+      if (prompt.minLength && value.length < prompt.minLength) {
+        setDialogError(prompt.minMessage || `Enter at least ${prompt.minLength} characters.`);
+        dialogInput.focus();
+        return;
+      }
+      setDialogError('');
+      finishDialog({ confirmed: true, value });
+      return;
+    }
+    finishDialog({ confirmed: true });
+  });
+
+  dialogInput?.addEventListener('input', () => {
+    if (dialogState.open) setDialogError('');
+  });
+
   function renderUserDetails(user) {
     if (!userDetailsPanel || !user) return;
     const isSelf = user.id === state.currentUser?.id;
@@ -373,8 +584,19 @@
 
   async function handleUserDetailsPasswordReset() {
     if (!activeUserDetails) return;
-    const newPass = prompt(`Enter a new password for ${activeUserDetails.username} (min 8 chars):`);
-    if (!newPass) return;
+    const newPass = await promptDialog({
+      title: 'Reset password',
+      message: `Enter a new password for ${activeUserDetails.username}.`,
+      confirmText: 'Update password',
+      label: 'New password',
+      placeholder: 'Minimum 8 characters',
+      required: true,
+      minLength: 8,
+      type: 'password',
+      requiredMessage: 'Password is required.',
+      minMessage: 'Password must be at least 8 characters.'
+    });
+    if (newPass == null) return;
     if (newPass.length < 8) {
       showNotice(userFeedback, 'Password must be at least 8 characters.', 'error');
       return;
@@ -390,7 +612,13 @@
 
   async function handleUserDetailsDelete() {
     if (!activeUserDetails) return;
-    if (!confirm(`Remove ${activeUserDetails.username}? This cannot be undone.`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Remove user',
+      message: `Remove ${activeUserDetails.username}? This cannot be undone.`,
+      confirmText: 'Remove user',
+      cancelText: 'Cancel'
+    });
+    if (!confirmed) return;
     try {
       await api(`/users/${activeUserDetails.id}`, null, 'DELETE');
       showNotice(userFeedback, 'Removed ' + activeUserDetails.username, 'success');
@@ -413,9 +641,16 @@
   });
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && isUserDetailsOpen()) {
-      event.preventDefault();
-      closeUserDetails();
+    if (event.key === 'Escape') {
+      if (isDialogOpen()) {
+        event.preventDefault();
+        cancelDialog();
+        return;
+      }
+      if (isUserDetailsOpen()) {
+        event.preventDefault();
+        closeUserDetails();
+      }
     }
   });
 
@@ -1555,7 +1790,13 @@
       removeBtn.addEventListener('click', async (ev) => {
         ev.preventDefault();
         const label = entry.data?.name || server.name || `Server #${server.id}`;
-        if (!confirm(`Remove ${label}? This cannot be undone.`)) return;
+        const confirmed = await confirmDialog({
+          title: 'Remove server',
+          message: `Remove ${label}? This cannot be undone.`,
+          confirmText: 'Remove server',
+          cancelText: 'Cancel'
+        });
+        if (!confirmed) return;
         removeBtn.disabled = true;
         cancelBtn.disabled = true;
         saveBtn.disabled = true;
@@ -1771,6 +2012,12 @@
     clearConsole() {
       consoleEl.textContent = '';
     },
+    confirm(options) {
+      return confirmDialog(options);
+    },
+    prompt(options) {
+      return promptDialog(options);
+    },
     setUser(user) {
       if (navSettings) {
         const label = user?.username || 'Account';
@@ -1883,6 +2130,8 @@
     handleUnauthorized,
     registerQuickCommand,
     setQuickInput,
+    confirm: (options) => confirmDialog(options),
+    prompt: (options) => promptDialog(options),
     sendCommand: runRconCommand,
     runCommand: runRconCommand,
     getState: () => ({
@@ -2262,7 +2511,13 @@
     hideNotice(roleFeedback);
     const role = findRoleDefinition(activeRoleEditKey);
     if (!role) return;
-    if (!confirm(`Delete the role "${role.name || role.key}"? This cannot be undone.`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete role',
+      message: `Delete the role "${role.name || role.key}"? This cannot be undone.`,
+      confirmText: 'Delete role',
+      cancelText: 'Cancel'
+    });
+    if (!confirmed) return;
     try {
       await api(`/roles/${activeRoleEditKey}`, null, 'DELETE');
       showNotice(roleFeedback, 'Role removed.', 'success');
@@ -2323,6 +2578,14 @@
     if (rolesHeader) {
       rolesHeader.classList.toggle('hidden', !active);
       rolesHeader.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (rolesDescription) {
+      rolesDescription.classList.toggle('hidden', !active);
+      rolesDescription.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (rolesSection) {
+      rolesSection.classList.toggle('hidden', !active);
+      rolesSection.setAttribute('aria-hidden', active ? 'false' : 'true');
     }
     if (!active) {
       activeRoleEditKey = null;
@@ -2468,7 +2731,13 @@
     hideNotice(roleFeedback);
     const role = findRoleDefinition(activeRoleEditKey);
     if (!role) return;
-    if (!confirm(`Delete the role "${role.name || role.key}"? This cannot be undone.`)) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete role',
+      message: `Delete the role "${role.name || role.key}"? This cannot be undone.`,
+      confirmText: 'Delete role',
+      cancelText: 'Cancel'
+    });
+    if (!confirmed) return;
     try {
       await api(`/roles/${activeRoleEditKey}`, null, 'DELETE');
       showNotice(roleFeedback, 'Role removed.', 'success');
@@ -2529,6 +2798,14 @@
     if (rolesHeader) {
       rolesHeader.classList.toggle('hidden', !active);
       rolesHeader.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (rolesDescription) {
+      rolesDescription.classList.toggle('hidden', !active);
+      rolesDescription.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (rolesSection) {
+      rolesSection.classList.toggle('hidden', !active);
+      rolesSection.setAttribute('aria-hidden', active ? 'false' : 'true');
     }
     if (!active) {
       activeRoleEditKey = null;

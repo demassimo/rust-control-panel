@@ -2528,7 +2528,7 @@ app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
 });
 
 app.post('/api/servers/:id/map-image', auth, async (req, res) => {
-  const id = ensureServerCapability(req, res, 'uploadMap');
+  const id = ensureServerCapability(req, res, 'manage');
   if (id == null) return;
   const { image, mapKey } = req.body || {};
   if (!image) return res.status(400).json({ error: 'missing_image' });
