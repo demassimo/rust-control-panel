@@ -261,6 +261,7 @@ async function updateBot(state, integration) {
   let queued = null;
   let sleepers = null;
   let recordedAt = null;
+  let onlineFlag = null;
   if (stats) {
     const playerCount = Number(stats.player_count ?? stats.playerCount);
     if (Number.isFinite(playerCount) && playerCount >= 0) {
@@ -279,10 +280,13 @@ async function updateBot(state, integration) {
       sleepers = sleeperCount;
     }
     recordedAt = parseDate(stats.recorded_at ?? stats.recordedAt);
+    const onlineRaw = stats.online ?? stats.is_online ?? stats.onlineFlag;
+    if (typeof onlineRaw === 'boolean') onlineFlag = onlineRaw;
+    else if (onlineRaw != null) onlineFlag = Number(onlineRaw) !== 0;
   }
 
   const isRecent = recordedAt ? (Date.now() - recordedAt.getTime()) <= staleThreshold : false;
-  const isOnline = stats != null && isRecent;
+  const isOnline = stats != null && isRecent && (onlineFlag == null ? true : onlineFlag);
 
   const presence = formatPresence(isOnline, players, maxPlayers);
   const presenceKey = `${presence.status}|${presence.activity}`;

@@ -258,6 +258,13 @@ function alignTimestamp(ms, intervalMs, direction = 'floor') {
 function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
   const bucketMap = new Map();
   let latestSample = null;
+  let overallQueuedPeak = null;
+  let overallSleepersPeak = null;
+  let overallJoiningPeak = null;
+  let overallFpsPeak = null;
+  let totalFpsSum = 0;
+  let totalFpsSamples = 0;
+  let offlineBucketCount = 0;
 
   for (const row of rows) {
     const timestamp = parseTimestamp(row?.recorded_at ?? row?.recordedAt);
@@ -265,12 +272,27 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
     if (timestamp < startMs || timestamp > endMs) continue;
     const playerValueRaw = Number(row?.player_count ?? row?.playerCount);
     const maxPlayersRaw = Number(row?.max_players ?? row?.maxPlayers);
+    const queuedRaw = Number(row?.queued ?? row?.queuedPlayers);
+    const sleepersRaw = Number(row?.sleepers ?? row?.sleepersPlayers);
+    const joiningRaw = Number(row?.joining ?? row?.joiningPlayers);
+    const fpsRaw = extractFloat(row?.fps ?? row?.frame_rate ?? row?.framerate ?? row?.frameRate ?? row?.average_fps ?? row?.avgFps);
+    const onlineRaw = row?.online ?? row?.is_online ?? row?.onlineFlag;
+    const isOnline = typeof onlineRaw === 'boolean'
+      ? onlineRaw
+      : Number.isFinite(Number(onlineRaw))
+        ? Number(onlineRaw) !== 0
+        : true;
 
     if (!latestSample || timestamp > latestSample.ts) {
       latestSample = {
         ts: timestamp,
         playerCount: Number.isFinite(playerValueRaw) ? Math.max(0, Math.trunc(playerValueRaw)) : null,
-        maxPlayers: Number.isFinite(maxPlayersRaw) ? Math.max(0, Math.trunc(maxPlayersRaw)) : null
+        maxPlayers: Number.isFinite(maxPlayersRaw) ? Math.max(0, Math.trunc(maxPlayersRaw)) : null,
+        queued: Number.isFinite(queuedRaw) ? Math.max(0, Math.trunc(queuedRaw)) : null,
+        sleepers: Number.isFinite(sleepersRaw) ? Math.max(0, Math.trunc(sleepersRaw)) : null,
+        joining: Number.isFinite(joiningRaw) ? Math.max(0, Math.trunc(joiningRaw)) : null,
+        fps: Number.isFinite(fpsRaw) ? Math.max(0, Math.round(fpsRaw * 10) / 10) : null,
+        online: isOnline
       };
     }
 
@@ -279,7 +301,19 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
     if (bucketStart < startMs || bucketStart >= endMs) continue;
     let bucket = bucketMap.get(bucketStart);
     if (!bucket) {
-      bucket = { sum: 0, samples: 0, peak: null, maxPlayers: null, queuedMax: null, sleepersMax: null };
+      bucket = {
+        sum: 0,
+        samples: 0,
+        peak: null,
+        maxPlayers: null,
+        queuedMax: null,
+        sleepersMax: null,
+        joiningMax: null,
+        fpsSum: 0,
+        fpsSamples: 0,
+        fpsPeak: null,
+        offlineSamples: 0
+      };
       bucketMap.set(bucketStart, bucket);
     }
     if (Number.isFinite(playerValueRaw)) {
@@ -292,15 +326,32 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
       const maxValue = Math.max(0, Math.trunc(maxPlayersRaw));
       bucket.maxPlayers = bucket.maxPlayers != null ? Math.max(bucket.maxPlayers, maxValue) : maxValue;
     }
-    const queuedRaw = Number(row?.queued ?? row?.queuedPlayers);
     if (Number.isFinite(queuedRaw)) {
       const queuedValue = Math.max(0, Math.trunc(queuedRaw));
       bucket.queuedMax = bucket.queuedMax != null ? Math.max(bucket.queuedMax, queuedValue) : queuedValue;
+      if (overallQueuedPeak == null || queuedValue > overallQueuedPeak) overallQueuedPeak = queuedValue;
     }
-    const sleepersRaw = Number(row?.sleepers ?? row?.sleepersPlayers);
     if (Number.isFinite(sleepersRaw)) {
       const sleepersValue = Math.max(0, Math.trunc(sleepersRaw));
       bucket.sleepersMax = bucket.sleepersMax != null ? Math.max(bucket.sleepersMax, sleepersValue) : sleepersValue;
+      if (overallSleepersPeak == null || sleepersValue > overallSleepersPeak) overallSleepersPeak = sleepersValue;
+    }
+    if (Number.isFinite(joiningRaw)) {
+      const joiningValue = Math.max(0, Math.trunc(joiningRaw));
+      bucket.joiningMax = bucket.joiningMax != null ? Math.max(bucket.joiningMax, joiningValue) : joiningValue;
+      if (overallJoiningPeak == null || joiningValue > overallJoiningPeak) overallJoiningPeak = joiningValue;
+    }
+    if (Number.isFinite(fpsRaw)) {
+      const fpsValue = Math.max(0, fpsRaw);
+      bucket.fpsSum += fpsValue;
+      bucket.fpsSamples += 1;
+      bucket.fpsPeak = bucket.fpsPeak != null ? Math.max(bucket.fpsPeak, fpsValue) : fpsValue;
+      if (overallFpsPeak == null || fpsValue > overallFpsPeak) overallFpsPeak = fpsValue;
+      totalFpsSum += fpsValue;
+      totalFpsSamples += 1;
+    }
+    if (!isOnline) {
+      bucket.offlineSamples += 1;
     }
   }
 
@@ -316,6 +367,8 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
     let maxPlayers = null;
     let queued = null;
     let sleepers = null;
+    let joining = null;
+    let fps = null;
     if (bucket && bucket.samples > 0) {
       samples = bucket.samples;
       average = bucket.sum / bucket.samples;
@@ -325,6 +378,11 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
       if (bucket.maxPlayers != null) maxPlayers = bucket.maxPlayers;
       if (bucket.queuedMax != null) queued = bucket.queuedMax;
       if (bucket.sleepersMax != null) sleepers = bucket.sleepersMax;
+      if (bucket.joiningMax != null) joining = bucket.joiningMax;
+      if (bucket.fpsSamples > 0) fps = Math.round((bucket.fpsSum / bucket.fpsSamples) * 10) / 10;
+    }
+    if (bucket && bucket.offlineSamples > 0) {
+      offlineBucketCount += 1;
     }
     buckets.push({
       timestamp: new Date(cursor).toISOString(),
@@ -332,7 +390,10 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
       maxPlayers,
       queued,
       sleepers,
-      samples
+      joining,
+      fps,
+      samples,
+      offline: Boolean(bucket?.offlineSamples)
     });
   }
 
@@ -340,11 +401,22 @@ function buildPlayerHistoryBuckets(rows = [], startMs, endMs, intervalMs) {
     peakPlayers: peakPlayers || null,
     averagePlayers: totalSamples > 0 ? Math.round((totalPlayers / totalSamples) * 100) / 100 : null,
     sampleCount: totalSamples,
+    maxQueued: overallQueuedPeak,
+    maxSleepers: overallSleepersPeak,
+    maxJoining: overallJoiningPeak,
+    maxFps: overallFpsPeak != null ? Math.round(overallFpsPeak * 10) / 10 : null,
+    averageFps: totalFpsSamples > 0 ? Math.round((totalFpsSum / totalFpsSamples) * 10) / 10 : null,
+    offlineBucketCount,
     latest: latestSample
       ? {
           timestamp: new Date(latestSample.ts).toISOString(),
           playerCount: latestSample.playerCount,
-          maxPlayers: latestSample.maxPlayers
+          maxPlayers: latestSample.maxPlayers,
+          queued: latestSample.queued,
+          sleepers: latestSample.sleepers,
+          joining: latestSample.joining,
+          fps: latestSample.fps,
+          online: latestSample.online
         }
       : null
   };
@@ -373,6 +445,8 @@ let monitorRefreshPromise = null;
 
 const PLAYER_CONNECTION_DEDUPE_MS = 5 * 60 * 1000;
 const recentPlayerConnections = new Map();
+const OFFLINE_SNAPSHOT_MIN_INTERVAL = Math.max(Math.floor(MONITOR_INTERVAL / 2), 15000);
+const offlineSnapshotTimestamps = new Map();
 const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
 
 const steamProfileCache = new Map();
@@ -511,7 +585,8 @@ function parseStatusMessage(message) {
     hostname: null,
     players: null,
     queued: null,
-    sleepers: null
+    sleepers: null,
+    fps: null
   };
   if (!message) return info;
   const lines = message.split(/\r?\n/);
@@ -537,6 +612,11 @@ function parseStatusMessage(message) {
     if (sleepersMatch) info.sleepers = parseInt(sleepersMatch[1], 10);
     const joiningMatch = line.match(/joining\s*[:=]\s*(\d+)/i) || line.match(/\((\d+)\s*joining\)/i);
     if (joiningMatch) info.joining = parseInt(joiningMatch[1], 10);
+    const fpsMatch = line.match(/\bfps\b\s*[:=]\s*(\d+(?:\.\d+)?)/i) || line.match(/(\d+(?:\.\d+)?)\s*fps\b/i);
+    if (fpsMatch) {
+      const fpsValue = extractFloat(fpsMatch[1]);
+      if (fpsValue != null) info.fps = fpsValue;
+    }
   }
   return info;
 }
@@ -550,8 +630,17 @@ function extractInteger(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function extractFloat(value) {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const match = String(value).match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const num = parseFloat(match[0]);
+  return Number.isFinite(num) ? num : null;
+}
+
 function parseServerInfoMessage(message) {
-  const result = { raw: message, mapName: null, size: null, seed: null };
+  const result = { raw: message, mapName: null, size: null, seed: null, fps: null };
   if (!message) return { ...result };
 
   const trimmed = typeof message === 'string' ? message.trim() : '';
@@ -578,6 +667,10 @@ function parseServerInfoMessage(message) {
     if (lower.includes('seed')) {
       const seed = extractInteger(trimmedValue);
       if (seed != null) result.seed = seed;
+    }
+    if (lower.includes('fps') || lower.includes('framerate')) {
+      const fpsValue = extractFloat(trimmedValue);
+      if (fpsValue != null) result.fps = fpsValue;
     }
   };
 
@@ -638,12 +731,36 @@ function parseServerInfoMessage(message) {
     }
   }
 
+  if (result.fps == null) {
+    const fpsMatch = trimmed.match(/\bfps\b\s*[:=]\s*(\d+(?:\.\d+)?)/i) || trimmed.match(/(\d+(?:\.\d+)?)\s*fps\b/i);
+    if (fpsMatch) {
+      const parsed = extractFloat(fpsMatch[1]);
+      if (parsed != null) result.fps = parsed;
+    }
+    const framerateMatch = trimmed.match(/framerate\s*[:=]\s*(\d+(?:\.\d+)?)/i);
+    if (framerateMatch) {
+      const parsed = extractFloat(framerateMatch[1]);
+      if (parsed != null) result.fps = parsed;
+    }
+  }
+
   const output = { ...fields, ...result };
   if (!output.mapName && typeof output.Map === 'string' && output.Map.trim()) output.mapName = output.Map.trim();
   if (!output.mapName && typeof output.map === 'string' && output.map.trim()) output.mapName = output.map.trim();
   if (output.size == null) {
     const mapSize = extractInteger(output.Map ?? output.map ?? null);
     if (mapSize != null) output.size = mapSize;
+  }
+
+  if (output.fps == null) {
+    const fpsCandidates = [output.Framerate, output.framerate, output.fps];
+    for (const candidate of fpsCandidates) {
+      const parsed = extractFloat(candidate);
+      if (parsed != null) {
+        output.fps = parsed;
+        break;
+      }
+    }
   }
 
   return output;
@@ -1463,17 +1580,38 @@ rconEventBus.on('monitor_status', (serverId, payload) => {
     details
   });
   if (typeof db.recordServerPlayerCount === 'function' && details?.players?.online != null) {
+    const fpsSources = [
+      details?.fps,
+      details?.serverInfo?.fps,
+      details?.serverinfo?.fps,
+      details?.serverInfo?.Framerate,
+      details?.serverinfo?.Framerate,
+      details?.serverInfo?.framerate,
+      details?.serverinfo?.framerate
+    ];
+    let fpsValue = null;
+    for (const source of fpsSources) {
+      const parsed = extractFloat(source);
+      if (parsed != null) {
+        fpsValue = parsed;
+        break;
+      }
+    }
     const snapshot = {
       server_id: id,
       player_count: details.players.online,
       max_players: Number.isFinite(details.players.max) ? details.players.max : null,
       queued: Number.isFinite(details.queued) ? details.queued : null,
-      sleepers: Number.isFinite(details.sleepers) ? details.sleepers : null
+      sleepers: Number.isFinite(details.sleepers) ? details.sleepers : null,
+      joining: Number.isFinite(details.joining) ? details.joining : null,
+      fps: fpsValue != null ? fpsValue : null,
+      online: 1
     };
     db.recordServerPlayerCount(snapshot).catch((err) => {
       console.warn('Failed to record player count snapshot', err);
     });
   }
+  offlineSnapshotTimestamps.delete(id);
   const playerReply = findReply('playerlist');
   const playerMessage = playerReply?.Message || playerReply?.message || '';
   if (playerMessage) {
@@ -1492,6 +1630,25 @@ rconEventBus.on('monitor_error', (serverId, error) => {
     lastCheck: new Date().toISOString(),
     error: message
   });
+  if (typeof db.recordServerPlayerCount === 'function') {
+    const now = Date.now();
+    const last = offlineSnapshotTimestamps.get(id) || 0;
+    if (now - last >= OFFLINE_SNAPSHOT_MIN_INTERVAL) {
+      offlineSnapshotTimestamps.set(id, now);
+      db.recordServerPlayerCount({
+        server_id: id,
+        player_count: 0,
+        max_players: null,
+        queued: null,
+        sleepers: null,
+        joining: null,
+        fps: null,
+        online: 0
+      }).catch((err) => {
+        console.warn('Failed to record offline player snapshot', err);
+      });
+    }
+  }
 });
 
 
@@ -1527,6 +1684,9 @@ async function refreshMonitoredServers() {
         const [serverId] = entryKey.split(':');
         const numeric = Number(serverId);
         if (Number.isFinite(numeric) && !seen.has(numeric)) recentPlayerConnections.delete(entryKey);
+      }
+      for (const [serverId] of [...offlineSnapshotTimestamps.entries()]) {
+        if (!seen.has(serverId)) offlineSnapshotTimestamps.delete(serverId);
       }
       if (!monitorController) {
         monitorController = startAutoMonitor(list, {

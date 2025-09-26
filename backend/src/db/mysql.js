@@ -87,6 +87,11 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_ip VARCHAR(128) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
+      await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN queued INT NULL');
+      await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN sleepers INT NULL');
+      await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN joining INT NULL');
+      await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN online TINYINT DEFAULT 1');
+      await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN fps FLOAT NULL');
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -104,6 +109,9 @@ function createApi(pool, dialect) {
         max_players INT NULL,
         queued INT NULL,
         sleepers INT NULL,
+        joining INT NULL,
+        fps FLOAT NULL,
+        online TINYINT DEFAULT 1,
         recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_player_counts_server (server_id, recorded_at),
         CONSTRAINT fk_player_counts_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
@@ -206,13 +214,16 @@ function createApi(pool, dialect) {
           last_port=COALESCE(VALUES(last_port), server_players.last_port)
       `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
     },
-    async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, recorded_at=null }){
+    async recordServerPlayerCount({ server_id, player_count, max_players=null, queued=null, sleepers=null, joining=null, fps=null, online=1, recorded_at=null }){
       const serverIdNum = Number(server_id);
       const playerCountNum = Number(player_count);
       if (!Number.isFinite(serverIdNum) || !Number.isFinite(playerCountNum)) return;
       const maxPlayersNum = Number(max_players);
       const queuedNum = Number(queued);
       const sleepersNum = Number(sleepers);
+      const joiningNum = Number(joining);
+      const fpsNum = Number(fps);
+      const onlineNum = typeof online === 'boolean' ? (online ? 1 : 0) : Number(online);
       let timestampDate = null;
       if (recorded_at) {
         const parsed = recorded_at instanceof Date ? recorded_at : new Date(recorded_at);
@@ -221,14 +232,17 @@ function createApi(pool, dialect) {
       if (!timestampDate) timestampDate = new Date();
       const timestamp = timestampDate.toISOString().slice(0, 19).replace('T', ' ');
       await exec(`
-        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, recorded_at)
-        VALUES(?,?,?,?,?,?)
+        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, joining, fps, online, recorded_at)
+        VALUES(?,?,?,?,?,?,?,?,?)
       `,[
         serverIdNum,
         Math.max(0, Math.trunc(playerCountNum)),
         Number.isFinite(maxPlayersNum) ? Math.max(0, Math.trunc(maxPlayersNum)) : null,
         Number.isFinite(queuedNum) ? Math.max(0, Math.trunc(queuedNum)) : null,
         Number.isFinite(sleepersNum) ? Math.max(0, Math.trunc(sleepersNum)) : null,
+        Number.isFinite(joiningNum) ? Math.max(0, Math.trunc(joiningNum)) : null,
+        Number.isFinite(fpsNum) ? Math.max(0, fpsNum) : null,
+        Number.isFinite(onlineNum) ? (onlineNum !== 0 ? 1 : 0) : 1,
         timestamp
       ]);
     },
@@ -260,7 +274,7 @@ function createApi(pool, dialect) {
       }
 
       let sql = `
-        SELECT server_id, player_count, max_players, queued, sleepers, recorded_at
+        SELECT server_id, player_count, max_players, queued, sleepers, joining, fps, online, recorded_at
         FROM server_player_counts
         WHERE ${conditions.join(' AND ')}
         ORDER BY recorded_at ASC
@@ -344,7 +358,7 @@ function createApi(pool, dialect) {
     },
     async getLatestServerPlayerCount(serverId){
       const rows = await exec(
-        'SELECT server_id, player_count, max_players, queued, sleepers, recorded_at FROM server_player_counts WHERE server_id=? ORDER BY recorded_at DESC LIMIT 1',
+        'SELECT server_id, player_count, max_players, queued, sleepers, joining, fps, online, recorded_at FROM server_player_counts WHERE server_id=? ORDER BY recorded_at DESC LIMIT 1',
         [serverId]
       );
       return rows?.[0] ?? null;
