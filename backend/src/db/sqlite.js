@@ -66,6 +66,7 @@ function createApi(dbh, dialect) {
         last_seen TEXT DEFAULT (datetime('now')),
         last_ip TEXT,
         last_port INTEGER,
+        total_playtime_seconds INTEGER,
         UNIQUE(server_id, steamid),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
@@ -150,6 +151,7 @@ function createApi(dbh, dialect) {
       await ensureServerPlayerColumn('last_ip', 'last_ip TEXT');
       await ensureServerPlayerColumn('last_port', 'last_port INTEGER');
       await ensureServerPlayerColumn('forced_display_name', 'forced_display_name TEXT');
+      await ensureServerPlayerColumn('total_playtime_seconds', 'total_playtime_seconds INTEGER');
       const countCols = await dbh.all("PRAGMA table_info('server_player_counts')");
       const ensureCountColumn = async (name, definition) => {
         if (!countCols.some((c) => c.name === name)) {
@@ -259,19 +261,70 @@ function createApi(dbh, dialect) {
       if (!Number.isFinite(serverIdNum)) return;
       const sid = String(steamid || '').trim();
       if (!sid) return;
-      const seen = seen_at || new Date().toISOString();
+      let seen = seen_at;
+      if (seen instanceof Date) {
+        seen = Number.isNaN(seen.getTime()) ? null : seen.toISOString();
+      } else if (typeof seen === 'string') {
+        const parsed = new Date(seen);
+        seen = Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+      }
+      if (!seen) seen = new Date().toISOString();
       const ipValue = typeof ip === 'string' && ip ? ip : null;
       const portNum = Number(port);
       const portValue = Number.isFinite(portNum) ? portNum : null;
+      const parseStoredDate = (value) => {
+        if (!value) return null;
+        if (value instanceof Date) {
+          return Number.isNaN(value.getTime()) ? null : value;
+        }
+        if (typeof value === 'string') {
+          let normalized = value.trim();
+          if (!normalized) return null;
+          if (!normalized.includes('T') && normalized.includes(' ')) {
+            normalized = normalized.replace(' ', 'T');
+          }
+          if (!/[zZ]$/.test(normalized) && !/[+-]\d{2}:?\d{2}$/.test(normalized)) normalized += 'Z';
+          const parsed = new Date(normalized);
+          if (!Number.isNaN(parsed.getTime())) return parsed;
+        }
+        const fallback = new Date(value);
+        return Number.isNaN(fallback.getTime()) ? null : fallback;
+      };
+      const existing = await dbh.get(
+        'SELECT last_seen, total_playtime_seconds FROM server_players WHERE server_id=? AND steamid=?',
+        [serverIdNum, sid]
+      );
+      let totalSeconds = Number.isFinite(Number(existing?.total_playtime_seconds))
+        ? Number(existing.total_playtime_seconds)
+        : 0;
+      const prev = parseStoredDate(existing?.last_seen);
+      const next = parseStoredDate(seen);
+      if (prev && next) {
+        const prevMs = prev.getTime();
+        const nextMs = next.getTime();
+        if (prevMs != null && nextMs != null && nextMs > prevMs) {
+          const deltaSeconds = Math.floor((nextMs - prevMs) / 1000);
+          const MAX_SESSION_GAP_SECONDS = 10 * 60; // ignore large gaps to prevent offline accumulation
+          if (deltaSeconds > 0) {
+            if (deltaSeconds <= MAX_SESSION_GAP_SECONDS) {
+              totalSeconds += deltaSeconds;
+            } else if (deltaSeconds <= MAX_SESSION_GAP_SECONDS * 6) {
+              totalSeconds += MAX_SESSION_GAP_SECONDS; // clamp unusually large single gaps
+            }
+          }
+        }
+      }
+      totalSeconds = Math.max(0, Math.round(totalSeconds));
       await dbh.run(`
-        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port)
-        VALUES(?,?,?,?,?,?,?,?)
+        INSERT INTO server_players(server_id, steamid, display_name, forced_display_name, first_seen, last_seen, last_ip, last_port, total_playtime_seconds)
+        VALUES(?,?,?,?,?,?,?,?,?)
         ON CONFLICT(server_id, steamid) DO UPDATE SET
           display_name=COALESCE(excluded.display_name, server_players.display_name),
           last_seen=excluded.last_seen,
           last_ip=COALESCE(excluded.last_ip, server_players.last_ip),
-          last_port=COALESCE(excluded.last_port, server_players.last_port)
-      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
+          last_port=COALESCE(excluded.last_port, server_players.last_port),
+          total_playtime_seconds=excluded.total_playtime_seconds
+      `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue,totalSeconds]);
     },
     async recordServerPlayerCount({ server_id, player_count, max_players = null, queued = null, sleepers = null, joining = null, fps = null, online = 1, recorded_at = null }){
       const serverIdNum = Number(server_id);
@@ -350,7 +403,7 @@ function createApi(dbh, dialect) {
       if (!Number.isFinite(serverIdNum)) return [];
       return await dbh.all(`
         SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
-                sp.last_ip, sp.last_port,
+                sp.last_ip, sp.last_port, sp.total_playtime_seconds,
                 p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
                 p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
         FROM server_players sp
