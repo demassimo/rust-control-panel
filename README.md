@@ -10,9 +10,13 @@ This bundle is ready for **Debian/Ubuntu** with **systemd**. It includes:
 
 ## Quick Install
 ```bash
+git clone https://github.com/demassimo/rust-control-panel.git
+cd rust-control-panel
 sudo bash scripts/install-linux.sh
 # follow the prompts to configure the backend environment
 ```
+
+Need a tour of the codebase? Check out [`FILES.md`](FILES.md) for a high-level description of each file and directory.
 
 ## Uninstall
 ```bash
