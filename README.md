@@ -18,6 +18,10 @@ sudo bash scripts/install-linux.sh
 
 Need a tour of the codebase? Check out [`FILES.md`](FILES.md) for a high-level description of each file and directory.
 
+## License
+
+This project is released under the **Rust Control Panel Personal Use License**, which allows you to use, modify, and share the software for personal, educational, or internal business purposes. Commercial redistribution, resale, or rebranding for sale is not permitted. See [`LICENSE`](LICENSE) for the full terms.
+
 ## Uninstall
 ```bash
 # Safe uninstall (keeps data in /opt/rustadmin)
