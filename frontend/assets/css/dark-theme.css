@@ -108,7 +108,7 @@ main.grid{
 .players-strip .live-player-row:hover{background:rgba(225,29,72,.12)}
 .players-strip .live-player-details{align-items:flex-start}
 
-.players-directory{padding:0}
+.players-directory{padding:0;max-width:1120px;margin-right:auto;width:100%}
 .players-directory .module-message{padding:24px; text-align:center}
 .player-directory{
   list-style:none;
@@ -159,7 +159,7 @@ main.grid{
 .player-list-body .live-player-row:hover{background:rgba(225,29,72,.08)}
 .card.list-card{margin-top:16px}
 .players-card{grid-column:1/-1;margin-top:18px}
-.players-card .card-body{padding:0}
+.players-card .card-body{padding:0;display:flex;justify-content:flex-start}
 .card-head{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 14px; border-bottom:1px solid var(--border)
