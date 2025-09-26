@@ -150,55 +150,69 @@
                   <p id="rolesDescription" class="muted small">Define reusable access levels for your team.</p>
                 </div>
                 <div id="roleManager" class="roles-manager">
-              <div class="role-create">
-                <div class="grid2 stack-sm">
-                  <input id="newRoleKey" placeholder="New role key">
-                  <input id="newRoleName" placeholder="Name">
-                </div>
-                <div class="row">
-                  <button id="btnCreateRole" class="ghost">Create role</button>
-                </div>
-              </div>
-              <div id="roleEditor" class="role-editor hidden" aria-hidden="true">
-                <label for="roleSelect">Role
-                  <select id="roleSelect"></select>
-                </label>
-                <label for="roleName">Role name
-                  <input id="roleName" placeholder="Display name">
-                  <span class="muted small">Shown wherever the role is referenced in the panel.</span>
-                </label>
-                <label for="roleDescription">Role description
-                  <input id="roleDescription" placeholder="Description (optional)">
-                  <span class="muted small">Give teammates context about what this role is for.</span>
-                </label>
-                <div class="role-access">
-                  <div class="role-access-head">
-                    <h5>Server access</h5>
-                    <p class="muted small">Choose which servers this role can access.</p>
-                  </div>
-                  <div id="roleServersList" class="role-checkbox-list" role="group" aria-label="Allowed servers"></div>
-                </div>
-                <fieldset class="role-fieldset">
-                  <legend>Server capabilities</legend>
-                  <p class="muted small">Decide which actions this role can take on the servers they can reach.</p>
-                  <div id="roleCapabilities" class="role-checkbox-list" role="group" aria-label="Server capabilities"></div>
-                </fieldset>
-                <fieldset class="role-fieldset">
-                  <legend>Global permissions</legend>
-                  <p class="muted small">Grant access to panel-wide tools and management features.</p>
-                  <div
-                    id="roleGlobalPermissions"
-                    class="role-checkbox-list"
-                    role="group"
-                    aria-label="Global permissions"
-                  ></div>
-                </fieldset>
-                <div class="row space-between">
-                  <button id="btnSaveRole" class="accent">Save changes</button>
-                  <button id="btnDeleteRole" class="ghost danger">Delete role</button>
-                </div>
-                <p id="roleFeedback" class="notice hidden"></p>
-              </div>
+                  <section id="roleCreateSection" class="role-section-card">
+                    <div class="role-section-head">
+                      <h5>Create a role</h5>
+                      <p class="muted small">Define the basics for a new role before assigning permissions.</p>
+                    </div>
+                    <div class="grid2 stack-sm">
+                      <input id="newRoleKey" placeholder="New role key">
+                      <input id="newRoleName" placeholder="Name">
+                    </div>
+                    <p class="muted small">Role keys use letters, numbers, dashes or underscores and cannot be changed later.</p>
+                    <div class="row">
+                      <button id="btnCreateRole" class="ghost">Create role</button>
+                    </div>
+                  </section>
+                  <section id="roleEditSection" class="role-section-card">
+                    <div class="role-section-head">
+                      <h5>Edit a role</h5>
+                      <p id="roleEditorEmpty" class="muted small hidden">Select a role to review and adjust its settings.</p>
+                    </div>
+                    <div id="roleEditor" class="role-editor hidden" aria-hidden="true">
+                      <p id="roleLockedNotice" class="notice warning small hidden">
+                        You cannot edit a role that is currently assigned to you. Switch to another role to make changes.
+                      </p>
+                      <label for="roleSelect">Role
+                        <select id="roleSelect"></select>
+                      </label>
+                      <label for="roleName">Role name
+                        <input id="roleName" placeholder="Display name">
+                        <span class="muted small">Shown wherever the role is referenced in the panel.</span>
+                      </label>
+                      <label for="roleDescription">Role description
+                        <input id="roleDescription" placeholder="Description (optional)">
+                        <span class="muted small">Give teammates context about what this role is for.</span>
+                      </label>
+                      <div class="role-access">
+                        <div class="role-access-head">
+                          <h5>Server access</h5>
+                          <p class="muted small">Choose which servers this role can access.</p>
+                        </div>
+                        <div id="roleServersList" class="role-checkbox-list" role="group" aria-label="Allowed servers"></div>
+                      </div>
+                      <fieldset class="role-fieldset">
+                        <legend>Server capabilities</legend>
+                        <p class="muted small">Decide which actions this role can take on the servers they can reach.</p>
+                        <div id="roleCapabilities" class="role-checkbox-list" role="group" aria-label="Server capabilities"></div>
+                      </fieldset>
+                      <fieldset class="role-fieldset">
+                        <legend>Global permissions</legend>
+                        <p class="muted small">Grant access to panel-wide tools and management features.</p>
+                        <div
+                          id="roleGlobalPermissions"
+                          class="role-checkbox-list"
+                          role="group"
+                          aria-label="Global permissions"
+                        ></div>
+                      </fieldset>
+                      <div class="row space-between">
+                        <button id="btnSaveRole" class="accent">Save changes</button>
+                        <button id="btnDeleteRole" class="ghost danger">Delete role</button>
+                      </div>
+                      <p id="roleFeedback" class="notice hidden"></p>
+                    </div>
+                  </section>
                 </div>
               </section>
             </div>

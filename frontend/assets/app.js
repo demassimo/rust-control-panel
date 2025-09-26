@@ -63,6 +63,8 @@
   const btnSaveRole = $('#btnSaveRole');
   const btnDeleteRole = $('#btnDeleteRole');
   const roleFeedback = $('#roleFeedback');
+  const roleEditorEmpty = $('#roleEditorEmpty');
+  const roleLockedNotice = $('#roleLockedNotice');
   const quickCommandsEl = $('#quickCommands');
   const rustMapsKeyInput = $('#rustMapsKey');
   const btnSaveSettings = $('#btnSaveSettings');
@@ -255,6 +257,7 @@
   let activeRoleEditKey = null;
   let roleServersSelection = [];
   let roleServersPreviousSelection = [];
+  let roleEditorLocked = false;
 
   function currentUserPermissions() {
     return state.currentUser?.permissions || {};
@@ -1003,6 +1006,7 @@
     reserved_role: 'This role key is reserved by the system.',
     role_exists: 'A role with that key already exists.',
     role_in_use: 'This role is currently assigned to one or more users.',
+    cannot_edit_active_role: 'You cannot edit a role that is currently assigned to you.',
     invalid_payload: 'The request payload was not accepted.',
     missing_image: 'Choose an image before uploading.',
     invalid_image: 'The selected image could not be processed.',
@@ -2457,10 +2461,9 @@
       input.checked = shouldCheck;
       if (value === '*') {
         input.indeterminate = false;
-      } else {
-        input.disabled = allowAll;
       }
     });
+    setRoleEditorLocked(roleEditorLocked);
   }
 
   function renderRoleServersOptions() {
@@ -2499,6 +2502,10 @@
   function handleRoleServersChange(event) {
     const target = event.target instanceof HTMLInputElement ? event.target : null;
     if (!target || target.type !== 'checkbox') return;
+    if (roleEditorLocked) {
+      syncRoleServerCheckboxState();
+      return;
+    }
     const value = target.dataset.roleServer;
     if (!value) return;
     hideNotice(roleFeedback);
@@ -2570,6 +2577,7 @@
         });
       }
     }
+    setRoleEditorLocked(roleEditorLocked);
   }
 
   function populateRoleSelectOptions(select, roles = [], preserve = true) {
@@ -2612,10 +2620,13 @@
     if (!role) {
       roleEditor.classList.add('hidden');
       roleEditor.setAttribute('aria-hidden', 'true');
+      if (roleEditorEmpty) roleEditorEmpty.classList.remove('hidden');
+      setRoleEditorLocked(false);
       return;
     }
     roleEditor.classList.remove('hidden');
     roleEditor.setAttribute('aria-hidden', 'false');
+    if (roleEditorEmpty) roleEditorEmpty.classList.add('hidden');
     if (roleSelect && roleSelect.value !== role.key) roleSelect.value = role.key;
     if (roleNameInput) roleNameInput.value = role.name || '';
     if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
@@ -2635,6 +2646,10 @@
         input.checked = !!globals?.[perm];
       });
     }
+    const currentRoleKey = (state.currentUser?.role || '').toLowerCase();
+    const editorRoleKey = (role.key || '').toLowerCase();
+    const shouldLock = !!currentRoleKey && !!editorRoleKey && currentRoleKey === editorRoleKey;
+    setRoleEditorLocked(shouldLock);
   }
 
   function openRoleEditor(key) {
@@ -2665,6 +2680,32 @@
     return result;
   }
 
+  function setRoleEditorLocked(locked) {
+    roleEditorLocked = !!locked;
+    if (roleEditor) {
+      roleEditor.classList.toggle('role-editor-locked', roleEditorLocked);
+      roleEditor.setAttribute('aria-disabled', roleEditorLocked ? 'true' : 'false');
+    }
+    if (roleLockedNotice) {
+      roleLockedNotice.classList.toggle('hidden', !roleEditorLocked);
+    }
+    if (roleNameInput) roleNameInput.disabled = roleEditorLocked;
+    if (roleDescriptionInput) roleDescriptionInput.disabled = roleEditorLocked;
+    if (btnSaveRole) btnSaveRole.disabled = roleEditorLocked;
+    if (btnDeleteRole) btnDeleteRole.disabled = roleEditorLocked;
+    const allowAll = roleServersSelection.includes('*');
+    roleServersList?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      const isAllToggle = input.dataset.roleServer === '*';
+      input.disabled = roleEditorLocked || (!isAllToggle && allowAll);
+    });
+    roleCapabilitiesContainer?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.disabled = roleEditorLocked;
+    });
+    roleGlobalContainer?.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+      input.disabled = roleEditorLocked;
+    });
+  }
+
   async function handleRoleCreate() {
     if (!hasGlobalPermission('manageRoles')) return;
     hideNotice(roleFeedback);
@@ -2690,6 +2731,10 @@
   async function handleRoleSave() {
     if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
     hideNotice(roleFeedback);
+    if (roleEditorLocked) {
+      showNotice(roleFeedback, 'Select a different role before editing.', 'error');
+      return;
+    }
     const nameValue = roleNameInput?.value?.trim();
     if (!nameValue) {
       showNotice(roleFeedback, 'Role name cannot be empty.', 'error');

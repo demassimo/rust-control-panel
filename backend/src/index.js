@@ -1942,6 +1942,10 @@ app.post('/api/roles', auth, requireGlobalPermissionMiddleware('manageRoles'), a
 app.patch('/api/roles/:key', auth, requireGlobalPermissionMiddleware('manageRoles'), async (req, res) => {
   const key = normalizeRoleKey(req.params.key);
   if (!key) return res.status(400).json({ error: 'invalid_role_key' });
+  const activeRoleKey = normalizeRoleKey(req.authUser?.role);
+  if (activeRoleKey && activeRoleKey === key) {
+    return res.status(400).json({ error: 'cannot_edit_active_role' });
+  }
   const body = req.body || {};
   const updates = {};
   if (typeof body.name === 'string') {
