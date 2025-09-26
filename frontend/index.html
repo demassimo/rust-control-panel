@@ -68,6 +68,7 @@
         <div class="header-controls">
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
+            <button id="navTeam" type="button" class="nav-btn">Team</button>
           </nav>
         </div>
       </header>
@@ -105,13 +106,16 @@
             </div>
           </div>
         </section>
-        <aside id="userCard" class="team-card hidden">
-          <div class="section-head">
-            <div>
-              <h2>Team access</h2>
-              <p class="muted">Invite trusted admins and manage their roles.</p>
-            </div>
+      </main>
+
+      <section id="teamPanel" class="team-panel hidden" aria-labelledby="teamPanelTitle">
+        <div class="team-panel-head section-head">
+          <div>
+            <h2 id="teamPanelTitle">Team</h2>
+            <p class="muted">Invite trusted admins, assign roles and manage access.</p>
           </div>
+        </div>
+        <div id="userCard" class="team-card">
           <div class="team-card-body">
             <div class="user-create" id="userCreateSection">
               <h4>Invite a teammate</h4>
@@ -161,8 +165,8 @@
               </div>
             </div>
           </div>
-        </aside>
-      </main>
+        </div>
+      </section>
 
       <div id="userDetailsOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
       <aside

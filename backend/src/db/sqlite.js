@@ -168,6 +168,15 @@ function createApi(dbh, dialect) {
         [u]
       );
     },
+    async getUserByUsernameInsensitive(u){
+      return await dbh.get(
+        `SELECT u.*, r.name AS role_name, r.permissions AS role_permissions
+         FROM users u
+         LEFT JOIN roles r ON r.role_key = u.role
+         WHERE LOWER(u.username)=LOWER(?)`,
+        [u]
+      );
+    },
     async listUsers(){
       return await dbh.all(
         `SELECT u.id, u.username, u.role, u.created_at, r.name AS role_name

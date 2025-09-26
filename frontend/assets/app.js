@@ -8,8 +8,10 @@
   const userBox = $('#userBox');
   const mainNav = $('#mainNav');
   const navDashboard = $('#navDashboard');
+  const navTeam = $('#navTeam');
   const navSettings = $('#navSettings');
   const dashboardPanel = $('#dashboardPanel');
+  const teamPanel = $('#teamPanel');
   const workspacePanel = $('#workspacePanel');
   const settingsPanel = $('#settingsPanel');
   const loginError = $('#loginError');
@@ -552,6 +554,8 @@
     });
 
     const canManageUsers = hasGlobalPermission('manageUsers');
+    const canManageRoles = hasGlobalPermission('manageRoles');
+    const canAccessTeam = canManageUsers || canManageRoles;
     if (userCreateSection) userCreateSection.classList.toggle('hidden', !canManageUsers);
     if (newUserName) newUserName.disabled = !canManageUsers;
     if (newUserPassword) newUserPassword.disabled = !canManageUsers;
@@ -580,6 +584,11 @@
       setWorkspaceView(visibleViews[0] || workspaceViewDefault);
     }
 
+    if (!canAccessTeam && state.activePanel === 'team') {
+      switchPanel('dashboard');
+    } else {
+      updateTeamAccessView({ refreshUsers: state.activePanel === 'team' });
+    }
     moduleBus.emit('permissions:updated', {
       permissions: currentUserPermissions(),
       allowedServers: allowedServerList()
@@ -587,24 +596,42 @@
   }
 
   function switchPanel(panel = 'dashboard') {
-    state.activePanel = panel;
-    if (panel === 'settings') {
+    const canAccessTeam = hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
+    let nextPanel = panel;
+    if (nextPanel === 'team' && !canAccessTeam) nextPanel = 'dashboard';
+    state.activePanel = nextPanel;
+
+    const isDashboard = nextPanel === 'dashboard';
+    const isSettings = nextPanel === 'settings';
+    const isTeam = nextPanel === 'team';
+
+    if (isSettings) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
+      teamPanel?.classList.add('hidden');
       settingsPanel?.classList.remove('hidden');
-      navSettings?.classList.add('active');
-      navDashboard?.classList.remove('active');
+    } else if (isTeam) {
+      dashboardPanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
+      settingsPanel?.classList.add('hidden');
+      teamPanel?.classList.remove('hidden');
     } else {
       dashboardPanel?.classList.remove('hidden');
-      if (panel !== 'dashboard') workspacePanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
-      navDashboard?.classList.add('active');
-      navSettings?.classList.remove('active');
+      teamPanel?.classList.add('hidden');
     }
-    if (panel !== 'settings') {
+
+    navDashboard?.classList.toggle('active', isDashboard);
+    navSettings?.classList.toggle('active', isSettings);
+    navTeam?.classList.toggle('active', isTeam);
+
+    if (!isSettings) {
       hideNotice(settingsStatus);
       hideNotice(passwordStatus);
     }
+
+    updateTeamAccessView({ refreshUsers: isTeam });
   }
 
   function createModuleCard({ id, title, icon } = {}) {
@@ -1889,10 +1916,10 @@
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
+    updateTeamAccessView();
     serversEl.innerHTML = '';
     ui.clearConsole();
     ui.setUser(null);
-    userCard.classList.add('hidden');
     closeUserDetails();
     hideNotice(userFeedback);
     hideNotice(settingsStatus);
@@ -2319,12 +2346,234 @@
       if (userCreateSection) userCreateSection.classList.toggle('hidden', !canUsers);
       updateRoleManagerVisibility(canRoles);
     } else {
-      userCard.classList.add('hidden');
+      select.value = roles[0].key;
+    }
+  }
+
+  function updateRoleOptions() {
+    const roles = state.roles || [];
+    populateRoleSelectOptions(newUserRole, roles);
+    populateRoleSelectOptions(userDetailsRoleSelect, roles);
+    populateRoleSelectOptions(roleSelect, roles, false);
+  }
+
+  function applyRoleToEditor(role) {
+    if (!roleEditor) return;
+    hideNotice(roleFeedback);
+    if (!role) {
+      roleEditor.classList.add('hidden');
+      roleEditor.setAttribute('aria-hidden', 'true');
+      return;
+    }
+    roleEditor.classList.remove('hidden');
+    roleEditor.setAttribute('aria-hidden', 'false');
+    if (roleSelect && roleSelect.value !== role.key) roleSelect.value = role.key;
+    if (roleNameInput) roleNameInput.value = role.name || '';
+    if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
+    if (roleServersInput) roleServersInput.value = formatAllowedServersList(role.permissions?.servers?.allowed);
+    if (roleCapabilitiesFieldset) {
+      const caps = role.permissions?.servers?.capabilities || {};
+      roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+        const cap = input.dataset.roleCapability;
+        input.checked = !!caps?.[cap];
+      });
+    }
+    if (roleGlobalFieldset) {
+      const globals = role.permissions?.global || {};
+      roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+        const perm = input.dataset.roleGlobal;
+        input.checked = !!globals?.[perm];
+      });
+    }
+  }
+
+  function openRoleEditor(key) {
+    activeRoleEditKey = key || null;
+    const role = findRoleDefinition(activeRoleEditKey);
+    applyRoleToEditor(role);
+  }
+
+  function collectRoleCapabilities() {
+    const result = {};
+    if (!roleCapabilitiesFieldset) return result;
+    roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+      const cap = input.dataset.roleCapability;
+      if (!cap) return;
+      result[cap] = !!input.checked;
+    });
+    return result;
+  }
+
+  function collectRoleGlobalPermissions() {
+    const result = {};
+    if (!roleGlobalFieldset) return result;
+    roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+      const perm = input.dataset.roleGlobal;
+      if (!perm) return;
+      result[perm] = !!input.checked;
+    });
+    return result;
+  }
+
+  async function handleRoleCreate() {
+    if (!hasGlobalPermission('manageRoles')) return;
+    hideNotice(roleFeedback);
+    const keyValue = (newRoleKey?.value || '').trim().toLowerCase();
+    const nameValue = newRoleName?.value?.trim();
+    if (!keyValue || !nameValue) {
+      showNotice(roleFeedback, 'Provide both a key and name for the role.', 'error');
+      return;
+    }
+    try {
+      await api('/roles', { key: keyValue, name: nameValue }, 'POST');
+      if (newRoleKey) newRoleKey.value = '';
+      if (newRoleName) newRoleName.value = '';
+      showNotice(roleFeedback, 'Role created. Configure its permissions below.', 'success');
+      await loadRoles();
+      openRoleEditor(keyValue);
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleRoleSave() {
+    if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
+    hideNotice(roleFeedback);
+    const nameValue = roleNameInput?.value?.trim();
+    if (!nameValue) {
+      showNotice(roleFeedback, 'Role name cannot be empty.', 'error');
+      return;
+    }
+    const payload = {
+      name: nameValue,
+      description: roleDescriptionInput?.value?.trim() || null,
+      allowedServers: parseAllowedServersInput(roleServersInput?.value || ''),
+      capabilities: collectRoleCapabilities(),
+      global: collectRoleGlobalPermissions()
+    };
+    try {
+      await api(`/roles/${activeRoleEditKey}`, payload, 'PATCH');
+      showNotice(roleFeedback, 'Role updated.', 'success');
+      await loadRoles();
+      openRoleEditor(activeRoleEditKey);
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleRoleDelete() {
+    if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
+    hideNotice(roleFeedback);
+    const role = findRoleDefinition(activeRoleEditKey);
+    if (!role) return;
+    if (!confirm(`Delete the role "${role.name || role.key}"? This cannot be undone.`)) return;
+    try {
+      await api(`/roles/${activeRoleEditKey}`, null, 'DELETE');
+      showNotice(roleFeedback, 'Role removed.', 'success');
+      activeRoleEditKey = null;
+      await loadRoles();
+      if (state.roles.length) {
+        openRoleEditor(state.roles[0].key);
+      } else {
+        applyRoleToEditor(null);
+      }
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function loadRoles() {
+    if (!state.TOKEN) return;
+    if (!hasGlobalPermission('manageRoles') && !hasGlobalPermission('manageUsers')) {
+      state.roles = [];
+      state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
+      activeRoleEditKey = null;
+      updateRoleOptions();
+      updateRoleManagerVisibility(false);
+      applyPermissionGates();
+      return;
+    }
+    try {
+      const data = await api('/roles');
+      state.roles = Array.isArray(data?.roles) ? data.roles : [];
+      state.roleTemplates = data?.templates || { serverCapabilities: [], globalPermissions: [] };
+      renderRoleEditorFields();
+      updateRoleOptions();
+      if (!state.roles.length) {
+        activeRoleEditKey = null;
+        applyRoleToEditor(null);
+      } else if (hasGlobalPermission('manageRoles')) {
+        const target = activeRoleEditKey && state.roles.some((role) => role.key === activeRoleEditKey)
+          ? activeRoleEditKey
+          : state.roles[0]?.key;
+        if (target) openRoleEditor(target);
+      } else {
+        activeRoleEditKey = null;
+        applyRoleToEditor(null);
+      }
+      applyPermissionGates();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to load roles: ' + describeError(err));
+    }
+  }
+
+  function updateRoleManagerVisibility(canManageRoles) {
+    if (!roleManager) return;
+    const active = !!canManageRoles;
+    roleManager.classList.toggle('hidden', !active);
+    roleManager.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (rolesHeader) {
+      rolesHeader.classList.toggle('hidden', !active);
+      rolesHeader.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (!active) {
+      activeRoleEditKey = null;
+      applyRoleToEditor(null);
+    } else if (!activeRoleEditKey && state.roles.length) {
+      openRoleEditor(state.roles[0].key);
+    }
+  }
+
+  function updateTeamAccessView({ refreshUsers = false } = {}) {
+    const canUsers = hasGlobalPermission('manageUsers');
+    const canRoles = hasGlobalPermission('manageRoles');
+    const canAccessTeam = canUsers || canRoles;
+
+    if (navTeam) {
+      navTeam.classList.toggle('hidden', !canAccessTeam);
+      navTeam.setAttribute('aria-hidden', canAccessTeam ? 'false' : 'true');
+      navTeam.disabled = !canAccessTeam;
+      if (!canAccessTeam) navTeam.classList.remove('active');
+    }
+
+    if (!canAccessTeam) {
+      if (teamPanel) teamPanel.classList.add('hidden');
+      if (state.activePanel === 'team') switchPanel('dashboard');
+      if (userCard) userCard.classList.add('hidden');
+      userList.innerHTML = '';
+      closeUserDetails();
+      if (userCreateSection) userCreateSection.classList.add('hidden');
+      updateRoleManagerVisibility(false);
+      return;
+    }
+
+    if (userCard) userCard.classList.remove('hidden');
+    if (userCreateSection) userCreateSection.classList.toggle('hidden', !canUsers);
+
+    if (canUsers && refreshUsers) {
+      loadUsers();
+    } else if (!canUsers) {
       userList.innerHTML = '';
       closeUserDetails();
       if (userCreateSection) userCreateSection.classList.add('hidden');
       updateRoleManagerVisibility(false);
     }
+
+    updateRoleManagerVisibility(canRoles);
   }
 
   async function loadSettings() {
@@ -2381,7 +2630,7 @@
       await refreshServers();
       moduleBus.emit('auth:login', { user: state.currentUser, resume: true });
       moduleBus.emit('players:refresh', { reason: 'session-resume' });
-      toggleUserCard();
+      updateTeamAccessView({ refreshUsers: true });
       startStatusPolling();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
@@ -2425,7 +2674,7 @@
       await refreshServers();
       moduleBus.emit('auth:login', { user: state.currentUser, resume: false });
       moduleBus.emit('players:refresh', { reason: 'login' });
-      toggleUserCard();
+      updateTeamAccessView({ refreshUsers: true });
       startStatusPolling();
     } catch (err) {
       showNotice(loginError, describeError(err), 'error');
@@ -2537,6 +2786,12 @@
 
   function bindEvents() {
     navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
+    navTeam?.addEventListener('click', () => {
+      if (navTeam.disabled) return;
+      hideWorkspace('nav');
+      switchPanel('team');
+      closeProfileMenu();
+    });
     navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); closeProfileMenu(); });
     profileMenuTrigger?.addEventListener('click', (ev) => {
       ev.preventDefault();

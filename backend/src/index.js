@@ -121,6 +121,17 @@ function normalizeRoleKey(value) {
   return key.toLowerCase();
 }
 
+function normalizeUsername(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+async function findUserCaseInsensitive(username) {
+  if (typeof db.getUserByUsernameInsensitive === 'function') {
+    return await db.getUserByUsernameInsensitive(username);
+  }
+  return await db.getUserByUsername(username);
+}
+
 function buildRolePermissionsPayload(body = {}, roleKey = 'default') {
   const source = body && typeof body.permissions === 'object' ? body.permissions : {};
   const payload = { ...source };
@@ -1550,9 +1561,10 @@ app.get('/api/public-config', (req, res) => {
 // --- Auth
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
+  const userName = normalizeUsername(username);
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
-    const row = await db.getUserByUsername(username);
+    const row = await db.getUserByUsername(userName);
     if (!row) return res.status(401).json({ error: 'invalid_login' });
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid_login' });
@@ -1568,15 +1580,16 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   if (!ALLOW_REGISTRATION) return res.status(403).json({ error: 'registration_disabled' });
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[a-z0-9_\-.]{3,32}$/i.test(username)) return res.status(400).json({ error: 'invalid_username' });
+  const userName = normalizeUsername(username);
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
+  if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
   if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
   try {
-    const existing = await db.getUserByUsername(username);
+    const existing = await findUserCaseInsensitive(userName);
     if (existing) return res.status(409).json({ error: 'username_taken' });
     const hash = bcrypt.hashSync(password, 10);
-    const id = await db.createUser({ username, password_hash: hash, role: 'user' });
-    res.status(201).json({ id, username });
+    const id = await db.createUser({ username: userName, password_hash: hash, role: 'user' });
+    res.status(201).json({ id, username: userName });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1665,18 +1678,19 @@ app.get('/api/users', auth, requireAdmin, async (req, res) => {
 
 app.post('/api/users', auth, requireAdmin, async (req, res) => {
   const { username, password, role = 'user' } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[a-z0-9_\-.]{3,32}$/i.test(username)) return res.status(400).json({ error: 'invalid_username' });
+  const userName = normalizeUsername(username);
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
+  if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
   if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
   const roleKey = typeof role === 'string' && role.trim() ? role.trim() : 'user';
   try {
     const roleRecord = await db.getRole(roleKey);
     if (!roleRecord) return res.status(400).json({ error: 'invalid_role' });
-    const existing = await db.getUserByUsername(username);
+    const existing = await findUserCaseInsensitive(userName);
     if (existing) return res.status(409).json({ error: 'username_taken' });
     const hash = bcrypt.hashSync(password, 10);
-    const id = await db.createUser({ username, password_hash: hash, role: roleKey });
-    res.status(201).json({ id, username, role: roleKey, roleName: roleRecord.name });
+    const id = await db.createUser({ username: userName, password_hash: hash, role: roleKey });
+    res.status(201).json({ id, username: userName, role: roleKey, roleName: roleRecord.name });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
