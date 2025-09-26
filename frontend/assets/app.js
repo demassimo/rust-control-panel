@@ -556,7 +556,6 @@
     const canManageUsers = hasGlobalPermission('manageUsers');
     const canManageRoles = hasGlobalPermission('manageRoles');
     const canAccessTeam = canManageUsers || canManageRoles;
-
     if (userCreateSection) userCreateSection.classList.toggle('hidden', !canManageUsers);
     if (newUserName) newUserName.disabled = !canManageUsers;
     if (newUserPassword) newUserPassword.disabled = !canManageUsers;
@@ -590,7 +589,6 @@
     } else {
       updateTeamAccessView({ refreshUsers: state.activePanel === 'team' });
     }
-
     moduleBus.emit('permissions:updated', {
       permissions: currentUserPermissions(),
       allowedServers: allowedServerList()
@@ -2334,6 +2332,212 @@
     }
   }
 
+  function toggleUserCard() {
+    const canUsers = hasGlobalPermission('manageUsers');
+    const canRoles = hasGlobalPermission('manageRoles');
+    if (canUsers || canRoles) {
+      userCard.classList.remove('hidden');
+      if (canUsers) {
+        loadUsers();
+      } else {
+        userList.innerHTML = '';
+        closeUserDetails();
+      }
+      if (userCreateSection) userCreateSection.classList.toggle('hidden', !canUsers);
+      updateRoleManagerVisibility(canRoles);
+    } else {
+      select.value = roles[0].key;
+    }
+  }
+
+  function updateRoleOptions() {
+    const roles = state.roles || [];
+    populateRoleSelectOptions(newUserRole, roles);
+    populateRoleSelectOptions(userDetailsRoleSelect, roles);
+    populateRoleSelectOptions(roleSelect, roles, false);
+  }
+
+  function applyRoleToEditor(role) {
+    if (!roleEditor) return;
+    hideNotice(roleFeedback);
+    if (!role) {
+      roleEditor.classList.add('hidden');
+      roleEditor.setAttribute('aria-hidden', 'true');
+      return;
+    }
+    roleEditor.classList.remove('hidden');
+    roleEditor.setAttribute('aria-hidden', 'false');
+    if (roleSelect && roleSelect.value !== role.key) roleSelect.value = role.key;
+    if (roleNameInput) roleNameInput.value = role.name || '';
+    if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
+    if (roleServersInput) roleServersInput.value = formatAllowedServersList(role.permissions?.servers?.allowed);
+    if (roleCapabilitiesFieldset) {
+      const caps = role.permissions?.servers?.capabilities || {};
+      roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+        const cap = input.dataset.roleCapability;
+        input.checked = !!caps?.[cap];
+      });
+    }
+    if (roleGlobalFieldset) {
+      const globals = role.permissions?.global || {};
+      roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+        const perm = input.dataset.roleGlobal;
+        input.checked = !!globals?.[perm];
+      });
+    }
+  }
+
+  function openRoleEditor(key) {
+    activeRoleEditKey = key || null;
+    const role = findRoleDefinition(activeRoleEditKey);
+    applyRoleToEditor(role);
+  }
+
+  function collectRoleCapabilities() {
+    const result = {};
+    if (!roleCapabilitiesFieldset) return result;
+    roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+      const cap = input.dataset.roleCapability;
+      if (!cap) return;
+      result[cap] = !!input.checked;
+    });
+    return result;
+  }
+
+  function collectRoleGlobalPermissions() {
+    const result = {};
+    if (!roleGlobalFieldset) return result;
+    roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+      const perm = input.dataset.roleGlobal;
+      if (!perm) return;
+      result[perm] = !!input.checked;
+    });
+    return result;
+  }
+
+  async function handleRoleCreate() {
+    if (!hasGlobalPermission('manageRoles')) return;
+    hideNotice(roleFeedback);
+    const keyValue = (newRoleKey?.value || '').trim().toLowerCase();
+    const nameValue = newRoleName?.value?.trim();
+    if (!keyValue || !nameValue) {
+      showNotice(roleFeedback, 'Provide both a key and name for the role.', 'error');
+      return;
+    }
+    try {
+      await api('/roles', { key: keyValue, name: nameValue }, 'POST');
+      if (newRoleKey) newRoleKey.value = '';
+      if (newRoleName) newRoleName.value = '';
+      showNotice(roleFeedback, 'Role created. Configure its permissions below.', 'success');
+      await loadRoles();
+      openRoleEditor(keyValue);
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleRoleSave() {
+    if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
+    hideNotice(roleFeedback);
+    const nameValue = roleNameInput?.value?.trim();
+    if (!nameValue) {
+      showNotice(roleFeedback, 'Role name cannot be empty.', 'error');
+      return;
+    }
+    const payload = {
+      name: nameValue,
+      description: roleDescriptionInput?.value?.trim() || null,
+      allowedServers: parseAllowedServersInput(roleServersInput?.value || ''),
+      capabilities: collectRoleCapabilities(),
+      global: collectRoleGlobalPermissions()
+    };
+    try {
+      await api(`/roles/${activeRoleEditKey}`, payload, 'PATCH');
+      showNotice(roleFeedback, 'Role updated.', 'success');
+      await loadRoles();
+      openRoleEditor(activeRoleEditKey);
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleRoleDelete() {
+    if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
+    hideNotice(roleFeedback);
+    const role = findRoleDefinition(activeRoleEditKey);
+    if (!role) return;
+    if (!confirm(`Delete the role "${role.name || role.key}"? This cannot be undone.`)) return;
+    try {
+      await api(`/roles/${activeRoleEditKey}`, null, 'DELETE');
+      showNotice(roleFeedback, 'Role removed.', 'success');
+      activeRoleEditKey = null;
+      await loadRoles();
+      if (state.roles.length) {
+        openRoleEditor(state.roles[0].key);
+      } else {
+        applyRoleToEditor(null);
+      }
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function loadRoles() {
+    if (!state.TOKEN) return;
+    if (!hasGlobalPermission('manageRoles') && !hasGlobalPermission('manageUsers')) {
+      state.roles = [];
+      state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
+      activeRoleEditKey = null;
+      updateRoleOptions();
+      updateRoleManagerVisibility(false);
+      applyPermissionGates();
+      return;
+    }
+    try {
+      const data = await api('/roles');
+      state.roles = Array.isArray(data?.roles) ? data.roles : [];
+      state.roleTemplates = data?.templates || { serverCapabilities: [], globalPermissions: [] };
+      renderRoleEditorFields();
+      updateRoleOptions();
+      if (!state.roles.length) {
+        activeRoleEditKey = null;
+        applyRoleToEditor(null);
+      } else if (hasGlobalPermission('manageRoles')) {
+        const target = activeRoleEditKey && state.roles.some((role) => role.key === activeRoleEditKey)
+          ? activeRoleEditKey
+          : state.roles[0]?.key;
+        if (target) openRoleEditor(target);
+      } else {
+        activeRoleEditKey = null;
+        applyRoleToEditor(null);
+      }
+      applyPermissionGates();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to load roles: ' + describeError(err));
+    }
+  }
+
+  function updateRoleManagerVisibility(canManageRoles) {
+    if (!roleManager) return;
+    const active = !!canManageRoles;
+    roleManager.classList.toggle('hidden', !active);
+    roleManager.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (rolesHeader) {
+      rolesHeader.classList.toggle('hidden', !active);
+      rolesHeader.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (!active) {
+      activeRoleEditKey = null;
+      applyRoleToEditor(null);
+    } else if (!activeRoleEditKey && state.roles.length) {
+      openRoleEditor(state.roles[0].key);
+    }
+  }
+
   function updateTeamAccessView({ refreshUsers = false } = {}) {
     const canUsers = hasGlobalPermission('manageUsers');
     const canRoles = hasGlobalPermission('manageRoles');
@@ -2365,6 +2569,8 @@
     } else if (!canUsers) {
       userList.innerHTML = '';
       closeUserDetails();
+      if (userCreateSection) userCreateSection.classList.add('hidden');
+      updateRoleManagerVisibility(false);
     }
 
     updateRoleManagerVisibility(canRoles);
