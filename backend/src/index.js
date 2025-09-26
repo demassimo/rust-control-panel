@@ -26,6 +26,7 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 const MAP_GLOBAL_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'global');
+const MAP_METADATA_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'metadata');
 
 const app = express();
 const server = http.createServer(app);
@@ -242,6 +243,7 @@ app.use(cors({ origin: (origin, cb) => cb(null, true), credentials: true }));
 await initDb();
 await fs.mkdir(MAP_STORAGE_DIR, { recursive: true });
 await fs.mkdir(MAP_GLOBAL_CACHE_DIR, { recursive: true });
+await fs.mkdir(MAP_METADATA_CACHE_DIR, { recursive: true });
 await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
 const auth = authMiddleware(JWT_SECRET);
@@ -523,6 +525,36 @@ function parseServerInfoMessage(message) {
 
 const STEAM_ID_REGEX = /^\d{17}$/;
 
+function parseVector3(value) {
+  if (!value) return null;
+
+  const toNumber = (input) => {
+    const num = Number(input);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  if (typeof value === 'string') {
+    const matches = value.match(/-?\d+(?:\.\d+)?/g);
+    if (!matches || matches.length < 3) return null;
+    const x = toNumber(matches[0]);
+    const y = toNumber(matches[1]);
+    const z = toNumber(matches[2]);
+    if (x == null || y == null || z == null) return null;
+    return { x, y, z };
+  }
+
+  if (typeof value === 'object') {
+    const source = value || {};
+    const x = toNumber(source.x ?? source.X);
+    const y = toNumber(source.y ?? source.Y);
+    const z = toNumber(source.z ?? source.Z);
+    if (x == null || y == null || z == null) return null;
+    return { x, y, z };
+  }
+
+  return null;
+}
+
 function parsePlayerListMessage(message) {
   if (!message) return [];
   let text = message.trim();
@@ -547,6 +579,9 @@ function parsePlayerListMessage(message) {
     const steamId = String(steamIdRaw || '').trim();
     if (!STEAM_ID_REGEX.test(steamId)) continue;
 
+    const rawPosition = entry.Position ?? entry.position ?? null;
+    const position = parseVector3(rawPosition);
+
     result.push({
       steamId,
       ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
@@ -556,11 +591,7 @@ function parsePlayerListMessage(message) {
       connectedSeconds: Number(entry.ConnectedSeconds ?? entry.connectedSeconds ?? 0) || 0,
       violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
       health: Number(entry.Health ?? entry.health ?? 0) || 0,
-      position: {
-        x: Number(entry.Position?.x ?? entry.position?.x ?? 0) || 0,
-        y: Number(entry.Position?.y ?? entry.position?.y ?? 0) || 0,
-        z: Number(entry.Position?.z ?? entry.position?.z ?? 0) || 0
-      },
+      position,
       teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
       networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
     });
@@ -952,11 +983,89 @@ function globalMapImageFilePath(mapKey, extension = 'png') {
   return path.join(MAP_GLOBAL_CACHE_DIR, `${safeKey}.${extension}`);
 }
 
+function globalMapMetadataFilePath(mapKey) {
+  const safeKey = sanitizeFilenameSegment(mapKey || 'map');
+  return path.join(MAP_METADATA_CACHE_DIR, `${safeKey}.json`);
+}
+
 function isWithinDir(targetPath, dir) {
   if (!targetPath) return false;
   const resolvedTarget = path.resolve(targetPath);
   const resolvedDir = path.resolve(dir);
   return resolvedTarget.startsWith(resolvedDir);
+}
+
+async function loadGlobalMapMetadata(mapKey) {
+  if (!mapKey) return null;
+  const filePath = globalMapMetadataFilePath(mapKey);
+  try {
+    const text = await fs.readFile(filePath, 'utf8');
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.mapKey) parsed.mapKey = mapKey;
+    return parsed;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.warn('Failed to read cached map metadata', err);
+    return null;
+  }
+}
+
+async function saveGlobalMapMetadata(mapKey, metadata) {
+  if (!mapKey || !metadata || typeof metadata !== 'object') return;
+  const cachedAt = parseDateLike(metadata.cachedAt) || new Date();
+  const payload = { ...metadata, mapKey, cachedAt: cachedAt.toISOString() };
+  const filePath = globalMapMetadataFilePath(mapKey);
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('Failed to persist cached map metadata', err);
+  }
+}
+
+async function removeGlobalMapMetadata(mapKey) {
+  if (!mapKey) return;
+  const filePath = globalMapMetadataFilePath(mapKey);
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.warn('Failed to remove cached map metadata', err);
+  }
+}
+
+async function clearGlobalMapMetadata(activeMapKeys = new Set()) {
+  let entries;
+  try {
+    entries = await fs.readdir(MAP_METADATA_CACHE_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === 'ENOENT') return;
+    console.warn('global map metadata read failed', err);
+    return;
+  }
+  const keep = new Set();
+  for (const key of activeMapKeys || []) {
+    keep.add(sanitizeFilenameSegment(key));
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const name = entry.name;
+    if (!name.endsWith('.json')) continue;
+    const base = name.slice(0, -5);
+    if (keep.has(base)) continue;
+    const target = path.join(MAP_METADATA_CACHE_DIR, name);
+    try {
+      await fs.unlink(target);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') console.warn('Failed to remove cached map metadata file', err);
+    }
+  }
+}
+
+function isMapMetadataStale(meta, now = new Date(), resetPoint = firstThursdayResetTime(now)) {
+  if (!meta) return false;
+  const cachedAt = parseDateLike(meta.cachedAt);
+  if (!cachedAt) return false;
+  return now >= resetPoint && cachedAt < resetPoint;
 }
 
 async function findGlobalMapImage(mapKey) {
@@ -1019,10 +1128,11 @@ async function clearGlobalMapCache(activeImages = new Set()) {
   }
 }
 
-async function purgeGlobalCacheIfDue(resetPoint, now = new Date(), activeImages = new Set()) {
+async function purgeGlobalCacheIfDue(resetPoint, now = new Date(), activeImages = new Set(), activeMapKeys = new Set()) {
   if (!resetPoint) return;
   if (lastGlobalMapCacheReset && lastGlobalMapCacheReset >= resetPoint) return;
   await clearGlobalMapCache(activeImages);
+  await clearGlobalMapMetadata(activeMapKeys);
   lastGlobalMapCacheReset = now;
 }
 
@@ -1037,14 +1147,17 @@ async function purgeExpiredMapCaches(now = new Date()) {
     rows = [];
   }
   const activeImages = new Set();
+  const activeMapKeys = new Set();
   if (Array.isArray(rows) && rows.length > 0) {
     for (const row of rows) {
       try {
         if (!shouldResetMapRecord(row, now, resetPoint)) {
           if (row?.image_path) activeImages.add(row.image_path);
+          if (row?.map_key) activeMapKeys.add(row.map_key);
           continue;
         }
         await removeMapImage(row);
+        if (row?.map_key) await removeGlobalMapMetadata(row.map_key);
         const id = Number(row.server_id ?? row.serverId ?? row.id);
         if (!Number.isFinite(id)) continue;
         await db.deleteServerMap(id);
@@ -1053,23 +1166,30 @@ async function purgeExpiredMapCaches(now = new Date()) {
       }
     }
   }
-  await purgeGlobalCacheIfDue(resetPoint, now, activeImages);
+  await purgeGlobalCacheIfDue(resetPoint, now, activeImages, activeMapKeys);
 }
 
-function mapRecordToPayload(serverId, record) {
+function mapRecordToPayload(serverId, record, metadataOverride = null) {
   if (!record) return null;
   let meta = {};
   if (record.data) {
     try { meta = JSON.parse(record.data); } catch { /* ignore parse errors */ }
   }
+  if (metadataOverride && typeof metadataOverride === 'object') {
+    meta = { ...meta, ...metadataOverride };
+  }
   const updatedAt = record.updated_at || record.updatedAt || record.created_at || record.createdAt || null;
+  const mapKey = record.map_key || meta.mapKey || null;
+  if (mapKey && !meta.mapKey) meta.mapKey = mapKey;
+  const cachedAt = metadataOverride?.cachedAt || meta.cachedAt || updatedAt;
+  if (cachedAt && !meta.cachedAt) meta.cachedAt = cachedAt;
   const hasRemote = mapMetadataHasRemote(meta);
-  const version = encodeURIComponent(updatedAt || '');
+  const version = encodeURIComponent(cachedAt || updatedAt || '');
   const payload = {
     ...meta,
-    mapKey: record.map_key || meta.mapKey || null,
+    mapKey,
     cached: !!record.image_path,
-    cachedAt: updatedAt,
+    cachedAt: cachedAt || updatedAt || null,
     custom: !!record.custom
   };
   if (record.image_path) {
@@ -1665,21 +1785,58 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       }
     }
     const now = new Date();
+    const resetPoint = firstThursdayResetTime(now);
+    const infoMapKey = deriveMapKey(info) || null;
     let mapRecord = await db.getServerMap(id);
-    if (mapRecord && shouldResetMapRecord(mapRecord, now)) {
+    if (mapRecord && shouldResetMapRecord(mapRecord, now, resetPoint)) {
       logger.info('Existing map record expired, removing cached image');
       await removeMapImage(mapRecord);
+      if (!mapRecord.custom && mapRecord.map_key) await removeGlobalMapMetadata(mapRecord.map_key);
       await db.deleteServerMap(id);
       mapRecord = null;
     }
-    const infoMapKey = deriveMapKey(info) || null;
     if (mapRecord && !mapRecord.custom && infoMapKey && mapRecord.map_key && mapRecord.map_key !== infoMapKey) {
       logger.info('Map key changed, clearing stale cache', { previousKey: mapRecord.map_key, nextKey: infoMapKey });
       await removeMapImage(mapRecord);
+      if (mapRecord.map_key) await removeGlobalMapMetadata(mapRecord.map_key);
       await db.deleteServerMap(id);
       mapRecord = null;
     }
-    let map = mapRecordToPayload(id, mapRecord);
+
+    let mapMetadata = null;
+    if (mapRecord?.map_key) {
+      const cachedMeta = await loadGlobalMapMetadata(mapRecord.map_key);
+      if (cachedMeta && isMapMetadataStale(cachedMeta, now, resetPoint)) {
+        logger.info('Cached map metadata expired, clearing stored record', { mapKey: mapRecord.map_key });
+        await removeMapImage(mapRecord);
+        await removeGlobalMapMetadata(mapRecord.map_key);
+        await db.deleteServerMap(id);
+        mapRecord = null;
+      } else if (cachedMeta) {
+        mapMetadata = cachedMeta;
+      }
+    }
+
+    if (!mapRecord && infoMapKey) {
+      const cachedMeta = await loadGlobalMapMetadata(infoMapKey);
+      if (cachedMeta && !isMapMetadataStale(cachedMeta, now, resetPoint)) {
+        const cacheKey = cachedMeta.mapKey || infoMapKey;
+        const cachedImage = await findGlobalMapImage(cacheKey);
+        logger.info('Rehydrating map record from global cache', { mapKey: cacheKey, hasImage: !!cachedImage?.path });
+        await db.saveServerMap(id, {
+          map_key: cacheKey,
+          data: JSON.stringify({ ...cachedMeta }),
+          image_path: cachedImage?.path || null,
+          custom: cachedMeta.isCustomMap ? 1 : 0
+        });
+        mapRecord = await db.getServerMap(id);
+        mapMetadata = cachedMeta;
+      } else if (cachedMeta) {
+        await removeGlobalMapMetadata(infoMapKey);
+      }
+    }
+
+    let map = mapRecordToPayload(id, mapRecord, mapMetadata);
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
       if (info?.size && info?.seed) {
@@ -1690,7 +1847,17 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
           let metadata = await fetchRustMapMetadata(info.size, info.seed, apiKey, { logger });
           const finalKey = deriveMapKey(info, metadata) || infoMapKey;
           const storedMeta = { ...metadata, mapKey: finalKey };
+          if (Number.isFinite(metadata?.size)) info.size = metadata.size;
+          if (Number.isFinite(metadata?.seed)) info.seed = metadata.seed;
+          if (metadata?.mapName) info.mapName = metadata.mapName;
+          cacheServerInfo(id, info);
+          if (!storedMeta.size && Number.isFinite(info.size)) storedMeta.size = info.size;
+          if (!storedMeta.seed && Number.isFinite(info.seed)) storedMeta.seed = info.seed;
+          storedMeta.cachedAt = new Date().toISOString();
           await removeMapImage(mapRecord);
+          if (mapRecord?.map_key && mapRecord.map_key !== finalKey) {
+            await removeGlobalMapMetadata(mapRecord.map_key);
+          }
           let imagePath = null;
           if (!metadata.isCustomMap) {
             const cacheKey = finalKey || infoMapKey || `server-${id}`;
@@ -1703,6 +1870,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
                 const download = await downloadRustMapImage(metadata, apiKey);
                 if (download?.buffer) {
                   const filePath = globalMapImageFilePath(cacheKey, download.extension);
+                  await fs.mkdir(path.dirname(filePath), { recursive: true });
                   await fs.writeFile(filePath, download.buffer);
                   logger.info('Downloaded RustMaps image', { cacheKey, path: filePath });
                   imagePath = filePath;
@@ -1718,15 +1886,17 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
             custom: metadata.isCustomMap,
             cached: cachedImage
           });
+          const mapKeyToPersist = finalKey || infoMapKey;
           await db.saveServerMap(id, {
-            map_key: finalKey || infoMapKey,
+            map_key: mapKeyToPersist,
             data: JSON.stringify(storedMeta),
             image_path: imagePath,
             custom: metadata.isCustomMap ? 1 : 0
           });
+          await saveGlobalMapMetadata(mapKeyToPersist, storedMeta);
           mapRecord = await db.getServerMap(id);
-          map = mapRecordToPayload(id, mapRecord);
-          if (map && !map.mapKey) map.mapKey = finalKey || infoMapKey;
+          map = mapRecordToPayload(id, mapRecord, storedMeta);
+          if (map && !map.mapKey) map.mapKey = mapKeyToPersist;
           if (!cachedImage && mapMetadataHasRemote(storedMeta)) {
             logger.info('Map imagery available remotely, awaiting proxy fetch', { mapKey: finalKey || infoMapKey });
           }
@@ -1892,9 +2062,11 @@ app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
     const storedMeta = { ...metadata, mapKey: finalKey };
     if (!storedMeta.size && Number.isFinite(enrichedInfo.size)) storedMeta.size = enrichedInfo.size;
     if (!storedMeta.seed && Number.isFinite(enrichedInfo.seed)) storedMeta.seed = enrichedInfo.seed;
+    storedMeta.cachedAt = new Date().toISOString();
 
     let record = await db.getServerMap(id);
     if (record) await removeMapImage(record);
+    if (record?.map_key && record.map_key !== finalKey) await removeGlobalMapMetadata(record.map_key);
 
     let imagePath = null;
     if (!metadata?.isCustomMap) {
@@ -1925,8 +2097,9 @@ app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
       image_path: imagePath,
       custom: metadata?.isCustomMap ? 1 : 0
     });
+    await saveGlobalMapMetadata(finalKey, storedMeta);
     record = await db.getServerMap(id);
-    let map = mapRecordToPayload(id, record);
+    let map = mapRecordToPayload(id, record, storedMeta);
     if (map && !map.mapKey) map.mapKey = finalKey;
     if (map && typeof map.cached === 'undefined') map.cached = !!imagePath;
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
@@ -1970,7 +2143,9 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
     const derivedKey = deriveMapKey(info) || null;
     const targetKey = mapKey || record?.map_key || derivedKey || `custom-${id}`;
     if (record) await removeMapImage(record);
+    if (record?.map_key && record.map_key !== targetKey) await removeGlobalMapMetadata(record.map_key);
     const filePath = serverMapImageFilePath(id, targetKey, decoded.extension);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, decoded.buffer);
     let data = {};
     if (record?.data) {
@@ -1980,14 +2155,16 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
     if (info?.seed && !data.seed) data.seed = info.seed;
     if (info?.mapName && !data.mapName) data.mapName = info.mapName;
     data = { ...data, mapKey: targetKey, manualUpload: true };
+    if (!data.cachedAt) data.cachedAt = new Date().toISOString();
     await db.saveServerMap(id, {
       map_key: targetKey,
       data: JSON.stringify(data),
       image_path: filePath,
       custom: 1
     });
+    await saveGlobalMapMetadata(targetKey, data);
     record = await db.getServerMap(id);
-    const map = mapRecordToPayload(id, record);
+    const map = mapRecordToPayload(id, record, data);
     res.json({ map, updatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('map upload failed', err);
@@ -2007,6 +2184,18 @@ app.get('/api/servers/:id/map-image', auth, async (req, res) => {
         meta = typeof record.data === 'string' ? JSON.parse(record.data) : record.data;
       } catch (err) {
         logger.warn('Failed to parse stored map metadata', err);
+      }
+    }
+
+    const now = new Date();
+    const resetPoint = firstThursdayResetTime(now);
+    const resolvedMapKey = record?.map_key || meta?.mapKey || null;
+    if (resolvedMapKey) {
+      const cachedMeta = await loadGlobalMapMetadata(resolvedMapKey);
+      if (cachedMeta && isMapMetadataStale(cachedMeta, now, resetPoint)) {
+        await removeGlobalMapMetadata(resolvedMapKey);
+      } else if (cachedMeta) {
+        meta = { ...cachedMeta, ...(meta || {}) };
       }
     }
 
@@ -2062,12 +2251,16 @@ app.get('/api/servers/:id/map-image', auth, async (req, res) => {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, download.buffer);
       const storedMeta = { ...meta, mapKey: finalKey };
+      if (!storedMeta.size && Number.isFinite(info.size)) storedMeta.size = info.size;
+      if (!storedMeta.seed && Number.isFinite(info.seed)) storedMeta.seed = info.seed;
+      if (!storedMeta.cachedAt) storedMeta.cachedAt = new Date().toISOString();
       await db.saveServerMap(id, {
         map_key: finalKey,
         data: JSON.stringify(storedMeta),
         image_path: filePath,
         custom: meta.isCustomMap ? 1 : 0
       });
+      await saveGlobalMapMetadata(finalKey, storedMeta);
       res.setHeader('Content-Type', download.mime || 'image/jpeg');
       res.send(download.buffer);
     } catch (err) {
