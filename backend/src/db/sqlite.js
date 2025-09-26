@@ -14,12 +14,22 @@ function createApi(dbh, dialect) {
     dialect,
     async init() {
       await dbh.exec(`
+      CREATE TABLE IF NOT EXISTS roles(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role_key TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        permissions TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
       CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'user',
-        created_at TEXT DEFAULT (datetime('now'))
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(role) REFERENCES roles(role_key) ON UPDATE CASCADE
       );
       CREATE TABLE IF NOT EXISTS servers(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,12 +146,45 @@ function createApi(dbh, dialect) {
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
       const { username, password_hash, role = 'user' } = u;
-      const r = await dbh.run('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,role]);
+      const normalizedRole = role || 'user';
+      const r = await dbh.run('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,normalizedRole]);
       return r.lastID;
     },
-    async getUser(id){ return await dbh.get('SELECT * FROM users WHERE id=?',[id]); },
-    async getUserByUsername(u){ return await dbh.get('SELECT * FROM users WHERE username=?',[u]); },
-    async listUsers(){ return await dbh.all('SELECT id,username,role,created_at FROM users ORDER BY id ASC'); },
+    async getUser(id){
+      return await dbh.get(
+        `SELECT u.*, r.name AS role_name, r.permissions AS role_permissions
+         FROM users u
+         LEFT JOIN roles r ON r.role_key = u.role
+         WHERE u.id=?`,
+        [id]
+      );
+    },
+    async getUserByUsername(u){
+      return await dbh.get(
+        `SELECT u.*, r.name AS role_name, r.permissions AS role_permissions
+         FROM users u
+         LEFT JOIN roles r ON r.role_key = u.role
+         WHERE u.username=?`,
+        [u]
+      );
+    },
+    async getUserByUsernameInsensitive(u){
+      return await dbh.get(
+        `SELECT u.*, r.name AS role_name, r.permissions AS role_permissions
+         FROM users u
+         LEFT JOIN roles r ON r.role_key = u.role
+         WHERE LOWER(u.username)=LOWER(?)`,
+        [u]
+      );
+    },
+    async listUsers(){
+      return await dbh.all(
+        `SELECT u.id, u.username, u.role, u.created_at, r.name AS role_name
+         FROM users u
+         LEFT JOIN roles r ON r.role_key = u.role
+         ORDER BY u.id ASC`
+      );
+    },
     async countAdmins(){ const r = await dbh.get("SELECT COUNT(*) c FROM users WHERE role='admin'"); return r.c; },
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await dbh.run('UPDATE users SET role=? WHERE id=?',[role,id]); },
@@ -355,6 +398,59 @@ function createApi(dbh, dialect) {
     async deleteServerDiscordIntegration(serverId){
       const result = await dbh.run('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
       return result?.changes ? Number(result.changes) : 0;
+    },
+    async listRoles(){
+      const rows = await dbh.all(`SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC`);
+      return rows.map((row) => ({
+        key: row.role_key,
+        name: row.name,
+        description: row.description,
+        permissions: row.permissions,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      }));
+    },
+    async getRole(key){
+      const row = await dbh.get(`SELECT role_key, name, description, permissions, created_at, updated_at FROM roles WHERE role_key=?`, [key]);
+      if (!row) return null;
+      return {
+        key: row.role_key,
+        name: row.name,
+        description: row.description,
+        permissions: row.permissions,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      };
+    },
+    async createRole(role){
+      const now = new Date().toISOString();
+      await dbh.run(
+        `INSERT INTO roles(role_key,name,description,permissions,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+        [role.key, role.name, role.description ?? null, role.permissions ?? '{}', now, now]
+      );
+    },
+    async updateRole(key, payload){
+      const existing = await this.getRole(key);
+      if (!existing) return 0;
+      const next = {
+        name: typeof payload.name === 'undefined' ? existing.name : payload.name,
+        description: typeof payload.description === 'undefined' ? existing.description : payload.description,
+        permissions: typeof payload.permissions === 'undefined' ? existing.permissions : payload.permissions
+      };
+      const now = new Date().toISOString();
+      const res = await dbh.run(
+        `UPDATE roles SET name=?, description=?, permissions=?, updated_at=? WHERE role_key=?`,
+        [next.name, next.description ?? null, next.permissions ?? '{}', now, key]
+      );
+      return res.changes || 0;
+    },
+    async deleteRole(key){
+      const res = await dbh.run('DELETE FROM roles WHERE role_key=?', [key]);
+      return res.changes || 0;
+    },
+    async countUsersByRole(roleKey){
+      const row = await dbh.get('SELECT COUNT(*) c FROM users WHERE role=?', [roleKey]);
+      return row?.c ? Number(row.c) : 0;
     }
   };
 }

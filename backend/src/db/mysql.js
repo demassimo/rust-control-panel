@@ -15,6 +15,15 @@ function createApi(pool, dialect) {
   return {
     dialect,
     async init() {
+      await exec(`CREATE TABLE IF NOT EXISTS roles(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        role_key VARCHAR(64) UNIQUE NOT NULL,
+        name VARCHAR(190) NOT NULL,
+        description TEXT NULL,
+        permissions JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS users(
         id INT AUTO_INCREMENT PRIMARY KEY,
         username VARCHAR(190) UNIQUE NOT NULL,
@@ -133,9 +142,21 @@ function createApi(pool, dialect) {
       const r = await exec('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,role]);
       return r.insertId;
     },
-    async getUser(id){ const r = await exec('SELECT * FROM users WHERE id=?',[id]); return r[0]||null; },
-    async getUserByUsername(u){ const r = await exec('SELECT * FROM users WHERE username=?',[u]); return r[0]||null; },
-    async listUsers(){ return await exec('SELECT id,username,role,created_at FROM users ORDER BY id ASC'); },
+    async getUser(id){
+      const rows = await exec(`SELECT u.*, r.name AS role_name, r.permissions AS role_permissions FROM users u LEFT JOIN roles r ON r.role_key = u.role WHERE u.id=?`, [id]);
+      return rows[0] || null;
+    },
+    async getUserByUsername(u){
+      const rows = await exec(`SELECT u.*, r.name AS role_name, r.permissions AS role_permissions FROM users u LEFT JOIN roles r ON r.role_key = u.role WHERE u.username=?`, [u]);
+      return rows[0] || null;
+    },
+    async getUserByUsernameInsensitive(u){
+      const rows = await exec(`SELECT u.*, r.name AS role_name, r.permissions AS role_permissions FROM users u LEFT JOIN roles r ON r.role_key = u.role WHERE LOWER(u.username)=LOWER(?)`, [u]);
+      return rows[0] || null;
+    },
+    async listUsers(){
+      return await exec(`SELECT u.id, u.username, u.role, u.created_at, r.name AS role_name FROM users u LEFT JOIN roles r ON r.role_key = u.role ORDER BY u.id ASC`);
+    },
     async countAdmins(){ const r = await exec("SELECT COUNT(*) c FROM users WHERE role='admin'"); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await exec('UPDATE users SET role=? WHERE id=?',[role,id]); },
@@ -343,6 +364,53 @@ function createApi(pool, dialect) {
       if (typeof result.affectedRows === 'number') return result.affectedRows;
       if (Array.isArray(result) && typeof result[0]?.affectedRows === 'number') return result[0].affectedRows;
       return 0;
+    },
+    async listRoles(){
+      const rows = await exec('SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC');
+      return rows.map((row) => ({
+        key: row.role_key,
+        name: row.name,
+        description: row.description,
+        permissions: typeof row.permissions === 'string' ? row.permissions : JSON.stringify(row.permissions ?? {}),
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      }));
+    },
+    async getRole(key){
+      const rows = await exec('SELECT role_key, name, description, permissions, created_at, updated_at FROM roles WHERE role_key=?', [key]);
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        key: row.role_key,
+        name: row.name,
+        description: row.description,
+        permissions: typeof row.permissions === 'string' ? row.permissions : JSON.stringify(row.permissions ?? {}),
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      };
+    },
+    async createRole(role){
+      await exec('INSERT INTO roles(role_key, name, description, permissions) VALUES(?,?,?,?)', [role.key, role.name, role.description ?? null, role.permissions ?? '{}']);
+    },
+    async updateRole(key, payload){
+      const existing = await this.getRole(key);
+      if (!existing) return 0;
+      const next = {
+        name: typeof payload.name === 'undefined' ? existing.name : payload.name,
+        description: typeof payload.description === 'undefined' ? existing.description : payload.description,
+        permissions: typeof payload.permissions === 'undefined' ? existing.permissions : payload.permissions
+      };
+      const res = await exec('UPDATE roles SET name=?, description=?, permissions=? WHERE role_key=?', [next.name, next.description ?? null, next.permissions ?? '{}', key]);
+      return res.affectedRows || 0;
+    },
+    async deleteRole(key){
+      const res = await exec('DELETE FROM roles WHERE role_key=?', [key]);
+      return res.affectedRows || 0;
+    },
+    async countUsersByRole(roleKey){
+      const rows = await exec('SELECT COUNT(*) AS c FROM users WHERE role=?', [roleKey]);
+      const row = rows[0];
+      return row ? Number(row.c ?? row.COUNT) : 0;
     }
   };
 }

@@ -8,8 +8,10 @@
   const userBox = $('#userBox');
   const mainNav = $('#mainNav');
   const navDashboard = $('#navDashboard');
+  const navTeam = $('#navTeam');
   const navSettings = $('#navSettings');
   const dashboardPanel = $('#dashboardPanel');
+  const teamPanel = $('#teamPanel');
   const workspacePanel = $('#workspacePanel');
   const settingsPanel = $('#settingsPanel');
   const loginError = $('#loginError');
@@ -32,16 +34,33 @@
   const svTLS = $('#svTLS');
   const btnSend = $('#btnSend');
   const cmdInput = $('#cmd');
+  const cmdInputDefaultPlaceholder = cmdInput?.getAttribute('placeholder') || '';
   const loginUsername = $('#username');
   const loginPassword = $('#password');
   const btnLogin = $('#btnLogin');
   const regUsername = $('#regUsername');
   const regPassword = $('#regPassword');
   const regConfirm = $('#regConfirm');
+  const userCreateSection = $('#userCreateSection');
   const newUserName = $('#newUserName');
   const newUserPassword = $('#newUserPassword');
   const newUserRole = $('#newUserRole');
   const btnCreateUser = $('#btnCreateUser');
+  const roleManager = $('#roleManager');
+  const roleEditor = $('#roleEditor');
+  const rolesHeader = $('#rolesHeader');
+  const roleSelect = $('#roleSelect');
+  const roleNameInput = $('#roleName');
+  const roleDescriptionInput = $('#roleDescription');
+  const roleServersInput = $('#roleServers');
+  const roleCapabilitiesFieldset = $('#roleCapabilities');
+  const roleGlobalFieldset = $('#roleGlobalPermissions');
+  const newRoleKey = $('#newRoleKey');
+  const newRoleName = $('#newRoleName');
+  const btnCreateRole = $('#btnCreateRole');
+  const btnSaveRole = $('#btnSaveRole');
+  const btnDeleteRole = $('#btnDeleteRole');
+  const roleFeedback = $('#roleFeedback');
   const quickCommandsEl = $('#quickCommands');
   const rustMapsKeyInput = $('#rustMapsKey');
   const btnSaveSettings = $('#btnSaveSettings');
@@ -86,12 +105,15 @@
   const userDetailsRoleBadge = $('#userDetailsRoleBadge');
   const userDetailsCreated = $('#userDetailsCreated');
   const userDetailsId = $('#userDetailsId');
-  const userDetailsToggleRole = $('#userDetailsToggleRole');
+  const userDetailsRoleSelect = $('#userDetailsRoleSelect');
+  const userDetailsSaveRole = $('#userDetailsSaveRole');
   const userDetailsResetPassword = $('#userDetailsResetPassword');
   const userDetailsDelete = $('#userDetailsDelete');
   const userDetailsSelfNotice = $('#userDetailsSelfNotice');
+  const userDetailsRoleStatus = $('#userDetailsRoleStatus');
 
   const workspaceViewSections = Array.from(document.querySelectorAll('.workspace-view'));
+  const workspaceViewSectionMap = new Map(workspaceViewSections.map((section) => [section.dataset.view, section]));
   const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
   const workspaceViewDefault = 'players';
   let activeWorkspaceView = workspaceViewDefault;
@@ -116,23 +138,38 @@
   });
 
   function setWorkspaceView(nextView = workspaceViewDefault) {
-    const available = new Set(workspaceViewButtons.map((btn) => btn.dataset.view));
-    const target = available.has(nextView) ? nextView : workspaceViewDefault;
+    const visibleButtons = workspaceViewButtons.filter((btn) => !btn.classList.contains('permission-hidden') && !btn.disabled);
+    if (visibleButtons.length === 0) {
+      activeWorkspaceView = workspaceViewDefault;
+      workspaceViewSections.forEach((section) => {
+        section.classList.remove('active');
+        section.setAttribute('aria-hidden', 'true');
+      });
+      return;
+    }
+    const available = new Set(visibleButtons.map((btn) => btn.dataset.view));
+    let target = available.has(nextView) ? nextView : visibleButtons[0]?.dataset.view || workspaceViewDefault;
+    if (!available.has(target)) target = visibleButtons[0]?.dataset.view || workspaceViewDefault;
     activeWorkspaceView = target;
     workspaceViewButtons.forEach((btn) => {
-      const match = btn.dataset.view === target;
+      const allowed = !btn.classList.contains('permission-hidden') && !btn.disabled;
+      const match = allowed && btn.dataset.view === target;
       btn.classList.toggle('active', match);
       btn.setAttribute('aria-pressed', match ? 'true' : 'false');
     });
     workspaceViewSections.forEach((section) => {
-      const match = section.dataset.view === target;
+      const allowed = !section.classList.contains('permission-hidden');
+      const match = allowed && section.dataset.view === target;
       section.classList.toggle('active', match);
       section.setAttribute('aria-hidden', match ? 'false' : 'true');
     });
   }
 
   workspaceViewButtons.forEach((btn) => {
-    btn.addEventListener('click', () => setWorkspaceView(btn.dataset.view));
+    btn.addEventListener('click', () => {
+      if (btn.disabled || btn.classList.contains('permission-hidden')) return;
+      setWorkspaceView(btn.dataset.view);
+    });
   });
 
   if (workspaceViewSections.length) {
@@ -148,13 +185,52 @@
     allowRegistration: false,
     statusTimer: null,
     settings: {},
-    activePanel: 'dashboard'
+    activePanel: 'dashboard',
+    roles: [],
+    roleTemplates: { serverCapabilities: [], globalPermissions: [] }
   };
 
   let socket = null;
   let addServerPinned = false;
   let activeUserDetails = null;
   let lastUserDetailsTrigger = null;
+  let activeRoleEditKey = null;
+
+  function currentUserPermissions() {
+    return state.currentUser?.permissions || {};
+  }
+
+  function hasGlobalPermission(permission) {
+    return !!currentUserPermissions().global?.[permission];
+  }
+
+  function serverPermissionConfig() {
+    return currentUserPermissions().servers || {};
+  }
+
+  function hasServerCapability(capability) {
+    const caps = serverPermissionConfig().capabilities || {};
+    return !!caps[capability];
+  }
+
+  function allowedServerList() {
+    if (!state.currentUser) return [];
+    const allowed = serverPermissionConfig().allowed;
+    if (!Array.isArray(allowed) || allowed.length === 0) return ['*'];
+    return allowed;
+  }
+
+  function canAccessServerId(serverId) {
+    const allowed = allowedServerList();
+    if (allowed.includes('*')) return true;
+    const idNum = Number(serverId);
+    const idStr = String(serverId);
+    return allowed.some((entry) => {
+      if (String(entry) === idStr) return true;
+      const numeric = Number(entry);
+      return Number.isFinite(numeric) && numeric === idNum;
+    });
+  }
 
   const userDetailsDateFormatter = new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
@@ -187,7 +263,15 @@
   }
 
   function formatUserRole(role) {
-    return role === 'admin' ? 'Administrator' : 'User';
+    if (!role) return '—';
+    if (typeof role === 'object') {
+      if (role.roleName) return role.roleName;
+      if (role.name) return role.name;
+      return formatUserRole(role.role);
+    }
+    const value = String(role).trim();
+    if (!value) return '—';
+    return value.charAt(0).toUpperCase() + value.slice(1);
   }
 
   function formatUserJoined(value) {
@@ -214,15 +298,18 @@
         ? 'Signed in with this account'
         : 'Review access and credentials';
     }
-    if (userDetailsRole) userDetailsRole.textContent = formatUserRole(user.role);
-    if (userDetailsRoleBadge) userDetailsRoleBadge.textContent = user.role === 'admin' ? 'Admin' : 'User';
+    const roleLabel = formatUserRole(user);
+    if (userDetailsRole) userDetailsRole.textContent = roleLabel;
+    if (userDetailsRoleBadge) userDetailsRoleBadge.textContent = roleLabel;
     if (userDetailsCreated) userDetailsCreated.textContent = formatUserJoined(user.created_at);
     if (userDetailsId) userDetailsId.textContent = user.id != null ? String(user.id) : '—';
     if (userDetailsSelfNotice) userDetailsSelfNotice.classList.toggle('hidden', !isSelf);
-    if (userDetailsToggleRole) {
-      userDetailsToggleRole.textContent = user.role === 'admin' ? 'Make user' : 'Promote to admin';
-      userDetailsToggleRole.disabled = isSelf;
+    if (userDetailsRoleSelect) {
+      userDetailsRoleSelect.value = user.role || '';
+      userDetailsRoleSelect.disabled = isSelf || !hasGlobalPermission('manageUsers');
     }
+    if (userDetailsSaveRole) userDetailsSaveRole.disabled = isSelf || !hasGlobalPermission('manageUsers');
+    hideNotice(userDetailsRoleStatus);
     if (userDetailsResetPassword) userDetailsResetPassword.disabled = !state.currentUser || user.id === state.currentUser.id;
     if (userDetailsDelete) userDetailsDelete.disabled = isSelf;
   }
@@ -254,18 +341,33 @@
     lastUserDetailsTrigger = null;
   }
 
-  async function handleUserDetailsRoleToggle() {
-    if (!activeUserDetails) return;
-    const targetRole = activeUserDetails.role === 'admin' ? 'user' : 'admin';
+  function findRoleDefinition(key) {
+    if (!key) return null;
+    return state.roles.find((role) => role.key === key) || null;
+  }
+
+  async function handleUserDetailsRoleSave() {
+    if (!activeUserDetails || !userDetailsRoleSelect) return;
+    if (!hasGlobalPermission('manageUsers')) return;
+    const selected = userDetailsRoleSelect.value;
+    if (!selected || selected === activeUserDetails.role) {
+      showNotice(userDetailsRoleStatus, 'Select a different role before updating.', 'error');
+      return;
+    }
     try {
-      await api(`/users/${activeUserDetails.id}`, { role: targetRole }, 'PATCH');
-      showNotice(userFeedback, 'Updated role for ' + activeUserDetails.username, 'success');
-      activeUserDetails = { ...activeUserDetails, role: targetRole };
+      await api(`/users/${activeUserDetails.id}`, { role: selected }, 'PATCH');
+      const roleDef = findRoleDefinition(selected);
+      activeUserDetails = {
+        ...activeUserDetails,
+        role: selected,
+        roleName: roleDef?.name || selected
+      };
+      showNotice(userDetailsRoleStatus, 'Role updated successfully.', 'success');
       renderUserDetails(activeUserDetails);
-      loadUsers();
+      await loadUsers();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else showNotice(userFeedback, describeError(err), 'error');
+      else showNotice(userDetailsRoleStatus, describeError(err), 'error');
     }
   }
 
@@ -317,7 +419,7 @@
     }
   });
 
-  userDetailsToggleRole?.addEventListener('click', handleUserDetailsRoleToggle);
+  userDetailsSaveRole?.addEventListener('click', handleUserDetailsRoleSave);
   userDetailsResetPassword?.addEventListener('click', handleUserDetailsPasswordReset);
   userDetailsDelete?.addEventListener('click', handleUserDetailsDelete);
 
@@ -412,25 +514,126 @@
   registerQuickCommand({ id: 'cmd-say', label: 'say', command: 'say "Hello from panel"', order: 30 });
   registerQuickCommand({ id: 'cmd-playerlist', label: 'playerlist', command: 'playerlist', order: 40 });
 
+  function updateWorkspaceCapabilityVisibility() {
+    const visibleViews = [];
+    workspaceViewButtons.forEach((btn) => {
+      const view = btn.dataset.view;
+      const capability = btn.dataset.capability || '';
+      const allowed = !capability || hasServerCapability(capability);
+      btn.classList.toggle('permission-hidden', !allowed);
+      btn.classList.toggle('hidden', !allowed);
+      btn.disabled = !allowed;
+      btn.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+      if (allowed) visibleViews.push(view);
+      const section = workspaceViewSectionMap.get(view);
+      if (section) {
+        section.classList.toggle('permission-hidden', !allowed);
+        section.classList.toggle('hidden', !allowed);
+        if (!allowed) section.setAttribute('aria-hidden', 'true');
+      }
+    });
+    return visibleViews;
+  }
+
+  function applyPermissionGates() {
+    const canManageServers = hasGlobalPermission('manageServers');
+    if (addServerPrompt) {
+      addServerPrompt.classList.toggle('hidden', !canManageServers);
+      addServerPrompt.setAttribute('aria-hidden', canManageServers ? 'false' : 'true');
+      if (!canManageServers) setAddServerPromptState(false);
+    }
+    if (!canManageServers) {
+      hideAddServerCard({ force: true });
+      addServerCard?.classList.add('hidden');
+    } else if (addServerPinned && addServerCard) {
+      addServerCard.classList.remove('hidden');
+    }
+    if (btnAddServer) btnAddServer.disabled = !canManageServers;
+    [svName, svHost, svPort, svPass, svTLS].forEach((el) => {
+      if (el) el.disabled = !canManageServers;
+    });
+
+    const canManageUsers = hasGlobalPermission('manageUsers');
+    const canManageRoles = hasGlobalPermission('manageRoles');
+    const canAccessTeam = canManageUsers || canManageRoles;
+
+    if (userCreateSection) userCreateSection.classList.toggle('hidden', !canManageUsers);
+    if (newUserName) newUserName.disabled = !canManageUsers;
+    if (newUserPassword) newUserPassword.disabled = !canManageUsers;
+    if (btnCreateUser) btnCreateUser.disabled = !canManageUsers;
+    if (newUserRole) newUserRole.disabled = !canManageUsers || !state.roles.length;
+
+    const hasConsole = hasServerCapability('console');
+    const hasCommands = hasServerCapability('commands');
+    if (cmdInput) {
+      cmdInput.disabled = !hasCommands;
+      cmdInput.placeholder = hasCommands ? cmdInputDefaultPlaceholder : 'Commands unavailable for your role.';
+      if (!hasCommands) cmdInput.value = '';
+    }
+    if (btnSend) btnSend.disabled = !hasCommands;
+    if (quickCommandsEl) {
+      quickCommandsEl.classList.toggle('hidden', !hasCommands);
+      quickCommandsEl.setAttribute('aria-hidden', hasCommands ? 'false' : 'true');
+      quickCommandsEl.querySelectorAll('button').forEach((btn) => { btn.disabled = !hasCommands; });
+    }
+    if (btnClearConsole) btnClearConsole.disabled = !hasConsole;
+
+    const visibleViews = updateWorkspaceCapabilityVisibility();
+    if (visibleViews.includes(activeWorkspaceView)) {
+      setWorkspaceView(activeWorkspaceView);
+    } else {
+      setWorkspaceView(visibleViews[0] || workspaceViewDefault);
+    }
+
+    if (!canAccessTeam && state.activePanel === 'team') {
+      switchPanel('dashboard');
+    } else {
+      updateTeamAccessView({ refreshUsers: state.activePanel === 'team' });
+    }
+
+    moduleBus.emit('permissions:updated', {
+      permissions: currentUserPermissions(),
+      allowedServers: allowedServerList()
+    });
+  }
+
   function switchPanel(panel = 'dashboard') {
-    state.activePanel = panel;
-    if (panel === 'settings') {
+    const canAccessTeam = hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
+    let nextPanel = panel;
+    if (nextPanel === 'team' && !canAccessTeam) nextPanel = 'dashboard';
+    state.activePanel = nextPanel;
+
+    const isDashboard = nextPanel === 'dashboard';
+    const isSettings = nextPanel === 'settings';
+    const isTeam = nextPanel === 'team';
+
+    if (isSettings) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
+      teamPanel?.classList.add('hidden');
       settingsPanel?.classList.remove('hidden');
-      navSettings?.classList.add('active');
-      navDashboard?.classList.remove('active');
+    } else if (isTeam) {
+      dashboardPanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
+      settingsPanel?.classList.add('hidden');
+      teamPanel?.classList.remove('hidden');
     } else {
       dashboardPanel?.classList.remove('hidden');
-      if (panel !== 'dashboard') workspacePanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
-      navDashboard?.classList.add('active');
-      navSettings?.classList.remove('active');
+      teamPanel?.classList.add('hidden');
     }
-    if (panel !== 'settings') {
+
+    navDashboard?.classList.toggle('active', isDashboard);
+    navSettings?.classList.toggle('active', isSettings);
+    navTeam?.classList.toggle('active', isTeam);
+
+    if (!isSettings) {
       hideNotice(settingsStatus);
       hideNotice(passwordStatus);
     }
+
+    updateTeamAccessView({ refreshUsers: isTeam });
   }
 
   function createModuleCard({ id, title, icon } = {}) {
@@ -513,6 +716,12 @@
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
     no_server_selected: 'Select a server before sending commands.',
+    forbidden: 'You do not have permission to perform this action.',
+    invalid_role_key: 'Provide a valid role key (letters, numbers, hyphens or underscores).',
+    invalid_name: 'Role name cannot be empty.',
+    reserved_role: 'This role key is reserved by the system.',
+    role_exists: 'A role with that key already exists.',
+    role_in_use: 'This role is currently assigned to one or more users.',
     invalid_payload: 'The request payload was not accepted.',
     missing_image: 'Choose an image before uploading.',
     invalid_image: 'The selected image could not be processed.',
@@ -725,6 +934,7 @@
 
   function showAddServerCard(options = {}) {
     if (!addServerCard) return;
+    if (!hasGlobalPermission('manageServers')) return;
     const pinned = !!options.pinned;
     if (pinned) addServerPinned = true;
     addServerCard.classList.remove('hidden');
@@ -742,6 +952,7 @@
 
   function toggleAddServerCardVisibility() {
     if (!addServerCard) return;
+    if (!hasGlobalPermission('manageServers')) return;
     const willOpen = addServerCard.classList.contains('hidden');
     addServerPinned = willOpen;
     addServerCard.classList.toggle('hidden', !willOpen);
@@ -752,7 +963,7 @@
   function leaveCurrentServer(reason = 'close') {
     const previous = state.currentServerId;
     if (previous == null) return;
-    if (socket?.connected) {
+    if (socket?.connected && hasServerCapability('console')) {
       try { socket.emit('leave-server', previous); }
       catch { /* ignore */ }
     }
@@ -1001,10 +1212,15 @@
   function ensureSocket() {
     if (socket || !state.API) return socket;
     const socketBase = resolveSocketBase();
-    socket = io(socketBase || undefined, { transports: ['websocket'] });
+    socket = io(socketBase || undefined, {
+      transports: ['websocket'],
+      auth: { token: state.TOKEN || undefined }
+    });
     socket.on('connect', () => {
       ui.log('Realtime link established.');
-      if (state.currentServerId != null) socket.emit('join-server', state.currentServerId);
+      if (state.currentServerId != null && hasServerCapability('console') && canAccessServerId(state.currentServerId)) {
+        socket.emit('join-server', state.currentServerId);
+      }
       refreshServerStatuses().catch(() => {});
     });
     socket.on('disconnect', () => {
@@ -1205,10 +1421,21 @@
     details.className = 'server-card-details';
     const actions = document.createElement('div');
     actions.className = 'server-card-actions';
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'ghost small';
-    editBtn.textContent = 'Edit server';
+    const canManageServer = hasGlobalPermission('manageServers');
+    let editForm = null;
+    let editBtn = null;
+    let removeBtn = null;
+    let cancelBtn = null;
+    let saveBtn = null;
+    let nameInput = null;
+    let hostInput = null;
+    let portInput = null;
+    let passwordInput = null;
+    let tlsInput = null;
+    let feedback = null;
+    let editOpen = false;
+    let toggleEdit = () => {};
+
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'accent small';
@@ -1217,213 +1444,217 @@
       ev.stopPropagation();
       connectServer(server.id);
     });
-    actions.appendChild(editBtn);
+
+    if (canManageServer) {
+      editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.className = 'ghost small';
+      editBtn.textContent = 'Edit server';
+      actions.appendChild(editBtn);
+
+      editForm = document.createElement('form');
+      editForm.className = 'server-card-edit hidden';
+      editForm.id = `server-edit-${server.id}`;
+      editBtn.setAttribute('aria-controls', editForm.id);
+      editBtn.setAttribute('aria-expanded', 'false');
+      const formGrid = document.createElement('div');
+      formGrid.className = 'grid2 stack-sm';
+      nameInput = document.createElement('input');
+      nameInput.placeholder = 'Name';
+      hostInput = document.createElement('input');
+      hostInput.placeholder = 'Host/IP';
+      portInput = document.createElement('input');
+      portInput.type = 'number';
+      portInput.min = '1';
+      portInput.placeholder = 'RCON Port';
+      passwordInput = document.createElement('input');
+      passwordInput.type = 'password';
+      passwordInput.placeholder = 'Leave blank to keep current password';
+      formGrid.appendChild(nameInput);
+      formGrid.appendChild(hostInput);
+      formGrid.appendChild(portInput);
+      formGrid.appendChild(passwordInput);
+      const tlsCheckboxLabel = document.createElement('label');
+      tlsCheckboxLabel.className = 'inline';
+      tlsInput = document.createElement('input');
+      tlsInput.type = 'checkbox';
+      tlsCheckboxLabel.appendChild(tlsInput);
+      tlsCheckboxLabel.appendChild(document.createTextNode(' Use TLS (wss)'));
+      const removeRow = document.createElement('div');
+      removeRow.className = 'row remove-row';
+      removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'ghost danger';
+      removeBtn.textContent = 'Remove server';
+      removeRow.appendChild(removeBtn);
+
+      const formRow = document.createElement('div');
+      formRow.className = 'row';
+      cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'ghost';
+      cancelBtn.textContent = 'Cancel';
+      saveBtn = document.createElement('button');
+      saveBtn.type = 'submit';
+      saveBtn.className = 'accent';
+      saveBtn.textContent = 'Save changes';
+      formRow.appendChild(cancelBtn);
+      formRow.appendChild(saveBtn);
+      feedback = document.createElement('p');
+      feedback.className = 'server-edit-feedback hidden';
+      editForm.appendChild(formGrid);
+      editForm.appendChild(tlsCheckboxLabel);
+      editForm.appendChild(removeRow);
+      editForm.appendChild(formRow);
+      editForm.appendChild(feedback);
+
+      const showFeedback = (message = '', variant = '') => {
+        feedback.textContent = message;
+        feedback.classList.remove('hidden', 'error', 'success');
+        if (!message) {
+          feedback.classList.add('hidden');
+          return;
+        }
+        if (variant) feedback.classList.add(variant);
+      };
+
+      const resetEditInputs = () => {
+        const data = entry.data || {};
+        nameInput.value = data.name || '';
+        hostInput.value = data.host || '';
+        portInput.value = data.port != null ? String(data.port) : '';
+        tlsInput.checked = !!data.tls;
+        passwordInput.value = '';
+      };
+
+      toggleEdit = (force) => {
+        const next = typeof force === 'boolean' ? force : !editOpen;
+        if (next === editOpen) return;
+        editOpen = next;
+        if (next) {
+          resetEditInputs();
+          showFeedback('');
+          editForm.classList.remove('hidden');
+          editBtn.textContent = 'Close editor';
+          editBtn.setAttribute('aria-expanded', 'true');
+          card.classList.add('editing');
+          nameInput.focus();
+        } else {
+          editForm.classList.add('hidden');
+          editBtn.textContent = 'Edit server';
+          resetEditInputs();
+          editBtn.setAttribute('aria-expanded', 'false');
+          card.classList.remove('editing');
+        }
+      };
+
+      cancelBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        showFeedback('');
+        toggleEdit(false);
+      });
+
+      removeBtn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const label = entry.data?.name || server.name || `Server #${server.id}`;
+        if (!confirm(`Remove ${label}? This cannot be undone.`)) return;
+        removeBtn.disabled = true;
+        cancelBtn.disabled = true;
+        saveBtn.disabled = true;
+        showFeedback('Removing…');
+        try {
+          await api(`/servers/${server.id}`, null, 'DELETE');
+          ui.log('Server removed: ' + label);
+          const wasActive = state.currentServerId === server.id;
+          toggleEdit(false);
+          state.serverItems.delete(String(server.id));
+          card.remove();
+          highlightSelectedServer();
+          moduleBus.emit('servers:updated', { servers: getServerList() });
+          if (wasActive) hideWorkspace('remove');
+          await refreshServers();
+        } catch (err) {
+          if (errorCode(err) === 'unauthorized') {
+            handleUnauthorized();
+          } else {
+            showFeedback(describeError(err), 'error');
+          }
+        } finally {
+          removeBtn.disabled = false;
+          cancelBtn.disabled = false;
+          saveBtn.disabled = false;
+        }
+      });
+
+      editBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleEdit(!editOpen);
+        ev.stopImmediatePropagation();
+      });
+
+      editForm.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const name = nameInput.value.trim();
+        const host = hostInput.value.trim();
+        const port = parseInt(portInput.value || '0', 10);
+        const password = passwordInput.value.trim();
+        const useTls = !!tlsInput.checked;
+        if (!name || !host || !Number.isFinite(port) || port <= 0) {
+          showFeedback(describeError('missing_fields'), 'error');
+          return;
+        }
+        const payload = { name, host, port, tls: useTls };
+        if (password) payload.password = password;
+        saveBtn.disabled = true;
+        cancelBtn.disabled = true;
+        showFeedback('Saving…');
+        try {
+          await api(`/servers/${server.id}`, payload, 'PATCH');
+          entry.data = { ...entry.data, name, host, port, tls: useTls ? 1 : 0 };
+          nameEl.textContent = name;
+          metaEl.textContent = `${host}:${port}${useTls ? ' · TLS' : ''}`;
+          ui.log('Server updated: ' + name);
+          showFeedback('Saved.', 'success');
+          setTimeout(() => toggleEdit(false), 700);
+        } catch (err) {
+          if (errorCode(err) === 'unauthorized') {
+            handleUnauthorized();
+          } else {
+            showFeedback(describeError(err), 'error');
+          }
+        } finally {
+          saveBtn.disabled = false;
+          cancelBtn.disabled = false;
+          passwordInput.value = '';
+        }
+      });
+    }
+
     actions.appendChild(openBtn);
     foot.appendChild(details);
     foot.appendChild(actions);
 
-    const editForm = document.createElement('form');
-    editForm.className = 'server-card-edit hidden';
-    editForm.id = `server-edit-${server.id}`;
-    editBtn.setAttribute('aria-controls', editForm.id);
-    editBtn.setAttribute('aria-expanded', 'false');
-    const formGrid = document.createElement('div');
-    formGrid.className = 'grid2 stack-sm';
-    const nameInput = document.createElement('input');
-    nameInput.placeholder = 'Name';
-    const hostInput = document.createElement('input');
-    hostInput.placeholder = 'Host/IP';
-    const portInput = document.createElement('input');
-    portInput.type = 'number';
-    portInput.min = '1';
-    portInput.placeholder = 'RCON Port';
-    const passwordInput = document.createElement('input');
-    passwordInput.type = 'password';
-    passwordInput.placeholder = 'Leave blank to keep current password';
-    formGrid.appendChild(nameInput);
-    formGrid.appendChild(hostInput);
-    formGrid.appendChild(portInput);
-    formGrid.appendChild(passwordInput);
-    const tlsCheckboxLabel = document.createElement('label');
-    tlsCheckboxLabel.className = 'inline';
-    const tlsInput = document.createElement('input');
-    tlsInput.type = 'checkbox';
-    tlsCheckboxLabel.appendChild(tlsInput);
-    tlsCheckboxLabel.appendChild(document.createTextNode(' Use TLS (wss)'));
-    const removeRow = document.createElement('div');
-    removeRow.className = 'row remove-row';
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'ghost danger';
-    removeBtn.textContent = 'Remove server';
-    removeRow.appendChild(removeBtn);
-
-    const formRow = document.createElement('div');
-    formRow.className = 'row';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'ghost';
-    cancelBtn.textContent = 'Cancel';
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'submit';
-    saveBtn.className = 'accent';
-    saveBtn.textContent = 'Save changes';
-    formRow.appendChild(cancelBtn);
-    formRow.appendChild(saveBtn);
-    const feedback = document.createElement('p');
-    feedback.className = 'server-edit-feedback hidden';
-    editForm.appendChild(formGrid);
-    editForm.appendChild(tlsCheckboxLabel);
-    editForm.appendChild(removeRow);
-    editForm.appendChild(formRow);
-    editForm.appendChild(feedback);
-
-    function showFeedback(message = '', variant = '') {
-      feedback.textContent = message;
-      feedback.classList.remove('hidden', 'error', 'success');
-      if (!message) {
-        feedback.classList.add('hidden');
-        return;
-      }
-      if (variant) feedback.classList.add(variant);
-    }
-
-    function resetEditInputs() {
-      const data = entry.data || {};
-      nameInput.value = data.name || '';
-      hostInput.value = data.host || '';
-      portInput.value = data.port != null ? String(data.port) : '';
-      tlsInput.checked = !!data.tls;
-      passwordInput.value = '';
-    }
-
-    let editOpen = false;
-    function toggleEdit(force) {
-      const next = typeof force === 'boolean' ? force : !editOpen;
-      if (next === editOpen) return;
-      editOpen = next;
-      if (next) {
-        resetEditInputs();
-        showFeedback('');
-        editForm.classList.remove('hidden');
-        editBtn.textContent = 'Close editor';
-        editBtn.setAttribute('aria-expanded', 'true');
-        card.classList.add('editing');
-        nameInput.focus();
-      } else {
-        editForm.classList.add('hidden');
-        editBtn.textContent = 'Edit server';
-        resetEditInputs();
-        editBtn.setAttribute('aria-expanded', 'false');
-        card.classList.remove('editing');
-      }
-    }
-
-    cancelBtn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      showFeedback('');
-      toggleEdit(false);
-    });
-
-    removeBtn.addEventListener('click', async (ev) => {
-      ev.preventDefault();
-      const label = entry.data?.name || server.name || `Server #${server.id}`;
-      if (!confirm(`Remove ${label}? This cannot be undone.`)) return;
-      removeBtn.disabled = true;
-      cancelBtn.disabled = true;
-      saveBtn.disabled = true;
-      showFeedback('Removing…');
-      try {
-        await api(`/servers/${server.id}`, null, 'DELETE');
-        ui.log('Server removed: ' + label);
-        const wasActive = state.currentServerId === server.id;
-        toggleEdit(false);
-        state.serverItems.delete(String(server.id));
-        card.remove();
-        highlightSelectedServer();
-        moduleBus.emit('servers:updated', { servers: getServerList() });
-        if (wasActive) hideWorkspace('remove');
-        await refreshServers();
-      } catch (err) {
-        if (errorCode(err) === 'unauthorized') {
-          handleUnauthorized();
-        } else {
-          showFeedback(describeError(err), 'error');
-        }
-      } finally {
-        removeBtn.disabled = false;
-        cancelBtn.disabled = false;
-        saveBtn.disabled = false;
-      }
-    });
-
-    editBtn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!editOpen) {
-        toggleEdit(true);
-      } else {
-        toggleEdit(false);
-      }
-      ev.stopImmediatePropagation();
-    });
-
-    editForm.addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const name = nameInput.value.trim();
-      const host = hostInput.value.trim();
-      const port = parseInt(portInput.value || '0', 10);
-      const password = passwordInput.value.trim();
-      const useTls = !!tlsInput.checked;
-      if (!name || !host || !Number.isFinite(port) || port <= 0) {
-        showFeedback(describeError('missing_fields'), 'error');
-        return;
-      }
-      const payload = { name, host, port, tls: useTls };
-      if (password) payload.password = password;
-      saveBtn.disabled = true;
-      cancelBtn.disabled = true;
-      showFeedback('Saving…');
-      try {
-        await api(`/servers/${server.id}`, payload, 'PATCH');
-        entry.data = { ...entry.data, name, host, port, tls: useTls ? 1 : 0 };
-        nameEl.textContent = name;
-        metaEl.textContent = `${host}:${port}${useTls ? ' · TLS' : ''}`;
-        ui.log('Server updated: ' + name);
-        showFeedback('Saved.', 'success');
-        setTimeout(() => toggleEdit(false), 700);
-      } catch (err) {
-        if (errorCode(err) === 'unauthorized') {
-          handleUnauthorized();
-        } else {
-          showFeedback(describeError(err), 'error');
-        }
-      } finally {
-        saveBtn.disabled = false;
-        cancelBtn.disabled = false;
-        passwordInput.value = '';
-      }
-    });
-
     card.addEventListener('click', (ev) => {
       const target = ev.target instanceof Element ? ev.target : null;
-      if (target && (target.closest('.server-card-actions') || target.closest('.server-card-edit'))) {
+      if (target && (target.closest('.server-card-actions') || (canManageServer && target.closest('.server-card-edit')))) {
         return;
       }
-      if (editOpen) return;
+      if (canManageServer && editOpen) return;
       connectServer(server.id);
     });
 
     card.addEventListener('keydown', (ev) => {
       if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === card) {
         ev.preventDefault();
+        if (canManageServer && editOpen) return;
         connectServer(server.id);
       }
     });
 
     card.appendChild(mainRow);
     card.appendChild(foot);
-    card.appendChild(editForm);
+    if (editForm) card.appendChild(editForm);
     if (addServerPrompt && addServerPrompt.parentElement === serversEl) {
       serversEl.insertBefore(card, addServerPrompt);
     } else {
@@ -1481,6 +1712,10 @@
     if (!Number.isFinite(numericId)) return;
     const entry = state.serverItems.get(String(numericId));
     if (!entry) return;
+    if (!canAccessServerId(numericId) || !hasServerCapability('view')) {
+      ui.log('You do not have permission to access this server.');
+      return;
+    }
     const previous = state.currentServerId;
     if (previous === numericId) {
       showWorkspaceForServer(numericId);
@@ -1490,7 +1725,7 @@
       return;
     }
     if (previous != null && previous !== numericId) {
-      if (socket?.connected) {
+      if (socket?.connected && hasServerCapability('console')) {
         try { socket.emit('leave-server', previous); }
         catch { /* ignore */ }
       }
@@ -1502,9 +1737,10 @@
     highlightSelectedServer();
     ui.clearConsole();
     const name = entry?.data?.name || `Server #${numericId}`;
-    ui.log(`Connecting to ${name}...`);
+    const consoleAccess = hasServerCapability('console');
+    ui.log(`${consoleAccess ? 'Connecting to' : 'Opening'} ${name}...`);
     const sock = ensureSocket();
-    if (sock && sock.connected) {
+    if (sock && sock.connected && consoleAccess) {
       sock.emit('join-server', numericId);
     }
     showWorkspaceForServer(numericId);
@@ -1554,10 +1790,10 @@
       userBox.innerHTML = '';
       if (profileUsername) profileUsername.textContent = user?.username || '—';
       if (profileRole) {
-        const roleLabel = user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : '—';
-        profileRole.textContent = roleLabel;
+        profileRole.textContent = formatUserRole(user);
       }
       if (!user) {
+        applyPermissionGates();
         return;
       }
       const header = document.createElement('div');
@@ -1565,17 +1801,17 @@
       const strong = document.createElement('strong');
       strong.textContent = user.username;
       header.appendChild(strong);
-      if (user.role === 'admin') {
+      if (user.role) {
         const badge = document.createElement('span');
         badge.className = 'badge';
-        badge.textContent = 'Admin';
+        badge.textContent = formatUserRole(user);
         header.appendChild(badge);
       }
       userBox.appendChild(header);
 
       const descriptor = document.createElement('span');
       descriptor.className = 'menu-description';
-      descriptor.textContent = user.role === 'admin' ? 'Administrator access' : 'Standard access';
+      descriptor.textContent = `Role: ${formatUserRole(user)}`;
       userBox.appendChild(descriptor);
 
       const actions = document.createElement('div');
@@ -1602,6 +1838,7 @@
       actions.appendChild(accountBtn);
       actions.appendChild(logoutBtn);
       userBox.appendChild(actions);
+      applyPermissionGates();
     }
   };
 
@@ -1676,10 +1913,15 @@
     state.serverItems.clear();
     state.settings = {};
     state.activePanel = 'dashboard';
+    state.roles = [];
+    state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
+    activeRoleEditKey = null;
+    updateRoleOptions();
+    updateRoleManagerVisibility(false);
+    updateTeamAccessView();
     serversEl.innerHTML = '';
     ui.clearConsole();
     ui.setUser(null);
-    userCard.classList.add('hidden');
     closeUserDetails();
     hideNotice(userFeedback);
     hideNotice(settingsStatus);
@@ -1750,7 +1992,7 @@
   }
 
   async function loadUsers() {
-    if (!state.currentUser || state.currentUser.role !== 'admin') return;
+    if (!hasGlobalPermission('manageUsers')) return;
     hideNotice(userFeedback);
     try {
       const list = await api('/users');
@@ -1769,7 +2011,7 @@
         primary.appendChild(name);
         const meta = document.createElement('span');
         meta.className = 'user-item-meta';
-        meta.textContent = `Role: ${formatUserRole(user.role)}`;
+        meta.textContent = `Role: ${formatUserRole(user)}`;
         primary.appendChild(meta);
         button.appendChild(primary);
 
@@ -1817,15 +2059,315 @@
     }
   }
 
-  function toggleUserCard() {
-    if (state.currentUser?.role === 'admin') {
-      userCard.classList.remove('hidden');
-      loadUsers();
+  function formatAllowedServersList(list) {
+    if (!Array.isArray(list) || list.length === 0) return '';
+    if (list.includes('*')) return '*';
+    return list.map((entry) => String(entry)).join(', ');
+  }
+
+  function parseAllowedServersInput(text) {
+    const value = (text || '').trim();
+    if (!value) return [];
+    if (value === '*') return ['*'];
+    return value.split(',').map((part) => part.trim()).filter(Boolean);
+  }
+
+  function renderRoleEditorFields() {
+    if (roleCapabilitiesFieldset) {
+      roleCapabilitiesFieldset.innerHTML = '';
+      const caps = state.roleTemplates?.serverCapabilities || [];
+      if (!caps.length) {
+        const note = document.createElement('p');
+        note.className = 'muted small';
+        note.textContent = 'No server capabilities available.';
+        roleCapabilitiesFieldset.appendChild(note);
+      } else {
+        caps.forEach((cap) => {
+          const label = document.createElement('label');
+          label.className = 'inline';
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.dataset.roleCapability = cap;
+          input.addEventListener('change', () => hideNotice(roleFeedback));
+          label.appendChild(input);
+          label.append(` ${cap.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`);
+          roleCapabilitiesFieldset.appendChild(label);
+        });
+      }
+    }
+    if (roleGlobalFieldset) {
+      roleGlobalFieldset.innerHTML = '';
+      const perms = state.roleTemplates?.globalPermissions || [];
+      if (!perms.length) {
+        const note = document.createElement('p');
+        note.className = 'muted small';
+        note.textContent = 'No global permissions available.';
+        roleGlobalFieldset.appendChild(note);
+      } else {
+        perms.forEach((perm) => {
+          const label = document.createElement('label');
+          label.className = 'inline';
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.dataset.roleGlobal = perm;
+          input.addEventListener('change', () => hideNotice(roleFeedback));
+          label.appendChild(input);
+          label.append(` ${perm.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}`);
+          roleGlobalFieldset.appendChild(label);
+        });
+      }
+    }
+  }
+
+  function populateRoleSelectOptions(select, roles = [], preserve = true) {
+    if (!select) return;
+    const previous = preserve ? select.value : '';
+    select.innerHTML = '';
+    roles.forEach((role) => {
+      const option = document.createElement('option');
+      option.value = role.key;
+      option.textContent = role.name || role.key;
+      select.appendChild(option);
+    });
+    if (roles.length === 0) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No roles available';
+      select.appendChild(option);
+      select.disabled = true;
+      select.value = '';
+      return;
+    }
+    select.disabled = false;
+    if (previous && roles.some((role) => role.key === previous)) {
+      select.value = previous;
     } else {
-      userCard.classList.add('hidden');
+      select.value = roles[0].key;
+    }
+  }
+
+  function updateRoleOptions() {
+    const roles = state.roles || [];
+    populateRoleSelectOptions(newUserRole, roles);
+    populateRoleSelectOptions(userDetailsRoleSelect, roles);
+    populateRoleSelectOptions(roleSelect, roles, false);
+  }
+
+  function applyRoleToEditor(role) {
+    if (!roleEditor) return;
+    hideNotice(roleFeedback);
+    if (!role) {
+      roleEditor.classList.add('hidden');
+      roleEditor.setAttribute('aria-hidden', 'true');
+      return;
+    }
+    roleEditor.classList.remove('hidden');
+    roleEditor.setAttribute('aria-hidden', 'false');
+    if (roleSelect && roleSelect.value !== role.key) roleSelect.value = role.key;
+    if (roleNameInput) roleNameInput.value = role.name || '';
+    if (roleDescriptionInput) roleDescriptionInput.value = role.description || '';
+    if (roleServersInput) roleServersInput.value = formatAllowedServersList(role.permissions?.servers?.allowed);
+    if (roleCapabilitiesFieldset) {
+      const caps = role.permissions?.servers?.capabilities || {};
+      roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+        const cap = input.dataset.roleCapability;
+        input.checked = !!caps?.[cap];
+      });
+    }
+    if (roleGlobalFieldset) {
+      const globals = role.permissions?.global || {};
+      roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+        const perm = input.dataset.roleGlobal;
+        input.checked = !!globals?.[perm];
+      });
+    }
+  }
+
+  function openRoleEditor(key) {
+    activeRoleEditKey = key || null;
+    const role = findRoleDefinition(activeRoleEditKey);
+    applyRoleToEditor(role);
+  }
+
+  function collectRoleCapabilities() {
+    const result = {};
+    if (!roleCapabilitiesFieldset) return result;
+    roleCapabilitiesFieldset.querySelectorAll('input[data-role-capability]').forEach((input) => {
+      const cap = input.dataset.roleCapability;
+      if (!cap) return;
+      result[cap] = !!input.checked;
+    });
+    return result;
+  }
+
+  function collectRoleGlobalPermissions() {
+    const result = {};
+    if (!roleGlobalFieldset) return result;
+    roleGlobalFieldset.querySelectorAll('input[data-role-global]').forEach((input) => {
+      const perm = input.dataset.roleGlobal;
+      if (!perm) return;
+      result[perm] = !!input.checked;
+    });
+    return result;
+  }
+
+  async function handleRoleCreate() {
+    if (!hasGlobalPermission('manageRoles')) return;
+    hideNotice(roleFeedback);
+    const keyValue = (newRoleKey?.value || '').trim().toLowerCase();
+    const nameValue = newRoleName?.value?.trim();
+    if (!keyValue || !nameValue) {
+      showNotice(roleFeedback, 'Provide both a key and name for the role.', 'error');
+      return;
+    }
+    try {
+      await api('/roles', { key: keyValue, name: nameValue }, 'POST');
+      if (newRoleKey) newRoleKey.value = '';
+      if (newRoleName) newRoleName.value = '';
+      showNotice(roleFeedback, 'Role created. Configure its permissions below.', 'success');
+      await loadRoles();
+      openRoleEditor(keyValue);
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleRoleSave() {
+    if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
+    hideNotice(roleFeedback);
+    const nameValue = roleNameInput?.value?.trim();
+    if (!nameValue) {
+      showNotice(roleFeedback, 'Role name cannot be empty.', 'error');
+      return;
+    }
+    const payload = {
+      name: nameValue,
+      description: roleDescriptionInput?.value?.trim() || null,
+      allowedServers: parseAllowedServersInput(roleServersInput?.value || ''),
+      capabilities: collectRoleCapabilities(),
+      global: collectRoleGlobalPermissions()
+    };
+    try {
+      await api(`/roles/${activeRoleEditKey}`, payload, 'PATCH');
+      showNotice(roleFeedback, 'Role updated.', 'success');
+      await loadRoles();
+      openRoleEditor(activeRoleEditKey);
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleRoleDelete() {
+    if (!hasGlobalPermission('manageRoles') || !activeRoleEditKey) return;
+    hideNotice(roleFeedback);
+    const role = findRoleDefinition(activeRoleEditKey);
+    if (!role) return;
+    if (!confirm(`Delete the role "${role.name || role.key}"? This cannot be undone.`)) return;
+    try {
+      await api(`/roles/${activeRoleEditKey}`, null, 'DELETE');
+      showNotice(roleFeedback, 'Role removed.', 'success');
+      activeRoleEditKey = null;
+      await loadRoles();
+      if (state.roles.length) {
+        openRoleEditor(state.roles[0].key);
+      } else {
+        applyRoleToEditor(null);
+      }
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(roleFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function loadRoles() {
+    if (!state.TOKEN) return;
+    if (!hasGlobalPermission('manageRoles') && !hasGlobalPermission('manageUsers')) {
+      state.roles = [];
+      state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
+      activeRoleEditKey = null;
+      updateRoleOptions();
+      updateRoleManagerVisibility(false);
+      applyPermissionGates();
+      return;
+    }
+    try {
+      const data = await api('/roles');
+      state.roles = Array.isArray(data?.roles) ? data.roles : [];
+      state.roleTemplates = data?.templates || { serverCapabilities: [], globalPermissions: [] };
+      renderRoleEditorFields();
+      updateRoleOptions();
+      if (!state.roles.length) {
+        activeRoleEditKey = null;
+        applyRoleToEditor(null);
+      } else if (hasGlobalPermission('manageRoles')) {
+        const target = activeRoleEditKey && state.roles.some((role) => role.key === activeRoleEditKey)
+          ? activeRoleEditKey
+          : state.roles[0]?.key;
+        if (target) openRoleEditor(target);
+      } else {
+        activeRoleEditKey = null;
+        applyRoleToEditor(null);
+      }
+      applyPermissionGates();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to load roles: ' + describeError(err));
+    }
+  }
+
+  function updateRoleManagerVisibility(canManageRoles) {
+    if (!roleManager) return;
+    const active = !!canManageRoles;
+    roleManager.classList.toggle('hidden', !active);
+    roleManager.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (rolesHeader) {
+      rolesHeader.classList.toggle('hidden', !active);
+      rolesHeader.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (!active) {
+      activeRoleEditKey = null;
+      applyRoleToEditor(null);
+    } else if (!activeRoleEditKey && state.roles.length) {
+      openRoleEditor(state.roles[0].key);
+    }
+  }
+
+  function updateTeamAccessView({ refreshUsers = false } = {}) {
+    const canUsers = hasGlobalPermission('manageUsers');
+    const canRoles = hasGlobalPermission('manageRoles');
+    const canAccessTeam = canUsers || canRoles;
+
+    if (navTeam) {
+      navTeam.classList.toggle('hidden', !canAccessTeam);
+      navTeam.setAttribute('aria-hidden', canAccessTeam ? 'false' : 'true');
+      navTeam.disabled = !canAccessTeam;
+      if (!canAccessTeam) navTeam.classList.remove('active');
+    }
+
+    if (!canAccessTeam) {
+      if (teamPanel) teamPanel.classList.add('hidden');
+      if (state.activePanel === 'team') switchPanel('dashboard');
+      if (userCard) userCard.classList.add('hidden');
+      userList.innerHTML = '';
+      closeUserDetails();
+      if (userCreateSection) userCreateSection.classList.add('hidden');
+      updateRoleManagerVisibility(false);
+      return;
+    }
+
+    if (userCard) userCard.classList.remove('hidden');
+    if (userCreateSection) userCreateSection.classList.toggle('hidden', !canUsers);
+
+    if (canUsers && refreshUsers) {
+      loadUsers();
+    } else if (!canUsers) {
       userList.innerHTML = '';
       closeUserDetails();
     }
+
+    updateRoleManagerVisibility(canRoles);
   }
 
   async function loadSettings() {
@@ -1867,15 +2409,22 @@
     }
     try {
       const me = await api('/me');
-      state.currentUser = me;
+      state.currentUser = {
+        id: me.id,
+        username: me.username,
+        role: me.role,
+        roleName: me.roleName || me.role,
+        permissions: me.permissions || {}
+      };
+      await loadRoles();
       await loadSettings();
-      ui.setUser(me);
+      ui.setUser(state.currentUser);
       ui.showApp();
       ensureSocket();
       await refreshServers();
       moduleBus.emit('auth:login', { user: state.currentUser, resume: true });
       moduleBus.emit('players:refresh', { reason: 'session-resume' });
-      toggleUserCard();
+      updateTeamAccessView({ refreshUsers: true });
       startStatusPolling();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
@@ -1904,7 +2453,14 @@
       const data = await publicJson('/login', { method: 'POST', body: { username, password } });
       state.TOKEN = data.token;
       localStorage.setItem('token', state.TOKEN);
-      state.currentUser = { id: data.id, username: data.username, role: data.role };
+      state.currentUser = {
+        id: data.id,
+        username: data.username,
+        role: data.role,
+        roleName: data.roleName || data.role,
+        permissions: data.permissions || {}
+      };
+      await loadRoles();
       await loadSettings();
       ui.setUser(state.currentUser);
       ui.showApp();
@@ -1912,7 +2468,7 @@
       await refreshServers();
       moduleBus.emit('auth:login', { user: state.currentUser, resume: false });
       moduleBus.emit('players:refresh', { reason: 'login' });
-      toggleUserCard();
+      updateTeamAccessView({ refreshUsers: true });
       startStatusPolling();
     } catch (err) {
       showNotice(loginError, describeError(err), 'error');
@@ -1957,6 +2513,10 @@
   }
 
   async function addServer() {
+    if (!hasGlobalPermission('manageServers')) {
+      ui.log('You do not have permission to manage servers.');
+      return;
+    }
     const name = svName?.value.trim();
     const host = svHost?.value.trim();
     const port = parseInt(svPort?.value || '0', 10);
@@ -1987,6 +2547,8 @@
     const cmd = (command || '').toString().trim();
     if (!cmd) throw new Error('missing_command');
     if (state.currentServerId == null) throw new Error('no_server_selected');
+    if (!hasServerCapability('commands')) throw new Error('forbidden');
+    if (!canAccessServerId(state.currentServerId)) throw new Error('forbidden');
     return await api(`/rcon/${state.currentServerId}`, { cmd }, 'POST');
   }
 
@@ -2007,6 +2569,10 @@
         ui.log('Select a server before sending commands.');
         return;
       }
+      if (errorCode(err) === 'forbidden') {
+        ui.log(describeError(err));
+        return;
+      }
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else ui.log('Command failed: ' + describeError(err));
     }
@@ -2014,6 +2580,12 @@
 
   function bindEvents() {
     navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
+    navTeam?.addEventListener('click', () => {
+      if (navTeam.disabled) return;
+      hideWorkspace('nav');
+      switchPanel('team');
+      closeProfileMenu();
+    });
     navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); closeProfileMenu(); });
     profileMenuTrigger?.addEventListener('click', (ev) => {
       ev.preventDefault();
@@ -2059,7 +2631,7 @@
     addServerPrompt?.addEventListener('click', () => toggleAddServerCardVisibility());
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     btnCreateUser?.addEventListener('click', async () => {
-      if (state.currentUser?.role !== 'admin') return;
+      if (!hasGlobalPermission('manageUsers')) return;
       hideNotice(userFeedback);
       const username = newUserName?.value.trim();
       const password = newUserPassword?.value || '';
@@ -2084,6 +2656,29 @@
         else showNotice(userFeedback, describeError(err), 'error');
       }
     });
+    userDetailsRoleSelect?.addEventListener('change', () => hideNotice(userDetailsRoleStatus));
+    roleSelect?.addEventListener('change', () => {
+      if (!hasGlobalPermission('manageRoles')) return;
+      hideNotice(roleFeedback);
+      openRoleEditor(roleSelect.value);
+    });
+    btnCreateRole?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      handleRoleCreate();
+    });
+    btnSaveRole?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      handleRoleSave();
+    });
+    btnDeleteRole?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      handleRoleDelete();
+    });
+    newRoleKey?.addEventListener('input', () => hideNotice(roleFeedback));
+    newRoleName?.addEventListener('input', () => hideNotice(roleFeedback));
+    roleNameInput?.addEventListener('input', () => hideNotice(roleFeedback));
+    roleDescriptionInput?.addEventListener('input', () => hideNotice(roleFeedback));
+    roleServersInput?.addEventListener('input', () => hideNotice(roleFeedback));
     setAddServerPromptState(addServerCard && !addServerCard.classList.contains('hidden'));
     document.addEventListener('click', (ev) => {
       const target = ev.target instanceof Node ? ev.target : null;
@@ -2099,6 +2694,7 @@
   async function init() {
     setApiBase(detectDefaultApiBase());
     bindEvents();
+    applyPermissionGates();
     if (state.TOKEN) {
       await attemptSessionResume();
     } else {

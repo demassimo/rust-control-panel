@@ -7,6 +7,7 @@ import bcrypt from 'bcrypt';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import jwt from 'jsonwebtoken';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
@@ -19,6 +20,15 @@ import {
   rconEventBus
 } from './rcon.js';
 import { fetchRustMapMetadata, downloadRustMapImage } from './rustmaps.js';
+import {
+  normaliseRolePermissions,
+  serialiseRolePermissions,
+  hasGlobalPermission,
+  canAccessServer,
+  filterServersByPermission,
+  filterStatusMapByPermission,
+  describeRoleTemplates
+} from './permissions.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,10 +42,117 @@ const app = express();
 const server = http.createServer(app);
 const io = new IOServer(server, { cors: { origin: process.env.CORS_ORIGIN?.split(',') || '*' } });
 
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  if (!token) return next(new Error('unauthorized'));
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const context = await loadUserContext(payload.uid);
+    if (!context) return next(new Error('unauthorized'));
+    socket.data.user = context;
+    next();
+  } catch (err) {
+    next(new Error('unauthorized'));
+  }
+});
+
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const BIND = process.env.BIND || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev';
 const ALLOW_REGISTRATION = (process.env.ALLOW_REGISTRATION || '').toLowerCase() === 'true';
+
+async function loadUserContext(userId) {
+  const numeric = Number(userId);
+  if (!Number.isFinite(numeric)) return null;
+  const row = await db.getUser(numeric);
+  if (!row) return null;
+  const permissions = normaliseRolePermissions(row.role_permissions, row.role);
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    roleName: row.role_name || row.role,
+    permissions
+  };
+}
+
+function requireGlobalPermissionMiddleware(permission) {
+  return (req, res, next) => {
+    if (!hasGlobalPermission(req.authUser, permission)) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    next();
+  };
+}
+
+function ensureServerCapability(req, res, capability, param = 'id') {
+  const raw = req.params?.[param];
+  const id = toServerId(raw);
+  if (id == null) {
+    res.status(400).json({ error: 'invalid_id' });
+    return null;
+  }
+  if (!canAccessServer(req.authUser, id, capability)) {
+    res.status(403).json({ error: 'forbidden' });
+    return null;
+  }
+  return id;
+}
+
+function projectRole(row) {
+  if (!row) return null;
+  return {
+    key: row.key,
+    name: row.name,
+    description: row.description,
+    permissions: normaliseRolePermissions(row.permissions, row.key),
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+const ROLE_KEY_PATTERN = /^[a-z0-9_\-]{3,32}$/i;
+const RESERVED_ROLE_KEYS = new Set(['admin', 'user']);
+
+function normalizeRoleKey(value) {
+  if (typeof value !== 'string') return null;
+  const key = value.trim();
+  if (!ROLE_KEY_PATTERN.test(key)) return null;
+  return key.toLowerCase();
+}
+
+function normalizeUsername(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+async function findUserCaseInsensitive(username) {
+  if (typeof db.getUserByUsernameInsensitive === 'function') {
+    return await db.getUserByUsernameInsensitive(username);
+  }
+  return await db.getUserByUsername(username);
+}
+
+function buildRolePermissionsPayload(body = {}, roleKey = 'default') {
+  const source = body && typeof body.permissions === 'object' ? body.permissions : {};
+  const payload = { ...source };
+  if (source.servers && typeof source.servers === 'object') {
+    payload.servers = { ...source.servers };
+  }
+  if (source.global && typeof source.global === 'object') {
+    payload.global = { ...source.global };
+  }
+  const allowed = body.allowedServers ?? body.allowed ?? body.servers;
+  if (typeof allowed !== 'undefined') {
+    payload.servers = { ...(payload.servers || {}), allowed };
+  }
+  if (typeof body.capabilities !== 'undefined') {
+    payload.servers = { ...(payload.servers || {}), capabilities: body.capabilities };
+  }
+  if (body.global && typeof body.global === 'object') {
+    payload.global = { ...(payload.global || {}), ...body.global };
+  }
+  return serialiseRolePermissions(payload, roleKey);
+}
 
 const toInt = (value, fallback) => {
   const parsed = parseInt(value, 10);
@@ -246,7 +363,7 @@ await fs.mkdir(MAP_GLOBAL_CACHE_DIR, { recursive: true });
 await fs.mkdir(MAP_METADATA_CACHE_DIR, { recursive: true });
 await purgeExpiredMapCaches().catch((err) => console.error('initial map purge failed', err));
 
-const auth = authMiddleware(JWT_SECRET);
+const auth = authMiddleware(JWT_SECRET, { loadUserContext });
 const rconBindings = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
@@ -262,12 +379,21 @@ const steamProfileCache = new Map();
 let monitoring = false;
 let monitorTimer = null;
 
+function broadcastStatusUpdate(serverId, payload) {
+  for (const socket of io.sockets.sockets.values()) {
+    const context = socket.data?.user;
+    if (canAccessServer(context, serverId, 'view')) {
+      socket.emit('status-map', { [serverId]: payload });
+    }
+  }
+}
+
 function recordStatus(id, data) {
   const key = Number(id);
   const payload = { id: key, ...data };
   statusMap.set(key, payload);
   io.to(`srv:${key}`).emit('status', payload);
-  io.emit('status-map', { [key]: payload });
+  broadcastStatusUpdate(key, payload);
   return payload;
 }
 
@@ -1435,14 +1561,17 @@ app.get('/api/public-config', (req, res) => {
 // --- Auth
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
+  const userName = normalizeUsername(username);
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
-    const row = await db.getUserByUsername(username);
+    const row = await db.getUserByUsername(userName);
     if (!row) return res.status(401).json({ error: 'invalid_login' });
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid_login' });
+    const permissions = normaliseRolePermissions(row.role_permissions, row.role);
+    const roleName = row.role_name || row.role;
     const token = signToken(row, JWT_SECRET);
-    res.json({ token, username: row.username, role: row.role, id: row.id });
+    res.json({ token, username: row.username, role: row.role, roleName, id: row.id, permissions });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1451,15 +1580,16 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   if (!ALLOW_REGISTRATION) return res.status(403).json({ error: 'registration_disabled' });
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[a-z0-9_\-.]{3,32}$/i.test(username)) return res.status(400).json({ error: 'invalid_username' });
+  const userName = normalizeUsername(username);
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
+  if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
   if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
   try {
-    const existing = await db.getUserByUsername(username);
+    const existing = await findUserCaseInsensitive(userName);
     if (existing) return res.status(409).json({ error: 'username_taken' });
     const hash = bcrypt.hashSync(password, 10);
-    const id = await db.createUser({ username, password_hash: hash, role: 'user' });
-    res.status(201).json({ id, username });
+    const id = await db.createUser({ username: userName, password_hash: hash, role: 'user' });
+    res.status(201).json({ id, username: userName });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1469,7 +1599,14 @@ app.get('/api/me', auth, async (req, res) => {
   try {
     const row = await db.getUser(req.user.uid);
     if (!row) return res.status(404).json({ error: 'not_found' });
-    res.json({ id: row.id, username: row.username, role: row.role, created_at: row.created_at });
+    res.json({
+      id: row.id,
+      username: row.username,
+      role: row.role,
+      roleName: row.role_name || row.role,
+      permissions: normaliseRolePermissions(row.role_permissions, row.role),
+      created_at: row.created_at
+    });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1525,7 +1662,15 @@ app.post('/api/password', auth, async (req, res) => {
 
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
   try {
-    res.json(await db.listUsers());
+    const rows = await db.listUsers();
+    const payload = rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      role: row.role,
+      roleName: row.role_name || row.role,
+      created_at: row.created_at
+    }));
+    res.json(payload);
   } catch {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1533,16 +1678,19 @@ app.get('/api/users', auth, requireAdmin, async (req, res) => {
 
 app.post('/api/users', auth, requireAdmin, async (req, res) => {
   const { username, password, role = 'user' } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[a-z0-9_\-.]{3,32}$/i.test(username)) return res.status(400).json({ error: 'invalid_username' });
+  const userName = normalizeUsername(username);
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
+  if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
   if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
-  if (!['user', 'admin'].includes(role)) return res.status(400).json({ error: 'invalid_role' });
+  const roleKey = typeof role === 'string' && role.trim() ? role.trim() : 'user';
   try {
-    const existing = await db.getUserByUsername(username);
+    const roleRecord = await db.getRole(roleKey);
+    if (!roleRecord) return res.status(400).json({ error: 'invalid_role' });
+    const existing = await findUserCaseInsensitive(userName);
     if (existing) return res.status(409).json({ error: 'username_taken' });
     const hash = bcrypt.hashSync(password, 10);
-    const id = await db.createUser({ username, password_hash: hash, role });
-    res.status(201).json({ id, username, role });
+    const id = await db.createUser({ username: userName, password_hash: hash, role: roleKey });
+    res.status(201).json({ id, username: userName, role: roleKey, roleName: roleRecord.name });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1552,10 +1700,13 @@ app.patch('/api/users/:id', auth, requireAdmin, async (req, res) => {
   const { role } = req.body || {};
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
-  if (!role || !['user', 'admin'].includes(role)) return res.status(400).json({ error: 'invalid_role' });
+  const roleKey = typeof role === 'string' && role.trim() ? role.trim() : '';
+  if (!roleKey) return res.status(400).json({ error: 'invalid_role' });
   try {
-    await db.updateUserRole(id, role);
-    res.json({ ok: true });
+    const roleRecord = await db.getRole(roleKey);
+    if (!roleRecord) return res.status(400).json({ error: 'invalid_role' });
+    await db.updateUserRole(id, roleKey);
+    res.json({ ok: true, role: roleKey, roleName: roleRecord.name });
   } catch {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1593,6 +1744,94 @@ app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
   }
 });
 
+app.get('/api/roles', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageRoles') && !hasGlobalPermission(req.authUser, 'manageUsers')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const rows = await db.listRoles();
+    const roles = rows.map((row) => projectRole(row));
+    res.json({ roles, templates: describeRoleTemplates() });
+  } catch (err) {
+    console.error('list roles failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/roles', auth, requireGlobalPermissionMiddleware('manageRoles'), async (req, res) => {
+  const body = req.body || {};
+  const key = normalizeRoleKey(body.key);
+  const nameInput = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!key) return res.status(400).json({ error: 'invalid_role_key' });
+  if (!nameInput) return res.status(400).json({ error: 'invalid_name' });
+  if (RESERVED_ROLE_KEYS.has(key)) return res.status(400).json({ error: 'reserved_role' });
+  const description = typeof body.description === 'string' ? body.description.trim() : null;
+  try {
+    const existing = await db.getRole(key);
+    if (existing) return res.status(409).json({ error: 'role_exists' });
+    const permissions = buildRolePermissionsPayload(body, key);
+    await db.createRole({ key, name: nameInput, description, permissions });
+    const created = await db.getRole(key);
+    res.status(201).json(projectRole(created));
+  } catch (err) {
+    console.error('create role failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.patch('/api/roles/:key', auth, requireGlobalPermissionMiddleware('manageRoles'), async (req, res) => {
+  const key = normalizeRoleKey(req.params.key);
+  if (!key) return res.status(400).json({ error: 'invalid_role_key' });
+  const body = req.body || {};
+  const updates = {};
+  if (typeof body.name === 'string') {
+    const trimmed = body.name.trim();
+    if (!trimmed) return res.status(400).json({ error: 'invalid_name' });
+    updates.name = trimmed;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'description')) {
+    if (body.description === null || body.description === '') updates.description = null;
+    else if (typeof body.description === 'string') updates.description = body.description.trim();
+    else updates.description = String(body.description);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, 'permissions') ||
+    Object.prototype.hasOwnProperty.call(body, 'allowedServers') ||
+    Object.prototype.hasOwnProperty.call(body, 'allowed') ||
+    Object.prototype.hasOwnProperty.call(body, 'servers') ||
+    Object.prototype.hasOwnProperty.call(body, 'capabilities') ||
+    Object.prototype.hasOwnProperty.call(body, 'global')
+  ) {
+    updates.permissions = buildRolePermissionsPayload(body, key);
+  }
+  if (!Object.keys(updates).length) return res.status(400).json({ error: 'no_changes' });
+  try {
+    const changed = await db.updateRole(key, updates);
+    if (!changed) return res.status(404).json({ error: 'not_found' });
+    const role = await db.getRole(key);
+    res.json(projectRole(role));
+  } catch (err) {
+    console.error('update role failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/roles/:key', auth, requireGlobalPermissionMiddleware('manageRoles'), async (req, res) => {
+  const key = normalizeRoleKey(req.params.key);
+  if (!key) return res.status(400).json({ error: 'invalid_role_key' });
+  if (RESERVED_ROLE_KEYS.has(key)) return res.status(400).json({ error: 'reserved_role' });
+  try {
+    const count = await db.countUsersByRole(key);
+    if (count > 0) return res.status(400).json({ error: 'role_in_use', users: count });
+    const deleted = await db.deleteRole(key);
+    if (!deleted) return res.status(404).json({ error: 'not_found' });
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error('delete role failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 // --- Servers CRUD
 app.get('/api/servers', auth, async (req, res) => {
   try {
@@ -1602,27 +1841,28 @@ app.get('/api/servers', auth, async (req, res) => {
       const { password: _pw, ...rest } = row;
       return rest;
     });
-    res.json(sanitized);
+    const filtered = filterServersByPermission(sanitized, req.authUser, 'view');
+    res.json(filtered);
   } catch {
     res.status(500).json({ error: 'db_error' });
   }
 });
 
 app.get('/api/servers/status', auth, (req, res) => {
-  res.json(getStatusSnapshot());
+  res.json(filterStatusMapByPermission(getStatusSnapshot(), req.authUser, 'view'));
 });
 
 app.get('/api/servers/:id/status', auth, (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
   const status = statusMap.get(id);
   if (!status) return res.status(404).json({ error: 'not_found' });
   res.json(status);
 });
 
 app.get('/api/servers/:id/discord', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'discord');
+  if (id == null) return;
   if (typeof db.getServerDiscordIntegration !== 'function') {
     return res.status(501).json({ error: 'not_supported' });
   }
@@ -1641,8 +1881,8 @@ app.get('/api/servers/:id/discord', auth, async (req, res) => {
 });
 
 app.post('/api/servers/:id/discord', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'discord');
+  if (id == null) return;
   if (typeof db.saveServerDiscordIntegration !== 'function' || typeof db.getServerDiscordIntegration !== 'function') {
     return res.status(501).json({ error: 'not_supported' });
   }
@@ -1678,8 +1918,8 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
 });
 
 app.delete('/api/servers/:id/discord', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'discord');
+  if (id == null) return;
   if (typeof db.deleteServerDiscordIntegration !== 'function') {
     return res.status(501).json({ error: 'not_supported' });
   }
@@ -1698,7 +1938,7 @@ app.delete('/api/servers/:id/discord', auth, async (req, res) => {
   }
 });
 
-app.post('/api/servers', auth, async (req, res) => {
+app.post('/api/servers', auth, requireGlobalPermissionMiddleware('manageServers'), async (req, res) => {
   const { name, host, port, password, tls } = req.body || {};
   if (!name || !host || !port || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
@@ -1711,8 +1951,8 @@ app.post('/api/servers', auth, async (req, res) => {
 });
 
 app.patch('/api/servers/:id', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'manage');
+  if (id == null) return;
   try {
     const updated = await db.updateServer(id, req.body || {});
     if (updated) {
@@ -1726,8 +1966,8 @@ app.patch('/api/servers/:id', auth, async (req, res) => {
 });
 
 app.delete('/api/servers/:id', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'manage');
+  if (id == null) return;
   try {
     const deleted = await db.deleteServer(id);
     closeServerRcon(id);
@@ -1740,8 +1980,8 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
 });
 
 app.get('/api/servers/:id/live-map', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'liveMap');
+  if (id == null) return;
   const logger = createLogger(`live-map:${id}`);
   logger.info('Live map request received');
   try {
@@ -1999,8 +2239,8 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
 });
 
 app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'liveMap');
+  if (id == null) return;
   const { size, seed } = req.body || {};
   const numericSize = Number(size);
   const numericSeed = Number(seed);
@@ -2128,8 +2368,8 @@ app.post('/api/servers/:id/live-map/world', auth, async (req, res) => {
 });
 
 app.post('/api/servers/:id/map-image', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'uploadMap');
+  if (id == null) return;
   const { image, mapKey } = req.body || {};
   if (!image) return res.status(400).json({ error: 'missing_image' });
   const decoded = decodeBase64Image(image);
@@ -2173,8 +2413,8 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
 });
 
 app.get('/api/servers/:id/map-image', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'liveMap');
+  if (id == null) return;
   const logger = createLogger(`map-image:${id}`);
   try {
     let record = await db.getServerMap(id);
@@ -2279,7 +2519,8 @@ app.get('/api/servers/:id/map-image', auth, async (req, res) => {
 
 // --- RCON
 app.post('/api/rcon/:id', auth, async (req, res) => {
-  const { id } = req.params;
+  const id = ensureServerCapability(req, res, 'commands');
+  if (id == null) return;
   const { cmd } = req.body || {};
   if (!cmd) return res.status(400).json({ error: 'missing_cmd' });
   try {
@@ -2306,8 +2547,8 @@ app.get('/api/players', auth, async (req, res) => {
 });
 
 app.get('/api/servers/:id/players', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'players');
+  if (id == null) return;
   const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
   const offset = parseInt(req.query.offset || '0', 10);
   try {
@@ -2322,8 +2563,8 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
 
 // --- Player history: /api/servers/:id/player-counts
 app.get('/api/servers/:id/player-counts', auth, async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const id = ensureServerCapability(req, res, 'players');
+  if (id == null) return;
 
   const now = Date.now();
   const explicitTo = parseTimestamp(req.query.to) ?? now;
@@ -2394,8 +2635,8 @@ app.patch('/api/servers/:serverId/players/:steamid', auth, async (req, res) => {
   if (typeof db.setServerPlayerDisplayName !== 'function') {
     return res.status(400).json({ error: 'unsupported' });
   }
-  const serverId = Number(req.params.serverId);
-  if (!Number.isFinite(serverId)) return res.status(400).json({ error: 'invalid_server_id' });
+  const serverId = ensureServerCapability(req, res, 'manage', 'serverId');
+  if (serverId == null) return;
 
   const steamid = String(req.params.steamid || '').trim();
   if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
@@ -2543,10 +2784,14 @@ app.post('/api/steam/sync', auth, async (req, res) => {
 
 // --- sockets
 io.on('connection', (socket) => {
-  socket.emit('status-map', getStatusSnapshot());
+  socket.emit('status-map', filterStatusMapByPermission(getStatusSnapshot(), socket.data?.user, 'view'));
   socket.on('join-server', async (serverId) => {
     const id = Number(serverId);
     if (!Number.isFinite(id)) return;
+    if (!canAccessServer(socket.data?.user, id, 'console')) {
+      socket.emit('error', 'forbidden');
+      return;
+    }
     const row = await db.getServer(id);
     if (!row) return;
     socket.join(`srv:${id}`);

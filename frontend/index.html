@@ -68,6 +68,7 @@
         <div class="header-controls">
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
+            <button id="navTeam" type="button" class="nav-btn">Team</button>
           </nav>
         </div>
       </header>
@@ -105,25 +106,25 @@
             </div>
           </div>
         </section>
-        <aside id="userCard" class="team-card hidden">
-          <div class="section-head">
-            <div>
-              <h2>Team access</h2>
-              <p class="muted">Invite trusted admins and manage their roles.</p>
-            </div>
+      </main>
+
+      <section id="teamPanel" class="team-panel hidden" aria-labelledby="teamPanelTitle">
+        <div class="team-panel-head section-head">
+          <div>
+            <h2 id="teamPanelTitle">Team</h2>
+            <p class="muted">Invite trusted admins, assign roles and manage access.</p>
           </div>
+        </div>
+        <div id="userCard" class="team-card">
           <div class="team-card-body">
-            <div class="user-create">
+            <div class="user-create" id="userCreateSection">
               <h4>Invite a teammate</h4>
               <div class="grid2 stack-sm">
                 <input id="newUserName" placeholder="Username">
                 <input id="newUserPassword" type="password" placeholder="Temporary password">
               </div>
               <label>Role
-                <select id="newUserRole">
-                  <option value="user">User</option>
-                  <option value="admin">Admin</option>
-                </select>
+                <select id="newUserRole"></select>
               </label>
               <div class="row">
                 <button id="btnCreateUser" class="accent">Create user</button>
@@ -132,9 +133,40 @@
             </div>
             <h4>Existing users</h4>
             <ul id="userList" class="users"></ul>
+            <h4 class="roles-header" id="rolesHeader">Roles</h4>
+            <div id="roleManager" class="roles-manager">
+              <div class="role-create">
+                <div class="grid2 stack-sm">
+                  <input id="newRoleKey" placeholder="New role key">
+                  <input id="newRoleName" placeholder="Name">
+                </div>
+                <div class="row">
+                  <button id="btnCreateRole" class="ghost">Create role</button>
+                </div>
+              </div>
+              <div id="roleEditor" class="role-editor hidden" aria-hidden="true">
+                <label>Role
+                  <select id="roleSelect"></select>
+                </label>
+                <input id="roleName" placeholder="Display name">
+                <input id="roleDescription" placeholder="Description (optional)">
+                <input id="roleServers" placeholder="Allowed server IDs (* for all)">
+                <fieldset id="roleCapabilities" class="role-fieldset">
+                  <legend>Server capabilities</legend>
+                </fieldset>
+                <fieldset id="roleGlobalPermissions" class="role-fieldset">
+                  <legend>Global permissions</legend>
+                </fieldset>
+                <div class="row space-between">
+                  <button id="btnSaveRole" class="accent">Save changes</button>
+                  <button id="btnDeleteRole" class="ghost danger">Delete role</button>
+                </div>
+                <p id="roleFeedback" class="notice hidden"></p>
+              </div>
+            </div>
           </div>
-        </aside>
-      </main>
+        </div>
+      </section>
 
       <div id="userDetailsOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
       <aside
@@ -174,7 +206,13 @@
             This is your account. Role changes and removal are disabled here.
           </p>
           <div class="user-details-actions">
-            <button id="userDetailsToggleRole" type="button" class="ghost">Promote to admin</button>
+            <div class="user-role-editor">
+              <label class="inline">Role
+                <select id="userDetailsRoleSelect"></select>
+              </label>
+              <button id="userDetailsSaveRole" type="button" class="ghost">Update role</button>
+            </div>
+            <p id="userDetailsRoleStatus" class="notice small hidden"></p>
             <button id="userDetailsResetPassword" type="button" class="ghost">Reset password</button>
             <button id="userDetailsDelete" type="button" class="ghost danger">Remove user</button>
           </div>
@@ -192,15 +230,15 @@
         </div>
 
         <nav id="workspaceMenu" class="workspace-menu" aria-label="Server sections">
-          <button type="button" class="menu-tab active" data-view="players" aria-pressed="true">Players</button>
-          <button type="button" class="menu-tab" data-view="map" aria-pressed="false">Map</button>
-          <button type="button" class="menu-tab" data-view="settings" aria-pressed="false">Settings</button>
-          <button type="button" class="menu-tab" data-view="console" aria-pressed="false">Console</button>
-          <button type="button" class="menu-tab" data-view="dashboard" aria-pressed="false">Dashboard</button>
+          <button type="button" class="menu-tab active" data-view="players" data-capability="players" aria-pressed="true">Players</button>
+          <button type="button" class="menu-tab" data-view="map" data-capability="liveMap" aria-pressed="false">Map</button>
+          <button type="button" class="menu-tab" data-view="settings" data-capability="manage" aria-pressed="false">Settings</button>
+          <button type="button" class="menu-tab" data-view="console" data-capability="console" aria-pressed="false">Console</button>
+          <button type="button" class="menu-tab" data-view="dashboard" data-capability="view" aria-pressed="false">Dashboard</button>
         </nav>
 
         <div class="workspace-views">
-          <section id="workspaceViewPlayers" class="workspace-view active" data-view="players" aria-hidden="false">
+          <section id="workspaceViewPlayers" class="workspace-view active" data-view="players" data-capability="players" aria-hidden="false">
             <div class="card graph-card module-hidden" data-module-card="players-graph">
               <div class="card-header">
                 <div class="card-title-group">
@@ -232,7 +270,7 @@
             </div>
           </section>
 
-          <section id="workspaceViewMap" class="workspace-view" data-view="map" aria-hidden="true">
+          <section id="workspaceViewMap" class="workspace-view" data-view="map" data-capability="liveMap" aria-hidden="true">
             <div class="card map-card" data-module-card="live-map">
               <div class="card-header">
                 <div class="card-title-group">
@@ -244,7 +282,7 @@
             </div>
           </section>
 
-          <section id="workspaceViewSettings" class="workspace-view" data-view="settings" aria-hidden="true">
+          <section id="workspaceViewSettings" class="workspace-view" data-view="settings" data-capability="manage" aria-hidden="true">
             <div class="card settings-card">
               <div class="card-header">
                 <div class="card-title-group">
@@ -299,7 +337,7 @@
             </div>
           </section>
 
-          <section id="workspaceViewConsole" class="workspace-view" data-view="console" aria-hidden="true">
+          <section id="workspaceViewConsole" class="workspace-view" data-view="console" data-capability="console" aria-hidden="true">
             <div class="card console-card">
               <div class="card-header">
                 <h3>Console</h3>
@@ -316,7 +354,7 @@
             </div>
           </section>
 
-          <section id="workspaceViewDashboard" class="workspace-view" data-view="dashboard" aria-hidden="true">
+          <section id="workspaceViewDashboard" class="workspace-view" data-view="dashboard" data-capability="view" aria-hidden="true">
             <div class="workspace-summary">
               <div class="summary-card">
                 <span class="summary-label">Players</span>
