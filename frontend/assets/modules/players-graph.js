@@ -13,6 +13,57 @@
   const DEFAULT_OPTION = RANGE_OPTIONS.find((opt) => opt.id === '24h') || RANGE_OPTIONS[0];
   const MIN_REFRESH_INTERVAL = 60 * 1000; // 1 minute
 
+  const SERIES_DEFS = [
+    {
+      key: 'players',
+      label: 'Players online',
+      color: '#38bdf8',
+      shadow: 'rgba(56, 189, 248, 0.45)',
+      fill: 'rgba(56, 189, 248, 0.18)',
+      defaultVisible: true
+    },
+    {
+      key: 'fps',
+      label: 'Server FPS',
+      color: '#facc15',
+      shadow: 'rgba(250, 204, 21, 0.35)',
+      defaultVisible: false,
+      dash: [4, 4]
+    },
+    {
+      key: 'joining',
+      label: 'Joining players',
+      color: '#22c55e',
+      shadow: 'rgba(34, 197, 94, 0.35)',
+      defaultVisible: false,
+      dash: [6, 4]
+    },
+    {
+      key: 'queued',
+      label: 'Queue size',
+      color: '#f97316',
+      shadow: 'rgba(249, 115, 22, 0.35)',
+      defaultVisible: false,
+      dash: [6, 4]
+    },
+    {
+      key: 'sleepers',
+      label: 'Sleepers',
+      color: '#a855f7',
+      shadow: 'rgba(168, 85, 247, 0.35)',
+      defaultVisible: false,
+      dash: [6, 4]
+    },
+    {
+      key: 'capacity',
+      label: 'Max slots',
+      color: '#ef4444',
+      shadow: 'rgba(239, 68, 68, 0.35)',
+      defaultVisible: false,
+      dash: [4, 4]
+    }
+  ];
+
   const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
   const weekdayFormatter = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
   const dayFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
@@ -52,6 +103,30 @@
       return Math.round(value).toLocaleString();
     }
     return value.toFixed(1);
+  }
+
+  function formatDurationShort(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const units = [
+      { label: 'd', value: 24 * 60 * 60 },
+      { label: 'h', value: 60 * 60 },
+      { label: 'm', value: 60 }
+    ];
+    let remaining = Math.floor(seconds);
+    const parts = [];
+    for (const unit of units) {
+      if (remaining >= unit.value) {
+        const qty = Math.floor(remaining / unit.value);
+        parts.push(`${qty}${unit.label}`);
+        remaining -= qty * unit.value;
+      }
+      if (parts.length >= 2) break;
+    }
+    if (!parts.length) {
+      if (remaining >= 5) parts.push(`${remaining}s`);
+      else parts.push(`${Math.max(1, Math.round(seconds))}s`);
+    }
+    return parts.join(' ');
   }
 
   async function defaultApi(path) {
@@ -110,8 +185,48 @@
 
       const legend = document.createElement('div');
       legend.className = 'players-graph-legend';
-      legend.innerHTML = '<span><span class="swatch"></span>Players online</span>';
       controls.appendChild(legend);
+
+      const legendToggles = new Map();
+      const updateLegendToggles = () => {
+        const activeCount = Object.values(state.seriesVisibility || {}).filter(Boolean).length;
+        legendToggles.forEach((button, key) => {
+          const active = Boolean(state.seriesVisibility?.[key]);
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+          const disableToggle = active && activeCount <= 1;
+          if (disableToggle) button.setAttribute('aria-disabled', 'true');
+          else button.removeAttribute('aria-disabled');
+          const label = button.dataset.seriesLabel || button.textContent || '';
+          button.title = disableToggle ? `${label} (at least one series must remain visible)` : `Toggle ${label}`;
+        });
+      };
+
+      SERIES_DEFS.forEach((def) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'players-graph-legend-toggle';
+        button.dataset.seriesKey = def.key;
+        button.dataset.seriesLabel = def.label;
+        button.innerHTML = `<span class="swatch"></span><span class="label">${def.label}</span>`;
+        button.style.setProperty('--swatch-color', def.color);
+        if (def.shadow) button.style.setProperty('--swatch-shadow', def.shadow);
+        button.setAttribute('aria-pressed', state.seriesVisibility?.[def.key] ? 'true' : 'false');
+        button.addEventListener('click', () => {
+          const currentlyActive = Boolean(state.seriesVisibility[def.key]);
+          if (currentlyActive) {
+            const activeCount = Object.values(state.seriesVisibility).filter(Boolean).length;
+            if (activeCount <= 1) return;
+          }
+          state.seriesVisibility[def.key] = !currentlyActive;
+          updateLegendToggles();
+          renderChart();
+        });
+        legend.appendChild(button);
+        legendToggles.set(def.key, button);
+      });
+
+      updateLegendToggles();
 
       const chartWrap = document.createElement('div');
       chartWrap.className = 'players-graph-chart';
@@ -140,7 +255,11 @@
         intervalSeconds: null,
         isLoading: false,
         lastFetch: 0,
-        lastError: null
+        lastError: null,
+        seriesVisibility: SERIES_DEFS.reduce((acc, def) => {
+          acc[def.key] = def.defaultVisible !== false;
+          return acc;
+        }, {})
       };
 
       function setMessage(text, variant = 'info') {
@@ -167,9 +286,39 @@
         if (state.summary?.averagePlayers != null) {
           parts.push(`Avg ${formatPlayerCount(state.summary.averagePlayers)}`);
         }
-        if (state.summary?.latest?.playerCount != null && state.summary?.latest?.timestamp) {
+        if (state.summary?.maxJoining != null && state.summary.maxJoining > 0) {
+          parts.push(`Joining peak ${state.summary.maxJoining}`);
+        }
+        if (state.summary?.maxQueued != null && state.summary.maxQueued > 0) {
+          parts.push(`Queue peak ${state.summary.maxQueued}`);
+        }
+        if (state.summary?.maxSleepers != null && state.summary.maxSleepers > 0) {
+          parts.push(`Sleepers peak ${state.summary.maxSleepers}`);
+        }
+        if (state.summary?.maxFps != null && state.summary.maxFps > 0) {
+          parts.push(`FPS peak ${formatPlayerCount(state.summary.maxFps)}`);
+        }
+        if (state.summary?.averageFps != null && state.summary.averageFps > 0) {
+          parts.push(`Avg FPS ${formatPlayerCount(state.summary.averageFps)}`);
+        }
+        if (state.summary?.offlineBucketCount > 0 && Number.isFinite(state.intervalSeconds)) {
+          const offlineSeconds = state.summary.offlineBucketCount * state.intervalSeconds;
+          const durationText = formatDurationShort(offlineSeconds);
+          if (durationText) parts.push(`Offline ≈ ${durationText}`);
+        }
+        if (state.summary?.latest?.timestamp) {
           const when = new Date(state.summary.latest.timestamp);
-          parts.push(`Latest ${state.summary.latest.playerCount} @ ${dateTimeFormatter.format(when)}`);
+          if (state.summary.latest.online === false) {
+            parts.push(`Latest offline @ ${dateTimeFormatter.format(when)}`);
+          } else if (state.summary.latest.playerCount != null) {
+            parts.push(`Latest ${state.summary.latest.playerCount} @ ${dateTimeFormatter.format(when)}`);
+            if (state.summary.latest.joining > 0) parts.push(`Joining ${state.summary.latest.joining}`);
+            if (state.summary.latest.queued > 0) parts.push(`Queue ${state.summary.latest.queued}`);
+            if (state.summary.latest.sleepers > 0) parts.push(`Sleepers ${state.summary.latest.sleepers}`);
+            if (state.summary.latest.fps != null && state.summary.latest.fps > 0) {
+              parts.push(`FPS ${formatPlayerCount(state.summary.latest.fps)}`);
+            }
+          }
         }
         summary.textContent = parts.length ? parts.join(' · ') : 'No player history recorded yet.';
       }
@@ -177,6 +326,7 @@
       function renderChart() {
         const ctx2d = canvas.getContext('2d');
         if (!ctx2d) return;
+        updateLegendToggles?.();
         const width = Math.max(chartWrap.clientWidth || container.clientWidth || 600, 200);
         const height = 260;
         const dpr = window.devicePixelRatio || 1;
@@ -197,6 +347,8 @@
         ctx2d.fillStyle = 'rgba(15, 23, 42, 0.55)';
         ctx2d.strokeStyle = 'rgba(148, 163, 184, 0.22)';
         ctx2d.lineWidth = 1;
+        ctx2d.lineJoin = 'round';
+        ctx2d.lineCap = 'round';
         const backdropX = padding.left - 24;
         const backdropY = padding.top - 16;
         const backdropW = chartWidth + 48;
@@ -211,19 +363,45 @@
           ctx2d.strokeRect(backdropX, backdropY, backdropW, backdropH);
         }
 
-        const values = [];
-        const maxPlayersValues = [];
-        state.buckets.forEach((bucket, index) => {
-          const value = safeNumber(bucket?.playerCount);
-          if (value != null) values.push({ index, value });
-          const mp = safeNumber(bucket?.maxPlayers);
-          if (mp != null) maxPlayersValues.push(mp);
-        });
+        const getSeriesValue = (key, bucket) => {
+          if (!bucket) return null;
+          switch (key) {
+            case 'players':
+              return safeNumber(bucket?.playerCount);
+            case 'fps':
+              return safeNumber(bucket?.fps);
+            case 'joining':
+              return safeNumber(bucket?.joining);
+            case 'queued':
+              return safeNumber(bucket?.queued);
+            case 'sleepers':
+              return safeNumber(bucket?.sleepers);
+            case 'capacity':
+              return safeNumber(bucket?.maxPlayers);
+            default:
+              return null;
+          }
+        };
 
-        const hasData = values.length > 0;
-        const baseMax = values.reduce((max, point) => Math.max(max, point.value), 0);
-        const maxPlayers = maxPlayersValues.reduce((max, val) => Math.max(max, val), 0);
-        const upperBound = Math.max(baseMax, maxPlayers, 10);
+        let activeSeries = SERIES_DEFS.filter((def) => state.seriesVisibility?.[def.key]);
+        if (!activeSeries.length && SERIES_DEFS.length) {
+          state.seriesVisibility[SERIES_DEFS[0].key] = true;
+          activeSeries = [SERIES_DEFS[0]];
+          updateLegendToggles();
+        }
+        const activeKeys = activeSeries.map((def) => def.key);
+
+        let hasData = false;
+        let upperBound = 0;
+        state.buckets.forEach((bucket) => {
+          for (const key of activeKeys) {
+            const value = getSeriesValue(key, bucket);
+            if (value != null) hasData = true;
+            if (Number.isFinite(value) && value > upperBound) upperBound = value;
+          }
+        });
+        if (upperBound <= 0) upperBound = 10;
+        else upperBound = Math.max(upperBound + 1, upperBound * 1.05, 10);
 
         const yScale = chartHeight / (upperBound || 1);
         const xForIndex = (index) => {
@@ -231,6 +409,34 @@
           return originX + (index / (state.buckets.length - 1)) * chartWidth;
         };
         const yForValue = (value) => originY - value * yScale;
+
+        const bucketCount = state.buckets.length;
+        const bucketWidth = bucketCount > 1 ? chartWidth / (bucketCount - 1) : chartWidth;
+
+        if (state.buckets.some((bucket) => bucket?.offline)) {
+          ctx2d.fillStyle = 'rgba(248, 113, 113, 0.16)';
+          const offlineRanges = [];
+          let current = null;
+          state.buckets.forEach((bucket, idx) => {
+            if (bucket?.offline) {
+              if (current) current.end = idx;
+              else current = { start: idx, end: idx };
+            } else if (current) {
+              offlineRanges.push(current);
+              current = null;
+            }
+          });
+          if (current) offlineRanges.push(current);
+          offlineRanges.forEach((range) => {
+            let startX = bucketCount > 1 ? xForIndex(range.start) - bucketWidth / 2 : originX;
+            let endX = bucketCount > 1 ? xForIndex(range.end) + bucketWidth / 2 : originX + chartWidth;
+            startX = Math.max(originX, startX);
+            endX = Math.min(originX + chartWidth, endX);
+            if (endX > startX) {
+              ctx2d.fillRect(startX, padding.top, endX - startX, chartHeight);
+            }
+          });
+        }
 
         // Grid lines
         ctx2d.strokeStyle = 'rgba(148, 163, 184, 0.25)';
@@ -278,72 +484,79 @@
         }
 
         if (hasData) {
-          ctx2d.lineWidth = 2;
-          ctx2d.strokeStyle = '#38bdf8';
-          ctx2d.fillStyle = 'rgba(56, 189, 248, 0.18)';
+          activeSeries.forEach((def) => {
+            const dash = Array.isArray(def.dash) ? def.dash : [];
+            ctx2d.setLineDash(dash);
+            ctx2d.strokeStyle = def.color;
+            ctx2d.lineWidth = def.key === 'players' ? 2 : 1.6;
+            ctx2d.beginPath();
+            let drawing = false;
+            state.buckets.forEach((bucket, idx) => {
+              const value = getSeriesValue(def.key, bucket);
+              if (value == null) {
+                drawing = false;
+                return;
+              }
+              const x = xForIndex(idx);
+              const y = yForValue(value);
+              if (!drawing) {
+                ctx2d.moveTo(x, y);
+                drawing = true;
+              } else {
+                ctx2d.lineTo(x, y);
+              }
+            });
+            if (drawing) ctx2d.stroke();
+            ctx2d.setLineDash([]);
 
-          ctx2d.beginPath();
-          let drawing = false;
-          state.buckets.forEach((bucket, idx) => {
-            const value = safeNumber(bucket?.playerCount);
-            if (value == null) {
+            if (def.key === 'players') {
+              const fillColor = def.fill || 'rgba(56, 189, 248, 0.18)';
+              ctx2d.fillStyle = fillColor;
+              ctx2d.beginPath();
               drawing = false;
-              return;
-            }
-            const x = xForIndex(idx);
-            const y = yForValue(value);
-            if (!drawing) {
-              ctx2d.moveTo(x, y);
-              drawing = true;
-            } else {
-              ctx2d.lineTo(x, y);
-            }
-          });
-          ctx2d.stroke();
-
-          // Fill under line
-          ctx2d.beginPath();
-          drawing = false;
-          state.buckets.forEach((bucket, idx) => {
-            const value = safeNumber(bucket?.playerCount);
-            if (value == null) {
+              state.buckets.forEach((bucket, idx) => {
+                const value = getSeriesValue(def.key, bucket);
+                if (value == null) {
+                  if (drawing) {
+                    const x = xForIndex(idx - 1);
+                    ctx2d.lineTo(x, originY);
+                    ctx2d.closePath();
+                    ctx2d.fill();
+                    drawing = false;
+                    ctx2d.beginPath();
+                  }
+                  return;
+                }
+                const x = xForIndex(idx);
+                const y = yForValue(value);
+                if (!drawing) {
+                  ctx2d.moveTo(x, originY);
+                  ctx2d.lineTo(x, y);
+                  drawing = true;
+                } else {
+                  ctx2d.lineTo(x, y);
+                }
+              });
               if (drawing) {
-                const x = xForIndex(idx - 1);
-                ctx2d.lineTo(x, originY);
+                const lastX = xForIndex(state.buckets.length - 1);
+                ctx2d.lineTo(lastX, originY);
                 ctx2d.closePath();
                 ctx2d.fill();
-                drawing = false;
-                ctx2d.beginPath();
               }
-              return;
-            }
-            const x = xForIndex(idx);
-            const y = yForValue(value);
-            if (!drawing) {
-              ctx2d.moveTo(x, originY);
-              ctx2d.lineTo(x, y);
-              drawing = true;
-            } else {
-              ctx2d.lineTo(x, y);
             }
           });
-          if (drawing) {
-            const lastX = xForIndex(state.buckets.length - 1);
-            ctx2d.lineTo(lastX, originY);
-            ctx2d.closePath();
-            ctx2d.fill();
-          }
 
-          // Highlight latest point
-          if (state.summary?.latest?.playerCount != null) {
-            const latestIndex = [...state.buckets].reverse().findIndex((bucket) => safeNumber(bucket?.playerCount) != null);
+          // Highlight latest point when online
+          if (state.summary?.latest?.playerCount != null && state.summary?.latest?.online !== false) {
+            const latestIndex = [...state.buckets].reverse().findIndex((bucket) => getSeriesValue('players', bucket) != null);
             if (latestIndex >= 0) {
               const idx = state.buckets.length - 1 - latestIndex;
-              const value = safeNumber(state.buckets[idx]?.playerCount);
+              const value = getSeriesValue('players', state.buckets[idx]);
               if (value != null) {
                 const x = xForIndex(idx);
                 const y = yForValue(value);
-                ctx2d.fillStyle = '#38bdf8';
+                const playersSeries = SERIES_DEFS.find((def) => def.key === 'players');
+                ctx2d.fillStyle = playersSeries?.color || '#38bdf8';
                 ctx2d.beginPath();
                 ctx2d.arc(x, y, 4, 0, Math.PI * 2);
                 ctx2d.fill();

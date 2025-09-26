@@ -76,6 +76,9 @@ function createApi(dbh, dialect) {
         max_players INTEGER,
         queued INTEGER,
         sleepers INTEGER,
+        joining INTEGER,
+        fps REAL,
+        online INTEGER DEFAULT 1,
         recorded_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
@@ -132,6 +135,17 @@ function createApi(dbh, dialect) {
       await ensureServerPlayerColumn('last_ip', 'last_ip TEXT');
       await ensureServerPlayerColumn('last_port', 'last_port INTEGER');
       await ensureServerPlayerColumn('forced_display_name', 'forced_display_name TEXT');
+      const countCols = await dbh.all("PRAGMA table_info('server_player_counts')");
+      const ensureCountColumn = async (name, definition) => {
+        if (!countCols.some((c) => c.name === name)) {
+          await dbh.run(`ALTER TABLE server_player_counts ADD COLUMN ${definition}`);
+        }
+      };
+      await ensureCountColumn('queued', 'queued INTEGER');
+      await ensureCountColumn('sleepers', 'sleepers INTEGER');
+      await ensureCountColumn('joining', 'joining INTEGER');
+      await ensureCountColumn('fps', 'fps REAL');
+      await ensureCountColumn('online', 'online INTEGER DEFAULT 1');
     },
     async countUsers(){ const r = await dbh.get('SELECT COUNT(*) c FROM users'); return r.c; },
     async createUser(u){
@@ -211,13 +225,16 @@ function createApi(dbh, dialect) {
           last_port=COALESCE(excluded.last_port, server_players.last_port)
       `,[serverIdNum,sid,display_name,null,seen,seen,ipValue,portValue]);
     },
-    async recordServerPlayerCount({ server_id, player_count, max_players = null, queued = null, sleepers = null, recorded_at = null }){
+    async recordServerPlayerCount({ server_id, player_count, max_players = null, queued = null, sleepers = null, joining = null, fps = null, online = 1, recorded_at = null }){
       const serverIdNum = Number(server_id);
       const playerCountNum = Number(player_count);
       if (!Number.isFinite(serverIdNum) || !Number.isFinite(playerCountNum)) return;
       const maxPlayersNum = Number(max_players);
       const queuedNum = Number(queued);
       const sleepersNum = Number(sleepers);
+      const joiningNum = Number(joining);
+      const fpsNum = Number(fps);
+      const onlineNum = typeof online === 'boolean' ? (online ? 1 : 0) : Number(online);
       let timestamp = null;
       if (recorded_at) {
         const parsed = recorded_at instanceof Date ? recorded_at : new Date(recorded_at);
@@ -225,14 +242,17 @@ function createApi(dbh, dialect) {
       }
       if (!timestamp) timestamp = new Date().toISOString();
       await dbh.run(`
-        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, recorded_at)
-        VALUES(?,?,?,?,?,?)
+        INSERT INTO server_player_counts(server_id, player_count, max_players, queued, sleepers, joining, fps, online, recorded_at)
+        VALUES(?,?,?,?,?,?,?,?,?)
       `,[
         serverIdNum,
         Math.max(0, Math.trunc(playerCountNum)),
         Number.isFinite(maxPlayersNum) ? Math.max(0, Math.trunc(maxPlayersNum)) : null,
         Number.isFinite(queuedNum) ? Math.max(0, Math.trunc(queuedNum)) : null,
         Number.isFinite(sleepersNum) ? Math.max(0, Math.trunc(sleepersNum)) : null,
+        Number.isFinite(joiningNum) ? Math.max(0, Math.trunc(joiningNum)) : null,
+        Number.isFinite(fpsNum) ? Math.max(0, fpsNum) : null,
+        Number.isFinite(onlineNum) ? (onlineNum !== 0 ? 1 : 0) : 1,
         timestamp
       ]);
     },
@@ -263,7 +283,7 @@ function createApi(dbh, dialect) {
       }
 
       let sql = `
-        SELECT server_id, player_count, max_players, queued, sleepers, recorded_at
+        SELECT server_id, player_count, max_players, queued, sleepers, joining, fps, online, recorded_at
         FROM server_player_counts
         WHERE ${conditions.join(' AND ')}
         ORDER BY recorded_at ASC
@@ -342,7 +362,7 @@ function createApi(dbh, dialect) {
     },
     async getLatestServerPlayerCount(serverId){
       return await dbh.get(
-        'SELECT server_id, player_count, max_players, queued, sleepers, recorded_at FROM server_player_counts WHERE server_id=? ORDER BY recorded_at DESC LIMIT 1',
+        'SELECT server_id, player_count, max_players, queued, sleepers, joining, fps, online, recorded_at FROM server_player_counts WHERE server_id=? ORDER BY recorded_at DESC LIMIT 1',
         [serverId]
       );
     },
