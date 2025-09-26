@@ -1342,10 +1342,16 @@ button.menu-tab.active {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  max-width: 1120px;
-  margin-right: auto;
   width: 100%;
-  align-self: flex-start;
+  align-self: stretch;
+}
+
+.players-directory {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  align-self: stretch;
 }
 
 .players-card .card-body {
@@ -1513,16 +1519,13 @@ button.menu-tab.active {
 .live-players-list {
   display: grid;
   gap: 20px;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 360px));
-  justify-content: flex-start;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   align-content: start;
 }
 
-.live-player-row {
+.live-player-row,
+.player-directory li {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
   padding: 20px 22px;
   border-radius: 20px;
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -1533,7 +1536,21 @@ button.menu-tab.active {
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
-.live-player-row::before {
+.live-player-row {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.player-directory li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.live-player-row::before,
+.player-directory li::before {
   content: '';
   position: absolute;
   inset: -55% -50% 40% 32%;
@@ -1543,7 +1560,8 @@ button.menu-tab.active {
   pointer-events: none;
 }
 
-.live-player-row::after {
+.live-player-row::after,
+.player-directory li::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1554,24 +1572,28 @@ button.menu-tab.active {
   transition: opacity 0.2s ease;
 }
 
-.live-player-row > * {
+.live-player-row > *,
+.player-directory li > * {
   position: relative;
   z-index: 1;
 }
 
-.live-player-row:hover {
+.live-player-row:hover,
+.player-directory li:hover {
   transform: translateY(-4px);
   border-color: rgba(244, 63, 94, 0.45);
   background: linear-gradient(170deg, rgba(24, 32, 47, 0.95) 0%, rgba(15, 23, 42, 0.7) 100%);
   box-shadow: 0 24px 66px -32px rgba(244, 63, 94, 0.4), 0 32px 80px -48px rgba(15, 23, 42, 0.9);
 }
 
-.live-player-row:hover::before {
+.live-player-row:hover::before,
+.player-directory li:hover::before {
   opacity: 0.7;
   transform: translate3d(8px, 6px, 0);
 }
 
-.live-player-row:hover::after {
+.live-player-row:hover::after,
+.player-directory li:hover::after {
   opacity: 0.45;
 }
 
@@ -1712,79 +1734,14 @@ button.menu-tab.active {
   justify-content: flex-end;
 }
 
-.players-directory {
-  padding: 0;
-  border: none;
-  background: none;
-  max-width: 1120px;
-  margin-right: auto;
-  width: 100%;
-}
-
 .player-directory {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.player-directory li {
-  position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 18px 22px;
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: linear-gradient(165deg, rgba(15, 23, 42, 0.94) 0%, rgba(15, 23, 42, 0.68) 100%);
-  box-shadow: 0 28px 60px -46px rgba(15, 23, 42, 0.9);
-  overflow: hidden;
-  isolation: isolate;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.player-directory li::before {
-  content: '';
-  position: absolute;
-  inset: -65% -45% 45% 30%;
-  background: radial-gradient(circle at top left, rgba(244, 63, 94, 0.36), transparent 70%);
-  opacity: 0.4;
-  pointer-events: none;
-  transition: opacity 0.25s ease, transform 0.3s ease;
-}
-
-.player-directory li::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  border: 1px solid rgba(244, 63, 94, 0.28);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-
-.player-directory li > * {
-  position: relative;
-  z-index: 1;
-}
-
-.player-directory li:hover {
-  transform: translateY(-3px);
-  border-color: rgba(244, 63, 94, 0.45);
-  box-shadow: 0 28px 66px -38px rgba(244, 63, 94, 0.35), 0 36px 88px -50px rgba(15, 23, 42, 0.92);
-}
-
-.player-directory li:hover::before {
-  opacity: 0.65;
-  transform: translate3d(10px, 8px, 0);
-}
-
-.player-directory li:hover::after {
-  opacity: 0.45;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-content: start;
 }
 
 .player-directory strong { font-weight: 600; }
