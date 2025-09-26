@@ -19,12 +19,27 @@
     return `${hours.toFixed(1)} h`;
   }
 
-  function formatLastBan(days) {
+  function formatLastBanLabel(days) {
     const value = Number(days);
-    if (!Number.isFinite(value) || value < 0) return '';
+    if (!Number.isFinite(value) || value < 0) return 'Unknown';
     if (value === 0) return 'Today';
     if (value === 1) return '1 day ago';
     return `${value} days ago`;
+  }
+
+  function resolveLastBanBadge(gameBans, lastBanDays) {
+    const count = Number(gameBans);
+    if (!Number.isFinite(count) || count <= 0) return null;
+    const value = Number(lastBanDays);
+    if (!Number.isFinite(value) || value < 0) {
+      return { label: 'Unknown', tone: 'last-ban-unknown' };
+    }
+    let tone = 'last-ban-green';
+    if (value < 30) tone = 'last-ban-red';
+    else if (value < 90) tone = 'last-ban-yellow';
+    else if (value < 365) tone = 'last-ban-green';
+    const label = formatLastBanLabel(value);
+    return { label, tone };
   }
 
   function mapPlayerForDirectory(player) {
@@ -37,6 +52,10 @@
     const avatarFull = profile.avatarFull || profile.avatarfull || profile.avatar || '';
     const rustMinutes = profile.rustPlaytimeMinutes;
     const lastBanDays = profile.daysSinceLastBan;
+    const gameBans = Number(profile.gameBans || 0) || 0;
+    const lastBanValue = Number.isFinite(Number(lastBanDays)) && Number(lastBanDays) >= 0 && gameBans > 0
+      ? Number(lastBanDays)
+      : null;
     const payload = {
       steamid,
       display_name: displayName,
@@ -48,8 +67,8 @@
       avatarfull: avatarFull,
       country: profile.country || '',
       vac_banned: profile.vacBanned ? 1 : 0,
-      game_bans: Number(profile.gameBans || 0) || 0,
-      last_ban_days: Number.isFinite(Number(lastBanDays)) ? Number(lastBanDays) : null,
+      game_bans: gameBans,
+      last_ban_days: lastBanValue,
       rust_playtime_minutes: Number.isFinite(Number(rustMinutes)) ? Number(rustMinutes) : null,
       visibility: profile.visibility ?? null,
       last_ip: player.ip || null,
@@ -367,11 +386,11 @@
             gameBan.textContent = `${profile.gameBans} game ban${profile.gameBans > 1 ? 's' : ''}`;
             badges.appendChild(gameBan);
           }
-          const lastBanLabel = formatLastBan(profile.daysSinceLastBan);
-          if (lastBanLabel) {
+          const lastBanInfo = resolveLastBanBadge(profile.gameBans, profile.daysSinceLastBan);
+          if (lastBanInfo) {
             const last = document.createElement('span');
-            last.className = 'badge warn';
-            last.textContent = `Last ban: ${lastBanLabel}`;
+            last.className = `badge last-ban ${lastBanInfo.tone}`.trim();
+            last.textContent = `Last ban: ${lastBanInfo.label}`;
             badges.appendChild(last);
           }
           if (badges.childElementCount > 0) details.appendChild(badges);

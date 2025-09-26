@@ -269,6 +269,16 @@ main.grid{
 .live-player-badges{display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end}
 .badge.vac{background:rgba(239,68,68,.2); color:#fecaca; border-color:rgba(239,68,68,.45)}
 .badge.gameban{background:rgba(249,115,22,.2); color:#fed7aa; border-color:rgba(249,115,22,.45)}
+
+.badge.last-ban{background:rgba(148,163,184,.18); color:#e2e8f0; border-color:rgba(148,163,184,.4)}
+
+.badge.last-ban.last-ban-red{background:rgba(248,113,113,.24); color:#fee2e2; border-color:rgba(248,113,113,.5)}
+
+.badge.last-ban.last-ban-yellow{background:rgba(251,191,36,.2); color:#fef3c7; border-color:rgba(251,191,36,.45)}
+
+.badge.last-ban.last-ban-green{background:rgba(74,222,128,.2); color:#bbf7d0; border-color:rgba(74,222,128,.45)}
+
+.badge.last-ban.last-ban-unknown{background:rgba(148,163,184,.22); color:#e2e8f0; border-color:rgba(148,163,184,.45)}
 .badge.country{background:rgba(59,130,246,.2); color:#bfdbfe; border-color:rgba(59,130,246,.45)}
 .badge.warn{background:rgba(245,158,11,.18); color:#fde68a; border-color:rgba(245,158,11,.4)}
 .discord-settings-grid{display:grid; gap:24px; align-items:start}
