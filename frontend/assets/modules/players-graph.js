@@ -187,6 +187,24 @@
       legend.className = 'players-graph-legend';
       controls.appendChild(legend);
 
+      const state = {
+        serverId: null,
+        rangeKey: DEFAULT_OPTION.id,
+        rangeParam: DEFAULT_OPTION.range,
+        intervalParam: DEFAULT_OPTION.interval,
+        rangeMs: DEFAULT_OPTION.rangeMs,
+        buckets: [],
+        summary: null,
+        intervalSeconds: null,
+        isLoading: false,
+        lastFetch: 0,
+        lastError: null,
+        seriesVisibility: SERIES_DEFS.reduce((acc, def) => {
+          acc[def.key] = def.defaultVisible !== false;
+          return acc;
+        }, {})
+      };
+
       const legendToggles = new Map();
       const updateLegendToggles = () => {
         const activeCount = Object.values(state.seriesVisibility || {}).filter(Boolean).length;
@@ -243,24 +261,6 @@
       const message = document.createElement('p');
       message.className = 'module-message hidden';
       container.appendChild(message);
-
-      const state = {
-        serverId: null,
-        rangeKey: DEFAULT_OPTION.id,
-        rangeParam: DEFAULT_OPTION.range,
-        intervalParam: DEFAULT_OPTION.interval,
-        rangeMs: DEFAULT_OPTION.rangeMs,
-        buckets: [],
-        summary: null,
-        intervalSeconds: null,
-        isLoading: false,
-        lastFetch: 0,
-        lastError: null,
-        seriesVisibility: SERIES_DEFS.reduce((acc, def) => {
-          acc[def.key] = def.defaultVisible !== false;
-          return acc;
-        }, {})
-      };
 
       function setMessage(text, variant = 'info') {
         if (!message) return;
