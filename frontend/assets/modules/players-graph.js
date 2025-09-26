@@ -47,14 +47,6 @@
       dash: [6, 4]
     },
     {
-      key: 'sleepers',
-      label: 'Sleepers',
-      color: '#a855f7',
-      shadow: 'rgba(168, 85, 247, 0.35)',
-      defaultVisible: false,
-      dash: [6, 4]
-    },
-    {
       key: 'capacity',
       label: 'Max slots',
       color: '#ef4444',
@@ -177,15 +169,19 @@
       rangeSelect.value = DEFAULT_OPTION.id;
       controlGroup.appendChild(rangeSelect);
 
+      const legend = document.createElement('div');
+      legend.className = 'players-graph-legend';
+      controls.appendChild(legend);
+
+      const actionWrap = document.createElement('div');
+      actionWrap.className = 'players-graph-actions';
+      controls.appendChild(actionWrap);
+
       const refreshBtn = document.createElement('button');
       refreshBtn.type = 'button';
       refreshBtn.className = 'btn ghost small';
       refreshBtn.textContent = 'Refresh';
-      controls.appendChild(refreshBtn);
-
-      const legend = document.createElement('div');
-      legend.className = 'players-graph-legend';
-      controls.appendChild(legend);
+      actionWrap.appendChild(refreshBtn);
 
       const state = {
         serverId: null,
@@ -292,9 +288,6 @@
         if (state.summary?.maxQueued != null && state.summary.maxQueued > 0) {
           parts.push(`Queue peak ${state.summary.maxQueued}`);
         }
-        if (state.summary?.maxSleepers != null && state.summary.maxSleepers > 0) {
-          parts.push(`Sleepers peak ${state.summary.maxSleepers}`);
-        }
         if (state.summary?.maxFps != null && state.summary.maxFps > 0) {
           parts.push(`FPS peak ${formatPlayerCount(state.summary.maxFps)}`);
         }
@@ -314,7 +307,6 @@
             parts.push(`Latest ${state.summary.latest.playerCount} @ ${dateTimeFormatter.format(when)}`);
             if (state.summary.latest.joining > 0) parts.push(`Joining ${state.summary.latest.joining}`);
             if (state.summary.latest.queued > 0) parts.push(`Queue ${state.summary.latest.queued}`);
-            if (state.summary.latest.sleepers > 0) parts.push(`Sleepers ${state.summary.latest.sleepers}`);
             if (state.summary.latest.fps != null && state.summary.latest.fps > 0) {
               parts.push(`FPS ${formatPlayerCount(state.summary.latest.fps)}`);
             }
@@ -365,6 +357,7 @@
 
         const getSeriesValue = (key, bucket) => {
           if (!bucket) return null;
+          if (bucket.offline) return 0;
           switch (key) {
             case 'players':
               return safeNumber(bucket?.playerCount);
@@ -374,8 +367,6 @@
               return safeNumber(bucket?.joining);
             case 'queued':
               return safeNumber(bucket?.queued);
-            case 'sleepers':
-              return safeNumber(bucket?.sleepers);
             case 'capacity':
               return safeNumber(bucket?.maxPlayers);
             default:
