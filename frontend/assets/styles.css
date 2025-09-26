@@ -1211,6 +1211,12 @@ button.menu-tab.active {
   flex-wrap: wrap;
 }
 
+.players-graph-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
 .players-graph-controls .control-group {
   display: flex;
   align-items: center;
