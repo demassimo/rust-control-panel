@@ -160,11 +160,17 @@
                 </div>
               </div>
               <div id="roleEditor" class="role-editor hidden" aria-hidden="true">
-                <label>Role
+                <label for="roleSelect">Role
                   <select id="roleSelect"></select>
                 </label>
-                <input id="roleName" placeholder="Display name">
-                <input id="roleDescription" placeholder="Description (optional)">
+                <label for="roleName">Role name
+                  <input id="roleName" placeholder="Display name">
+                  <span class="muted small">Shown wherever the role is referenced in the panel.</span>
+                </label>
+                <label for="roleDescription">Role description
+                  <input id="roleDescription" placeholder="Description (optional)">
+                  <span class="muted small">Give teammates context about what this role is for.</span>
+                </label>
                 <div class="role-access">
                   <div class="role-access-head">
                     <h5>Server access</h5>
@@ -172,11 +178,20 @@
                   </div>
                   <div id="roleServersList" class="role-checkbox-list" role="group" aria-label="Allowed servers"></div>
                 </div>
-                <fieldset id="roleCapabilities" class="role-fieldset">
+                <fieldset class="role-fieldset">
                   <legend>Server capabilities</legend>
+                  <p class="muted small">Decide which actions this role can take on the servers they can reach.</p>
+                  <div id="roleCapabilities" class="role-checkbox-list" role="group" aria-label="Server capabilities"></div>
                 </fieldset>
-                <fieldset id="roleGlobalPermissions" class="role-fieldset">
+                <fieldset class="role-fieldset">
                   <legend>Global permissions</legend>
+                  <p class="muted small">Grant access to panel-wide tools and management features.</p>
+                  <div
+                    id="roleGlobalPermissions"
+                    class="role-checkbox-list"
+                    role="group"
+                    aria-label="Global permissions"
+                  ></div>
                 </fieldset>
                 <div class="row space-between">
                   <button id="btnSaveRole" class="accent">Save changes</button>
