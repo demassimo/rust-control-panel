@@ -1515,6 +1515,7 @@ function projectDiscordIntegration(row) {
     serverId: Number.isFinite(serverId) ? serverId : null,
     guildId: row.guild_id || row.guildId || null,
     channelId: row.channel_id || row.channelId || null,
+    statusMessageId: row.status_message_id || row.statusMessageId || null,
     createdAt: row.created_at || row.createdAt || null,
     updatedAt: row.updated_at || row.updatedAt || null,
     hasToken: Boolean(row.bot_token)
@@ -2065,10 +2066,15 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
       if (existingToken) botToken = existingToken;
       else return res.status(400).json({ error: 'missing_bot_token' });
     }
+    let statusMessageId = existing?.status_message_id ?? existing?.statusMessageId ?? null;
+    if (existing?.channel_id && existing.channel_id !== channelId) {
+      statusMessageId = null;
+    }
     await db.saveServerDiscordIntegration(id, {
       bot_token: botToken,
       guild_id: guildId,
-      channel_id: channelId
+      channel_id: channelId,
+      status_message_id: statusMessageId
     });
     const integration = await db.getServerDiscordIntegration(id);
     res.json({

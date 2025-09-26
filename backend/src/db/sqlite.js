@@ -116,11 +116,16 @@ function createApi(dbh, dialect) {
         bot_token TEXT,
         guild_id TEXT,
         channel_id TEXT,
+        status_message_id TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
       `);
+      const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
+      if (!discordCols.some((c) => c.name === 'status_message_id')) {
+        await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN status_message_id TEXT");
+      }
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
@@ -355,6 +360,49 @@ function createApi(dbh, dialect) {
         LIMIT ? OFFSET ?
       `,[serverIdNum,limit,offset]);
     },
+    async searchServerPlayers(serverId, query, { limit = 10 } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const term = typeof query === 'string' ? query.trim() : '';
+      if (!term) return [];
+      const escapeLike = (value) => String(value).replace(/[\\%_]/g, (m) => `\\${m}`);
+      const likeTerm = `%${escapeLike(term)}%`;
+      const limitValue = Number(limit);
+      const limitNum = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(Math.floor(limitValue), 25) : 10;
+      return await dbh.all(`
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
+               sp.last_ip, sp.last_port,
+               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=?
+          AND (
+            sp.steamid = ? OR
+            sp.display_name LIKE ? ESCAPE '\\' OR
+            sp.forced_display_name LIKE ? ESCAPE '\\' OR
+            p.persona LIKE ? ESCAPE '\\'
+          )
+        ORDER BY sp.last_seen DESC
+        LIMIT ?
+      `, [serverIdNum, term, likeTerm, likeTerm, likeTerm, limitNum]);
+    },
+    async getServerPlayer(serverId, steamid) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const sid = typeof steamid === 'string' ? steamid.trim() : '';
+      if (!sid) return null;
+      return await dbh.get(`
+        SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
+               sp.last_ip, sp.last_port,
+               p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
+               p.last_ban_days, p.visibility, p.rust_playtime_minutes, p.playtime_updated_at, p.updated_at
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=? AND sp.steamid=?
+        LIMIT 1
+      `, [serverIdNum, sid]);
+    },
     async setServerPlayerDisplayName({ server_id, steamid, display_name = null }){
       const serverIdNum = Number(server_id);
       if (!Number.isFinite(serverIdNum)) return 0;
@@ -409,10 +457,10 @@ function createApi(dbh, dialect) {
         [serverId]
       );
     },
-    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null }){
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null }){
       await dbh.run(
-        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,created_at,updated_at) VALUES(?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, updated_at=excluded.updated_at",
-        [serverId, bot_token, guild_id, channel_id]
+        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,status_message_id,created_at,updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, status_message_id=excluded.status_message_id, updated_at=excluded.updated_at",
+        [serverId, bot_token, guild_id, channel_id, status_message_id]
       );
     },
     async deleteServerDiscordIntegration(serverId){
