@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { setTimeout as delay } from 'node:timers/promises';
+import { once } from 'node:events';
 import process from 'node:process';
 import {
   Client,
@@ -86,6 +87,7 @@ async function loadIntegrations() {
 }
 
 function createDiscordClient(state) {
+  state.ready = false;
   const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 
   client.on('ready', async () => {
@@ -286,9 +288,12 @@ async function ensureBot(integration) {
   if (!state.ready) {
     if (!state.connectPromise) {
       state.connectPromise = (async () => {
+        const readyPromise = once(state.client, 'ready');
         try {
           await state.client.login(token);
+          await readyPromise;
         } catch (err) {
+          readyPromise.catch(() => {});
           console.error(`discord bot login failed for server ${serverId}`, err);
           state.ready = false;
           try {
