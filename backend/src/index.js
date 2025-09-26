@@ -2110,13 +2110,32 @@ app.post('/api/servers', auth, requireGlobalPermissionMiddleware('manageServers'
   }
 });
 
+function shouldResetRcon(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  const resetKeys = ['host', 'port', 'password', 'tls'];
+  for (const key of resetKeys) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) return true;
+  }
+  return false;
+}
+
 app.patch('/api/servers/:id', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'manage');
   if (id == null) return;
+  const changes = req.body || {};
+  const needsReset = shouldResetRcon(changes);
   try {
-    const updated = await db.updateServer(id, req.body || {});
-    if (updated) {
+    const updated = await db.updateServer(id, changes);
+    if (needsReset) {
       closeServerRcon(id);
+      try {
+        const row = await db.getServer(id);
+        if (row) ensureRconBinding(row);
+      } catch (err) {
+        console.error('failed to rebind RCON after update', err);
+      }
+    }
+    if (updated || needsReset) {
       refreshMonitoredServers().catch((err) => console.error('monitor refresh (update) failed', err));
     }
     res.json({ updated });
