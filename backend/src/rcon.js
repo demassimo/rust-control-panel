@@ -347,6 +347,52 @@ function _shouldEmitOnce(serverId, event, args) {
 // registry of active per-server subscriptions; used to de-dupe on re-subscribe
 const activeSubs = new Map(); // key:number -> Array<() => void>
 
+function normalizeClientOptions(row) {
+  const host = typeof row?.host === 'string' ? row.host.trim() : '';
+  const port = Number.parseInt(row?.port, 10);
+
+  let password = row?.password ?? '';
+  if (typeof password !== 'string') password = String(password);
+  try { password = decodeURIComponent(password); }
+  catch { /* ignore */ }
+
+  return {
+    host,
+    port: Number.isFinite(port) ? port : undefined,
+    password,
+    tls: !!row?.tls,
+  };
+}
+
+function clientSignature(options) {
+  const port = Number.isFinite(options?.port) ? Number(options.port) : null;
+  return JSON.stringify({
+    host: options?.host || '',
+    port,
+    tls: !!options?.tls,
+    password: options?.password || '',
+  });
+}
+
+function teardownClient(key, client) {
+  if (!client) return;
+  clientMap.delete(key);
+  try {
+    const arr = activeSubs.get(key) || [];
+    for (const fn of arr) {
+      try { fn(); } catch { /* ignore */ }
+    }
+    activeSubs.delete(key);
+  } catch { /* ignore */ }
+
+  try {
+    const result = client.close?.();
+    if (result && typeof result.catch === 'function') {
+      result.catch(() => {});
+    }
+  } catch { /* ignore */ }
+}
+
 function toServerKey(rowOrId) {
   if (rowOrId && typeof rowOrId === 'object') {
     const value = Number(rowOrId.id ?? rowOrId.server_id ?? rowOrId.serverId);
@@ -381,20 +427,18 @@ function attachClientEvents(key, client) {
 
 function ensureClient(row) {
   const key = toServerKey(row);
-  if (clientMap.has(key)) return clientMap.get(key);
+  const options = normalizeClientOptions(row);
+  const signature = clientSignature(options);
 
-  const host = row?.host;
-  const port = row?.port;
-
-  // Normalize password: decode once if encoded, otherwise use raw
-  let password = row?.password || '';
-  try {
-    password = decodeURIComponent(password);
-  } catch {
-    // ignore if not encoded
+  const existing = clientMap.get(key);
+  if (existing) {
+    if (existing.__configSignature === signature) {
+      return existing;
+    }
+    teardownClient(key, existing);
   }
 
-  const tls = !!row?.tls;
+  const { host, port, password, tls } = options;
   if (!host || !password) throw new Error('RustWebRcon: host and password are required.');
 
   const client = new RustWebRcon({
@@ -405,6 +449,7 @@ function ensureClient(row) {
     heartbeatIntervalMs: 20000,
     keepaliveIdleMs: 20000,
   });
+  client.__configSignature = signature;
 
   attachClientEvents(key, client);
   clientMap.set(key, client);
@@ -426,14 +471,7 @@ export function closeRcon(id) {
   const key = toServerKey(id);
   const client = clientMap.get(key);
   if (!client) return;
-  clientMap.delete(key);
-  try {
-    // also clear any lingering subscriptions
-    const arr = activeSubs.get(key) || [];
-    for (const fn of arr) { try { fn(); } catch {} }
-    activeSubs.delete(key);
-  } catch {}
-  client.close().catch(() => {});
+  teardownClient(key, client);
 }
 
 export function subscribeToRcon(id, handlers = {}, { replace = true } = {}) {
