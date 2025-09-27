@@ -120,7 +120,6 @@ function normalizeColors(colors = {}) {
 }
 
 export function normaliseDiscordBotConfig(value = {}) {
-  if (value === DEFAULT_DISCORD_BOT_CONFIG) return cloneDiscordBotConfig(value);
   const source = typeof value === 'object' && value != null ? value : {};
   return {
     presenceTemplate: sanitizePresenceTemplate(source.presenceTemplate ?? source.presence_template),
