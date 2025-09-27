@@ -470,9 +470,11 @@
         return `${value} days ago`;
       }
 
-      function resolveLastBan(gameBans, lastBanDays) {
+      function resolveLastBan(gameBans, lastBanDays, vacBanned = false) {
         const count = Number(gameBans);
-        if (!Number.isFinite(count) || count <= 0) return null;
+        const hasGameBan = Number.isFinite(count) && count > 0;
+        const hasVacBan = Boolean(vacBanned);
+        if (!hasGameBan && !hasVacBan) return null;
         const value = Number(lastBanDays);
         if (!Number.isFinite(value) || value < 0) {
           return { label: 'Unknown', tone: 'last-ban-unknown' };
@@ -509,7 +511,10 @@
         if (base.vac_banned == null && base.vacBanned != null) base.vac_banned = base.vacBanned ? 1 : 0;
         if (base.game_bans == null && base.gameBans != null) base.game_bans = base.gameBans;
         if (base.last_ban_days == null && base.daysSinceLastBan != null) base.last_ban_days = base.daysSinceLastBan;
-        if (!(Number.isFinite(Number(base.game_bans)) && Number(base.game_bans) > 0)) base.last_ban_days = null;
+        const normalizedGameBans = Number(base.game_bans);
+        const hasGameBan = Number.isFinite(normalizedGameBans) && normalizedGameBans > 0;
+        const hasVacBan = Boolean(base.vac_banned) || Boolean(base.vacBanned);
+        if (!hasGameBan && !hasVacBan) base.last_ban_days = null;
         if (base.rust_playtime_minutes == null && base.rustPlaytimeMinutes != null) base.rust_playtime_minutes = base.rustPlaytimeMinutes;
         if (base.visibility == null && base.profile_visibility != null) base.visibility = base.profile_visibility;
         if (!base.last_ip && base.lastIp) base.last_ip = base.lastIp;
@@ -643,7 +648,7 @@
             forcedBadge.textContent = 'Forced';
             modal.elements.badges.appendChild(forcedBadge);
           }
-          const lastBanInfo = resolveLastBan(gameBans, combined.last_ban_days ?? combined.daysSinceLastBan);
+          const lastBanInfo = resolveLastBan(gameBans, combined.last_ban_days ?? combined.daysSinceLastBan, vac);
           if (lastBanInfo) {
             const lastBadge = document.createElement('span');
             lastBadge.className = `badge last-ban ${lastBanInfo.tone}`.trim();
@@ -678,7 +683,8 @@
           entries.push(['Game bans', `${Number(combined.game_bans || 0) || 0}`]);
           const lastBanInfo = resolveLastBan(
             combined.game_bans ?? combined.gameBans,
-            combined.last_ban_days ?? combined.daysSinceLastBan
+            combined.last_ban_days ?? combined.daysSinceLastBan,
+            combined.vac_banned ?? combined.vacBanned
           );
           if (lastBanInfo) entries.push(['Last ban', lastBanInfo.label]);
           entries.push(['Profile updated', formatTimestamp(combined.updated_at) || '—']);

@@ -18,16 +18,25 @@
     const steamProfileUrl = profile.profileUrl || (steamIdValue ? `https://steamcommunity.com/profiles/${encodeURIComponent(steamIdValue)}` : '');
     const serverArmourUrl = steamIdValue ? `https://serverarmour.com/profile/${encodeURIComponent(steamIdValue)}` : '';
     const playtimeText = formatPlaytime(profile.rustPlaytimeMinutes, profile.visibility);
-    const vacText = profile.vacBanned ? 'Yes' : 'No';
+    const vacBanned = Boolean(profile.vacBanned);
+    const vacText = vacBanned ? 'Yes' : 'No';
     const gameBanCount = Number(profile.gameBans) > 0 ? Number(profile.gameBans) : 0;
+    const hasBanRecord = vacBanned || gameBanCount > 0;
     const rawDaysSinceBan = Number(profile.daysSinceLastBan);
-    const hasBanAge = Number.isFinite(rawDaysSinceBan) && rawDaysSinceBan >= 0;
+    const hasBanAge = hasBanRecord && Number.isFinite(rawDaysSinceBan) && rawDaysSinceBan >= 0;
     const lastBan = hasBanAge
       ? rawDaysSinceBan === 0
         ? 'Today'
         : `${rawDaysSinceBan} day${rawDaysSinceBan === 1 ? '' : 's'} ago`
-      : '—';
+      : (hasBanRecord ? 'Unknown' : '—');
     const ipText = player.ip ? `${player.ip}${player.port ? ':' + player.port : ''}` : 'Hidden';
+    const ipCountryCode = player.ip_country_code || player.ipCountryCode || '';
+    const steamCountryCode = profile.country || '';
+    const hasIpCountry = Boolean(ipCountryCode);
+    const countryLabel = ipCountryCode || steamCountryCode || '—';
+    const steamCountrySuffix = hasIpCountry && steamCountryCode && steamCountryCode !== ipCountryCode
+      ? ` (Steam: ${steamCountryCode})`
+      : '';
     const position = player.position || player.Position || {};
     const positionText = `${Math.round(position.x ?? 0)}, ${Math.round(position.z ?? 0)}`;
     const nameValue = escapeHtml(displayName);
@@ -47,9 +56,9 @@
       <div class="kv"><div class="k">Ping:</div><div>${Math.round(player.ping ?? player.Ping ?? 0)} ms</div></div>
       <div class="kv"><div class="k">Connected:</div><div>${formatConnected(player.connectedSeconds ?? player.ConnectedSeconds)}</div></div>
       <div class="kv"><div class="k">Rust playtime:</div><div>${playtimeText}</div></div>
-      <div class="kv"><div class="k">VAC ban:</div><div>${vacText}</div></div>
-      <div class="kv"><div class="k">Game bans:</div><div>${gameBanCount || '0'}${gameBanCount ? ` (${lastBan})` : ''}</div></div>
-      <div class="kv"><div class="k">Country:</div><div>${escapeHtml(profile.country || '—')}</div></div>
+      <div class="kv"><div class="k">VAC ban:</div><div>${vacText}${vacBanned ? ` (${escapeHtml(lastBan)})` : ''}</div></div>
+      <div class="kv"><div class="k">Game bans:</div><div>${gameBanCount || '0'}${gameBanCount > 0 ? ` (${escapeHtml(lastBan)})` : ''}</div></div>
+      <div class="kv"><div class="k">Country:</div><div>${escapeHtml(countryLabel)}${escapeHtml(steamCountrySuffix)}</div></div>
       <div class="kv"><div class="k">Address:</div><div>${escapeHtml(ipText)}</div></div>
       <div class="kv"><div class="k">Position:</div><div>(${positionText})</div></div>
       ${actionsBlock}
