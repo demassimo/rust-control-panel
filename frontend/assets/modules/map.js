@@ -124,7 +124,13 @@
         status: null,
         pendingRefresh: null,
         projectionMode: null,
-        horizontalAxis: null
+        horizontalAxis: null,
+        worldDetails: {
+          seed: null,
+          size: null,
+          pending: false,
+          lastAttempt: 0
+        }
       };
 
       let mapImageSource = null;
@@ -329,7 +335,8 @@
         const details = [];
         const size = resolveWorldSize();
         if (size != null) details.push({ label: 'World size (m)', value: size });
-        const seed = meta?.seed ?? info?.seed;
+        const seed = resolveWorldSeed();
+
         if (seed != null) details.push({ label: 'Seed', value: seed });
         const mapKey = meta?.mapKey || info?.mapKey;
         if (mapKey != null) details.push({ label: 'Map key', value: mapKey });
@@ -522,13 +529,83 @@
           meta?.dimensions?.worldSize,
           state.serverInfo?.worldSize,
           state.serverInfo?.size,
-          state.serverInfo?.mapSize
+          state.serverInfo?.mapSize,
+          state.worldDetails?.size
         ];
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
           if (numeric != null && numeric > 0) return numeric;
         }
         return null;
+      }
+
+      function resolveWorldSeed() {
+        const meta = getActiveMapMeta();
+        const candidates = [
+          meta?.seed,
+          state.serverInfo?.seed,
+          state.worldDetails?.seed
+        ];
+        for (const candidate of candidates) {
+          const numeric = toNumber(candidate);
+          if (numeric != null) return numeric;
+        }
+        return null;
+      }
+
+      function normalizeCommandReply(reply) {
+        if (reply == null) return '';
+        if (typeof reply === 'string') return reply;
+        if (typeof reply.Message === 'string') return reply.Message;
+        if (typeof reply.message === 'string') return reply.message;
+        if (Array.isArray(reply)) return reply.map((entry) => normalizeCommandReply(entry)).join(' ');
+        return '';
+      }
+
+      function extractFirstNumber(text) {
+        if (!text) return null;
+        const match = String(text).match(/-?\d+/);
+        if (!match) return null;
+        const numeric = Number(match[0]);
+        return Number.isFinite(numeric) ? numeric : null;
+      }
+
+      async function ensureWorldDetails(reason = 'unknown') {
+        if (!state.serverId) return;
+        if (typeof ctx.runCommand !== 'function') return;
+        const needsSize = resolveWorldSize() == null;
+        const needsSeed = resolveWorldSeed() == null;
+        if (!needsSize && !needsSeed) return;
+        const infoState = state.worldDetails;
+        if (!infoState) return;
+        if (infoState.pending) return;
+        const now = Date.now();
+        if (infoState.lastAttempt && now - infoState.lastAttempt < 30000) return;
+        infoState.pending = true;
+        infoState.lastAttempt = now;
+        const handleResult = () => {
+          updateStatusMessage();
+          renderSummary();
+        };
+        const requestDetail = async (command, key) => {
+          try {
+            const response = await ctx.runCommand(command);
+            const text = normalizeCommandReply(response).trim();
+            const numeric = extractFirstNumber(text);
+            if (numeric == null) return;
+            if (key === 'size') infoState.size = numeric;
+            else if (key === 'seed') infoState.seed = numeric;
+            handleResult();
+          } catch (err) {
+            ctx.log?.(`Failed to query ${key} via ${command} (${reason}): ${err?.message || err}`);
+          }
+        };
+        try {
+          if (needsSize) await requestDetail('server.worldsize', 'size');
+          if (needsSeed) await requestDetail('server.seed', 'seed');
+        } finally {
+          infoState.pending = false;
+        }
       }
 
       function collectPlayerPositions() {
@@ -957,7 +1034,7 @@
         ];
         const mapSize = resolveWorldSize();
         if (mapSize) metaLines.push({ label: 'World size', value: mapSize });
-        const mapSeed = meta?.seed ?? state.serverInfo?.seed;
+        const mapSeed = resolveWorldSeed();
         if (mapSeed) metaLines.push({ label: 'Seed', value: mapSeed });
         if (meta?.cachedAt) {
           const cachedTs = new Date(meta.cachedAt);
@@ -1143,6 +1220,11 @@
             state.horizontalAxis = null;
             cancelMapImageRequest();
             clearMapImage();
+            if (state.worldDetails) {
+              state.worldDetails.seed = null;
+              state.worldDetails.size = null;
+              state.worldDetails.lastAttempt = 0;
+            }
           }
           state.serverInfo = data?.info || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
@@ -1171,6 +1253,7 @@
           updateUploadSection();
           updateStatusMessage(hasImage);
           renderAll();
+          ensureWorldDetails('refresh').catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
         } catch (err) {
           state.status = null;
           if (state.pendingGeneration) {
@@ -1221,6 +1304,12 @@
         state.lastUpdated = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
+        if (state.worldDetails) {
+          state.worldDetails.seed = null;
+          state.worldDetails.size = null;
+          state.worldDetails.pending = false;
+          state.worldDetails.lastAttempt = 0;
+        }
         overlay.innerHTML = '';
         cancelMapImageRequest();
         clearMapImage();
@@ -1228,6 +1317,7 @@
         clearSelection();
         refreshData('server-connected');
         schedulePolling();
+        ensureWorldDetails('server-connected').catch((err) => ctx.log?.('World detail query failed: ' + (err?.message || err)));
       });
 
       const offDisconnect = ctx.on?.('server:disconnected', ({ serverId }) => {
@@ -1245,6 +1335,12 @@
           state.status = null;
           state.projectionMode = null;
           state.horizontalAxis = null;
+          if (state.worldDetails) {
+            state.worldDetails.seed = null;
+            state.worldDetails.size = null;
+            state.worldDetails.pending = false;
+            state.worldDetails.lastAttempt = 0;
+          }
           clearSelection();
           overlay.innerHTML = '';
           cancelMapImageRequest();
@@ -1274,6 +1370,12 @@
         state.status = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
+        if (state.worldDetails) {
+          state.worldDetails.seed = null;
+          state.worldDetails.size = null;
+          state.worldDetails.pending = false;
+          state.worldDetails.lastAttempt = 0;
+        }
         clearSelection();
         overlay.innerHTML = '';
         cancelMapImageRequest();
