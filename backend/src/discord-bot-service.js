@@ -13,16 +13,22 @@ import {
   escapeMarkdown
 } from 'discord.js';
 import { initDb, db } from './db/index.js';
+import {
+  STATUS_COLORS,
+  DEFAULT_DISCORD_BOT_CONFIG,
+  parseDiscordBotConfig,
+  encodeDiscordBotConfig,
+  cloneDiscordBotConfig,
+  CONFIG_FIELD_CHOICES,
+  renderPresenceTemplate,
+  describePresenceTemplateUsage,
+  formatColorHex,
+  parseColorString
+} from './discord-config.js';
 
 const MIN_REFRESH_MS = 10000;
 const DEFAULT_REFRESH_MS = 60000;
 const DEFAULT_STALE_MS = 5 * 60 * 1000;
-
-const STATUS_COLORS = {
-  online: 0x57f287,
-  offline: 0xed4245,
-  stale: 0xfee75c
-};
 
 const refreshInterval = Math.max(
   Number(process.env.DISCORD_BOT_REFRESH_MS ?? DEFAULT_REFRESH_MS) || DEFAULT_REFRESH_MS,
@@ -66,6 +72,66 @@ function formatDiscordTimestamp(date, style = 'R') {
   if (!parsed) return 'unknown';
   const seconds = Math.floor(parsed.getTime() / 1000);
   return `<t:${seconds}:${style}>`;
+}
+
+function setStateConfig(state, config) {
+  const target = state || {};
+  const next = cloneDiscordBotConfig(config ?? DEFAULT_DISCORD_BOT_CONFIG);
+  const encoded = encodeDiscordBotConfig(next);
+  if (!target.config || target.configKey !== encoded) {
+    target.config = next;
+    target.configKey = encoded;
+    if (state) {
+      state.lastStatusEmbedKey = null;
+      state.lastPresenceKey = null;
+    }
+  }
+  return target.config;
+}
+
+function getStateConfig(state) {
+  if (!state) return cloneDiscordBotConfig(DEFAULT_DISCORD_BOT_CONFIG);
+  if (!state.config) {
+    return setStateConfig(state, DEFAULT_DISCORD_BOT_CONFIG);
+  }
+  return state.config;
+}
+
+function updateStateConfigFromIntegration(state, integration) {
+  const parsed = parseDiscordBotConfig(integration?.config_json ?? integration?.configJson ?? integration?.config);
+  return setStateConfig(state, parsed);
+}
+
+function cloneStateConfig(state) {
+  return cloneDiscordBotConfig(getStateConfig(state));
+}
+
+function getStatusKey(status) {
+  if (!status?.hasStats) return 'waiting';
+  if (status.stale) return 'stale';
+  if (!status.isOnline) return 'offline';
+  return 'online';
+}
+
+function buildPresenceContext(status, statusKey) {
+  const hasStats = Boolean(status?.hasStats);
+  const maxPlayers = Number.isFinite(status.maxPlayers) ? status.maxPlayers : null;
+  return {
+    serverName: status.serverName,
+    players: hasStats ? status.players : 0,
+    maxPlayers: hasStats && maxPlayers != null ? maxPlayers : 'unknown',
+    playerCount: hasStats
+      ? (maxPlayers != null ? `${status.players}/${maxPlayers}` : `${status.players}`)
+      : 'no data',
+    queued: hasStats && Number.isFinite(status.queued) ? status.queued : 0,
+    sleepers: hasStats && Number.isFinite(status.sleepers) ? status.sleepers : 0,
+    joining: hasStats && Number.isFinite(status.joining) ? status.joining : 0,
+    fps: hasStats && Number.isFinite(status.fps) ? status.fps.toFixed(1) : '—',
+    status: statusKey,
+    statusEmoji:
+      statusKey === 'offline' ? '❌' : statusKey === 'stale' ? '⚠️' : statusKey === 'online' ? '✅' : '⏳',
+    hasStats,
+  };
 }
 
 async function loadIntegrations() {
@@ -151,6 +217,95 @@ async function registerCommands(state) {
           type: ApplicationCommandOptionType.Subcommand,
           name: 'refresh',
           description: 'Force an immediate status refresh'
+        },
+        {
+          type: ApplicationCommandOptionType.SubcommandGroup,
+          name: 'config',
+          description: 'Configure the status message and presence',
+          options: [
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'show',
+              description: 'Show the current bot configuration'
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'setpresence',
+              description: 'Update the presence template',
+              options: [
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'template',
+                  description: 'Template for the presence text',
+                  required: false,
+                  min_length: 3,
+                  max_length: 190
+                },
+                {
+                  type: ApplicationCommandOptionType.Boolean,
+                  name: 'reset',
+                  description: 'Reset to the default template',
+                  required: false
+                }
+              ]
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'setcolors',
+              description: 'Change the embed colours',
+              options: [
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'online',
+                  description: 'Hex colour for the online state (e.g. #57F287)',
+                  required: false
+                },
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'offline',
+                  description: 'Hex colour for the offline state',
+                  required: false
+                },
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'stale',
+                  description: 'Hex colour for the stale state',
+                  required: false
+                },
+                {
+                  type: ApplicationCommandOptionType.Boolean,
+                  name: 'reset',
+                  description: 'Reset all colours to defaults',
+                  required: false
+                }
+              ]
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'toggle',
+              description: 'Enable or disable fields in the status embed',
+              options: [
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'field',
+                  description: 'Field to configure',
+                  required: true,
+                  choices: CONFIG_FIELD_CHOICES.map((choice) => ({ name: choice.name, value: choice.value }))
+                },
+                {
+                  type: ApplicationCommandOptionType.Boolean,
+                  name: 'enabled',
+                  description: 'Whether the field should be shown',
+                  required: true
+                }
+              ]
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'reset',
+              description: 'Reset all configuration to defaults'
+            }
+          ]
         }
       ]
     },
@@ -208,19 +363,25 @@ async function shutdownBot(serverId) {
 async function persistIntegration(state) {
   if (typeof db.saveServerDiscordIntegration !== 'function') return;
   try {
+    const configJson = state.configKey || encodeDiscordBotConfig(getStateConfig(state));
     await db.saveServerDiscordIntegration(state.serverId, {
       bot_token: state.token,
       guild_id: state.guildId,
       channel_id: state.channelId,
-      status_message_id: state.statusMessageId || null
+      status_message_id: state.statusMessageId || null,
+      config_json: configJson
     });
     state.integration = {
       ...(state.integration || {}),
       bot_token: state.token,
       guild_id: state.guildId,
       channel_id: state.channelId,
-      status_message_id: state.statusMessageId || null
+      status_message_id: state.statusMessageId || null,
+      config_json: configJson,
+      configJson,
+      config: cloneStateConfig(state)
     };
+    state.configKey = configJson;
   } catch (err) {
     console.error(`failed to persist discord integration for server ${state.serverId}`, err);
   }
@@ -261,6 +422,8 @@ async function ensureBot(integration) {
       statusMessageId,
       lastPresenceKey: null,
       lastStatusEmbedKey: null,
+      config: null,
+      configKey: null,
       integration
     };
     state.client = createDiscordClient(state);
@@ -279,6 +442,7 @@ async function ensureBot(integration) {
     state.lastStatusEmbedKey = null;
   }
   state.integration = integration;
+  updateStateConfigFromIntegration(state, integration);
 
   const now = Date.now();
   if (state.cooldownUntil > now) {
@@ -433,55 +597,47 @@ async function loadServerStatus(serverId) {
   };
 }
 
-function formatPresence(status) {
-  if (!status?.hasStats) {
-    return { status: 'idle', activity: 'Waiting for data' };
-  }
-
-  const countPart = Number.isFinite(status.maxPlayers)
-    ? `(${status.players}/${status.maxPlayers})`
-    : `(${status.players})`;
-
-  if (status.stale) {
-    return { status: 'idle', activity: `${countPart} playing (stale)` };
-  }
-
-  if (!status.isOnline) {
-    return { status: 'dnd', activity: 'Server offline' };
-  }
-
-  const joiningPart = Number.isFinite(status.joining) && status.joining > 0
-    ? `joining (${status.joining})`
-    : 'playing';
+function formatPresence(status, config) {
+  const cfg = config ?? DEFAULT_DISCORD_BOT_CONFIG;
+  const statusKey = getStatusKey(status);
+  const statuses = cfg.presenceStatuses ?? DEFAULT_DISCORD_BOT_CONFIG.presenceStatuses;
+  const presenceStatus = statuses[statusKey] ?? DEFAULT_DISCORD_BOT_CONFIG.presenceStatuses[statusKey] ?? 'online';
+  const context = buildPresenceContext(status, statusKey);
+  const template = cfg.presenceTemplate ?? DEFAULT_DISCORD_BOT_CONFIG.presenceTemplate;
+  const activity = renderPresenceTemplate(template, context);
   return {
-    status: 'online',
-    activity: `${countPart} ${joiningPart}`
+    status: presenceStatus,
+    activity
   };
 }
 
-function buildStatusEmbed(status) {
+function buildStatusEmbed(status, config) {
+  const cfg = config ?? DEFAULT_DISCORD_BOT_CONFIG;
   const embed = new EmbedBuilder()
     .setTitle(status.serverName)
     .setTimestamp(status.recordedAt ?? new Date());
 
   if (!status.hasStats) {
+    const colors = cfg?.colors ?? DEFAULT_DISCORD_BOT_CONFIG.colors;
     embed
-      .setColor(STATUS_COLORS.stale)
+      .setColor(colors.stale ?? STATUS_COLORS.stale)
       .setDescription('No recent status data has been recorded yet.');
     return embed;
   }
 
-  if (status.stale) {
+  const colors = cfg?.colors ?? DEFAULT_DISCORD_BOT_CONFIG.colors;
+  const statusKey = getStatusKey(status);
+  if (statusKey === 'stale') {
     embed
-      .setColor(STATUS_COLORS.stale)
+      .setColor(colors.stale ?? STATUS_COLORS.stale)
       .setDescription('⚠️ The latest data is stale; the server may be restarting.');
-  } else if (!status.isOnline) {
+  } else if (statusKey === 'offline') {
     embed
-      .setColor(STATUS_COLORS.offline)
+      .setColor(colors.offline ?? STATUS_COLORS.offline)
       .setDescription('❌ The server appears to be offline or unreachable.');
   } else {
     embed
-      .setColor(STATUS_COLORS.online)
+      .setColor(colors.online ?? STATUS_COLORS.online)
       .setDescription('✅ The server is online and reporting live data.');
   }
 
@@ -492,23 +648,25 @@ function buildStatusEmbed(status) {
     inline: true
   });
 
-  if (Number.isFinite(status.joining)) {
+  const fieldConfig = cfg?.fields ?? DEFAULT_DISCORD_BOT_CONFIG.fields;
+
+  if (fieldConfig.joining && Number.isFinite(status.joining)) {
     embed.addFields({ name: 'Joining', value: formatCount(status.joining, '0'), inline: true });
   }
 
-  if (Number.isFinite(status.queued)) {
+  if (fieldConfig.queued && Number.isFinite(status.queued)) {
     embed.addFields({ name: 'Queued', value: formatCount(status.queued, '0'), inline: true });
   }
 
-  if (Number.isFinite(status.sleepers)) {
+  if (fieldConfig.sleepers && Number.isFinite(status.sleepers)) {
     embed.addFields({ name: 'Sleepers', value: formatCount(status.sleepers, '0'), inline: true });
   }
 
-  if (Number.isFinite(status.fps)) {
+  if (fieldConfig.fps && Number.isFinite(status.fps)) {
     embed.addFields({ name: 'Server FPS', value: status.fps.toFixed(1), inline: true });
   }
 
-  if (status.recordedAt) {
+  if (fieldConfig.lastUpdate && status.recordedAt) {
     embed.addFields({ name: 'Last Update', value: formatDiscordTimestamp(status.recordedAt, 'R'), inline: true });
   }
 
@@ -562,6 +720,9 @@ async function ensureStatusMessage(state, embed) {
 
 async function updateBot(state, integration) {
   state.integration = integration;
+  if (integration) {
+    updateStateConfigFromIntegration(state, integration);
+  }
   let status;
   try {
     status = await loadServerStatus(state.serverId);
@@ -570,7 +731,8 @@ async function updateBot(state, integration) {
     return;
   }
 
-  const presence = formatPresence(status);
+  const config = getStateConfig(state);
+  const presence = formatPresence(status, config);
   const presenceKey = `${presence.status}|${presence.activity}`;
 
   if (state.client?.user && state.lastPresenceKey !== presenceKey) {
@@ -585,7 +747,7 @@ async function updateBot(state, integration) {
     }
   }
 
-  const embed = buildStatusEmbed(status);
+  const embed = buildStatusEmbed(status, config);
   await ensureStatusMessage(state, embed);
 }
 
@@ -664,12 +826,29 @@ function buildDetailedPlayerEmbed(row) {
 }
 
 async function handleRustStatusCommand(state, interaction) {
+  const group = interaction.options.getSubcommandGroup(false);
   const sub = interaction.options.getSubcommand();
 
-  if (sub === 'status') {
+  if (!group && sub === 'status') {
     const status = await loadServerStatus(state.serverId);
-    const embed = buildStatusEmbed(status);
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    const embed = buildStatusEmbed(status, getStateConfig(state));
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ embeds: [embed] });
+    } else {
+      await interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+    return;
+  }
+
+  if (group === 'config') {
+    if (!requireManageGuild(interaction)) {
+      await interaction.reply({
+        content: 'You need the **Manage Server** permission to use this configuration command.',
+        ephemeral: true
+      });
+      return;
+    }
+    await handleRustStatusConfigCommand(state, interaction, sub);
     return;
   }
 
@@ -681,7 +860,9 @@ async function handleRustStatusCommand(state, interaction) {
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true });
+  }
 
   if (sub === 'setchannel') {
     const requested = interaction.options.getChannel('channel', false);
@@ -714,6 +895,168 @@ async function handleRustStatusCommand(state, interaction) {
   }
 
   await interaction.editReply('Unknown subcommand.');
+}
+
+function buildConfigSummaryEmbed(state) {
+  const config = getStateConfig(state);
+  const templateDisplay = escapeMarkdown(config.presenceTemplate).slice(0, 900);
+  const statuses = config.presenceStatuses ?? DEFAULT_DISCORD_BOT_CONFIG.presenceStatuses;
+  const colors = config.colors ?? DEFAULT_DISCORD_BOT_CONFIG.colors;
+  const fields = config.fields ?? DEFAULT_DISCORD_BOT_CONFIG.fields;
+
+  const statusLines = [
+    `Online: **${statuses.online}**`,
+    `Offline: **${statuses.offline}**`,
+    `Stale: **${statuses.stale}**`,
+    `Waiting: **${statuses.waiting}**`
+  ].join('\n');
+
+  const colorLines = [
+    `Online: ${formatColorHex(colors.online)}`,
+    `Offline: ${formatColorHex(colors.offline)}`,
+    `Stale: ${formatColorHex(colors.stale)}`
+  ].join('\n');
+
+  const fieldLines = CONFIG_FIELD_CHOICES
+    .map((choice) => {
+      const enabled = Boolean(fields?.[choice.value]);
+      return `${choice.name}: ${enabled ? '✅ Enabled' : '❌ Disabled'}`;
+    })
+    .join('\n');
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('Discord bot configuration')
+    .addFields({ name: 'Presence template', value: `\`\`\`\n${templateDisplay}\n\`\`\``, inline: false })
+    .addFields({ name: 'Presence statuses', value: statusLines, inline: true })
+    .addFields({ name: 'Embed colours', value: colorLines, inline: true })
+    .addFields({ name: 'Status fields', value: fieldLines, inline: false })
+    .setFooter({ text: `Available tokens: ${describePresenceTemplateUsage()}` });
+
+  return embed;
+}
+
+async function handleRustStatusConfigCommand(state, interaction, sub) {
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true });
+  }
+
+  if (sub === 'show') {
+    const embed = buildConfigSummaryEmbed(state);
+    await interaction.editReply({ embeds: [embed] });
+    return;
+  }
+
+  if (sub === 'setpresence') {
+    const reset = interaction.options.getBoolean('reset', false);
+    const templateInput = interaction.options.getString('template', false);
+    if (!reset && (!templateInput || !templateInput.trim())) {
+      await interaction.editReply('Provide a template or enable the reset option.');
+      return;
+    }
+
+    const next = cloneStateConfig(state);
+    if (reset) {
+      next.presenceTemplate = DEFAULT_DISCORD_BOT_CONFIG.presenceTemplate;
+    } else {
+      next.presenceTemplate = templateInput.trim().slice(0, 190);
+    }
+
+    setStateConfig(state, next);
+    await persistIntegration(state);
+    await updateBot(state, state.integration);
+
+    const previewStatus = await loadServerStatus(state.serverId).catch(() => null);
+    let previewText = '';
+    if (previewStatus) {
+      const presence = formatPresence(previewStatus, getStateConfig(state));
+      previewText = `\nPreview: \`${escapeMarkdown(presence.activity).slice(0, 90)}\``;
+    }
+
+    await interaction.editReply(`Updated the presence template.${previewText}`);
+    return;
+  }
+
+  if (sub === 'setcolors') {
+    const reset = interaction.options.getBoolean('reset', false);
+    const onlineRaw = interaction.options.getString('online', false);
+    const offlineRaw = interaction.options.getString('offline', false);
+    const staleRaw = interaction.options.getString('stale', false);
+
+    if (!reset && !onlineRaw && !offlineRaw && !staleRaw) {
+      await interaction.editReply('Provide at least one colour or enable the reset option.');
+      return;
+    }
+
+    const next = cloneStateConfig(state);
+    if (reset) {
+      next.colors = { ...DEFAULT_DISCORD_BOT_CONFIG.colors };
+    } else {
+      if (onlineRaw) {
+        const parsed = parseColorString(onlineRaw);
+        if (parsed == null) {
+          await interaction.editReply('Invalid colour value for the online state. Use hex such as `#57F287`.');
+          return;
+        }
+        next.colors.online = parsed;
+      }
+      if (offlineRaw) {
+        const parsed = parseColorString(offlineRaw);
+        if (parsed == null) {
+          await interaction.editReply('Invalid colour value for the offline state. Use hex such as `#ED4245`.');
+          return;
+        }
+        next.colors.offline = parsed;
+      }
+      if (staleRaw) {
+        const parsed = parseColorString(staleRaw);
+        if (parsed == null) {
+          await interaction.editReply('Invalid colour value for the stale state. Use hex such as `#FEE75C`.');
+          return;
+        }
+        next.colors.stale = parsed;
+      }
+    }
+
+    setStateConfig(state, next);
+    await persistIntegration(state);
+    await updateBot(state, state.integration);
+
+    const updated = getStateConfig(state).colors;
+    await interaction.editReply(
+      `Updated embed colours: online ${formatColorHex(updated.online)}, offline ${formatColorHex(updated.offline)}, stale ${formatColorHex(updated.stale)}.`
+    );
+    return;
+  }
+
+  if (sub === 'toggle') {
+    const fieldKey = interaction.options.getString('field', true);
+    const enabled = interaction.options.getBoolean('enabled', true);
+    const choice = CONFIG_FIELD_CHOICES.find((opt) => opt.value === fieldKey);
+    if (!choice) {
+      await interaction.editReply('Unknown field selection.');
+      return;
+    }
+
+    const next = cloneStateConfig(state);
+    next.fields[fieldKey] = Boolean(enabled);
+    setStateConfig(state, next);
+    await persistIntegration(state);
+    await updateBot(state, state.integration);
+
+    await interaction.editReply(`${choice.name} is now ${enabled ? 'enabled' : 'disabled'}.`);
+    return;
+  }
+
+  if (sub === 'reset') {
+    setStateConfig(state, DEFAULT_DISCORD_BOT_CONFIG);
+    await persistIntegration(state);
+    await updateBot(state, state.integration);
+    await interaction.editReply('Reset the Discord bot configuration to defaults.');
+    return;
+  }
+
+  await interaction.editReply('Unknown configuration subcommand.');
 }
 
 async function handleRustLookupCommand(state, interaction) {

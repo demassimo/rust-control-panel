@@ -21,6 +21,7 @@ import {
   rconEventBus
 } from './rcon.js';
 import { fetchRustMapMetadata, downloadRustMapImage } from './rustmaps.js';
+import { parseDiscordBotConfig } from './discord-config.js';
 import {
   normaliseRolePermissions,
   serialiseRolePermissions,
@@ -1567,6 +1568,7 @@ function sanitizeDiscordSnowflake(value, maxLength = 64) {
 function projectDiscordIntegration(row) {
   if (!row || typeof row !== 'object') return null;
   const serverId = Number(row.server_id ?? row.serverId);
+  const configJson = row.config_json ?? row.configJson ?? null;
   return {
     serverId: Number.isFinite(serverId) ? serverId : null,
     guildId: row.guild_id || row.guildId || null,
@@ -1574,7 +1576,8 @@ function projectDiscordIntegration(row) {
     statusMessageId: row.status_message_id || row.statusMessageId || null,
     createdAt: row.created_at || row.createdAt || null,
     updatedAt: row.updated_at || row.updatedAt || null,
-    hasToken: Boolean(row.bot_token)
+    hasToken: Boolean(row.bot_token),
+    config: parseDiscordBotConfig(configJson)
   };
 }
 
@@ -2126,11 +2129,13 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
     if (existing?.channel_id && existing.channel_id !== channelId) {
       statusMessageId = null;
     }
+    const configJson = existing?.config_json ?? existing?.configJson ?? null;
     await db.saveServerDiscordIntegration(id, {
       bot_token: botToken,
       guild_id: guildId,
       channel_id: channelId,
-      status_message_id: statusMessageId
+      status_message_id: statusMessageId,
+      config_json: configJson
     });
     const integration = await db.getServerDiscordIntegration(id);
     res.json({
