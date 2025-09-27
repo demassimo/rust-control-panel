@@ -336,6 +336,7 @@
         const size = resolveWorldSize();
         if (size != null) details.push({ label: 'World size (m)', value: size });
         const seed = resolveWorldSeed();
+
         if (seed != null) details.push({ label: 'Seed', value: seed });
         const mapKey = meta?.mapKey || info?.mapKey;
         if (mapKey != null) details.push({ label: 'Map key', value: mapKey });
