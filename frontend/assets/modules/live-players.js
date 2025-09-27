@@ -27,9 +27,11 @@
     return `${value} days ago`;
   }
 
-  function resolveLastBanBadge(gameBans, lastBanDays) {
+  function resolveLastBanBadge(gameBans, lastBanDays, vacBanned = false) {
     const count = Number(gameBans);
-    if (!Number.isFinite(count) || count <= 0) return null;
+    const hasGameBan = Number.isFinite(count) && count > 0;
+    const hasVacBan = Boolean(vacBanned);
+    if (!hasGameBan && !hasVacBan) return null;
     const value = Number(lastBanDays);
     if (!Number.isFinite(value) || value < 0) {
       return { label: 'Unknown', tone: 'last-ban-unknown' };
@@ -53,7 +55,8 @@
     const rustMinutes = profile.rustPlaytimeMinutes;
     const lastBanDays = profile.daysSinceLastBan;
     const gameBans = Number(profile.gameBans || 0) || 0;
-    const lastBanValue = Number.isFinite(Number(lastBanDays)) && Number(lastBanDays) >= 0 && gameBans > 0
+    const hasBanRecord = gameBans > 0 || Boolean(profile.vacBanned);
+    const lastBanValue = Number.isFinite(Number(lastBanDays)) && Number(lastBanDays) >= 0 && hasBanRecord
       ? Number(lastBanDays)
       : null;
     const payload = {
@@ -324,10 +327,18 @@
           } else {
             nameRow.textContent = displayName;
           }
-          if (profile.country) {
+          const ipCountryCode = player.ip_country_code || player.ipCountryCode || '';
+          const ipCountryName = player.ip_country_name || player.ipCountryName || '';
+          const steamCountryCode = profile.country || '';
+          const badgeCountryCode = ipCountryCode || steamCountryCode;
+          if (badgeCountryCode) {
             const badge = document.createElement('span');
             badge.className = 'badge country';
-            badge.textContent = profile.country;
+            badge.textContent = badgeCountryCode;
+            const badgeTitle = ipCountryCode
+              ? (ipCountryName && ipCountryName !== badgeCountryCode ? ipCountryName : '')
+              : '';
+            if (badgeTitle) badge.title = badgeTitle;
             nameRow.appendChild(badge);
           }
           meta.appendChild(nameRow);
@@ -392,7 +403,7 @@
             gameBan.textContent = `${profile.gameBans} game ban${profile.gameBans > 1 ? 's' : ''}`;
             badges.appendChild(gameBan);
           }
-          const lastBanInfo = resolveLastBanBadge(profile.gameBans, profile.daysSinceLastBan);
+          const lastBanInfo = resolveLastBanBadge(profile.gameBans, profile.daysSinceLastBan, profile.vacBanned);
           if (lastBanInfo) {
             const last = document.createElement('span');
             last.className = `badge last-ban ${lastBanInfo.tone}`.trim();
