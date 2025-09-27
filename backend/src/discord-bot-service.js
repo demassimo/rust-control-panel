@@ -10,6 +10,7 @@ import {
   ApplicationCommandOptionType,
   PermissionFlagsBits,
   ChannelType,
+  MessageFlags,
   escapeMarkdown
 } from 'discord.js';
 import { initDb, db } from './db/index.js';
@@ -156,7 +157,10 @@ function createDiscordClient(state) {
   state.ready = false;
   const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 
-  client.on('ready', async () => {
+  let readyHandled = false;
+  const handleReady = async () => {
+    if (readyHandled) return;
+    readyHandled = true;
     state.ready = true;
     state.cooldownMs = MIN_REFRESH_MS;
     state.cooldownUntil = 0;
@@ -167,7 +171,10 @@ function createDiscordClient(state) {
     } catch (err) {
       console.error(`failed to register slash commands for server ${state.serverId}`, err);
     }
-  });
+  };
+
+  client.once('clientReady', handleReady);
+  client.once('ready', handleReady);
 
   client.on('error', (err) => {
     console.error(`discord client error (server ${state.serverId})`, err);
@@ -835,7 +842,7 @@ async function handleRustStatusCommand(state, interaction) {
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ embeds: [embed] });
     } else {
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
     return;
   }
@@ -844,7 +851,7 @@ async function handleRustStatusCommand(state, interaction) {
     if (!requireManageGuild(interaction)) {
       await interaction.reply({
         content: 'You need the **Manage Server** permission to use this configuration command.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
@@ -855,13 +862,13 @@ async function handleRustStatusCommand(state, interaction) {
   if (!requireManageGuild(interaction)) {
     await interaction.reply({
       content: 'You need the **Manage Server** permission to use this subcommand.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
     return;
   }
 
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   }
 
   if (sub === 'setchannel') {
@@ -938,7 +945,7 @@ function buildConfigSummaryEmbed(state) {
 
 async function handleRustStatusConfigCommand(state, interaction, sub) {
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   }
 
   if (sub === 'show') {
@@ -1061,7 +1068,7 @@ async function handleRustStatusConfigCommand(state, interaction, sub) {
 
 async function handleRustLookupCommand(state, interaction) {
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   }
 
   if (!state.guildId || interaction.guildId !== state.guildId) {
@@ -1147,7 +1154,7 @@ async function handleInteraction(state, interaction) {
     } else {
       await interaction.reply({
         content: 'An unexpected error occurred while processing the command.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
   }
