@@ -2417,6 +2417,72 @@ button.menu-tab.active {
   color: var(--muted);
 }
 
+.map-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  justify-content: center;
+  text-align: left;
+}
+
+.map-status-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(148, 163, 184, 0.28);
+  border-top-color: rgba(148, 163, 184, 0.9);
+  animation: map-status-spin 1s linear infinite;
+}
+
+.map-status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.map-status-heading {
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+
+.map-status-note {
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.map-status-details-label {
+  margin-top: 4px;
+}
+
+.map-status-details {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.map-status-details li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.map-status-details li strong {
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+
+@keyframes map-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .map-config.hidden { display: none !important; }
 
 .map-config-form {
