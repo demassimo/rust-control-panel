@@ -12,6 +12,36 @@
         window[sharedSearchKey] = '';
       }
 
+      const regionDisplay = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+        ? new Intl.DisplayNames(['en'], { type: 'region' })
+        : null;
+      const countryFallbacks = { UK: 'United Kingdom', EU: 'European Union' };
+
+      function countryNameFromCode(code) {
+        if (!code) return null;
+        const upper = String(code).trim().toUpperCase();
+        if (!upper) return null;
+        if (countryFallbacks[upper]) return countryFallbacks[upper];
+        if (regionDisplay) {
+          try {
+            const label = regionDisplay.of(upper);
+            if (label && label !== upper) return label;
+          } catch {
+            /* ignore */
+          }
+        }
+        return countryFallbacks[upper] || upper;
+      }
+
+      function formatCountryDetail(name, code) {
+        const label = typeof name === 'string' && name.trim().length > 0 ? name.trim() : null;
+        const upper = typeof code === 'string' && code.trim().length > 0 ? code.trim().toUpperCase() : null;
+        if (label && upper) return `${label} (${upper})`;
+        if (label) return label;
+        if (upper) return upper;
+        return null;
+      }
+
       const list = document.createElement('ul');
       list.className = 'player-directory';
       const message = document.createElement('p');
@@ -201,11 +231,28 @@
 
           const right = document.createElement('div');
           right.className = 'server-actions';
-          if (p.country) {
+          const ipCountryCode = p.ip_country_code || p.ipCountryCode || '';
+          const steamCountryCode = p.country || '';
+          const badgeCountryCode = ipCountryCode || steamCountryCode;
+          const badgeCountryName = countryNameFromCode(badgeCountryCode);
+          if (badgeCountryCode) {
             const badge = document.createElement('span');
             badge.className = 'badge';
-            badge.textContent = p.country;
+            badge.textContent = badgeCountryCode;
+            if (badgeCountryName && badgeCountryName !== badgeCountryCode) {
+              badge.title = badgeCountryName;
+            }
             right.appendChild(badge);
+          }
+          if (steamCountryCode && steamCountryCode !== badgeCountryCode) {
+            const steamBadge = document.createElement('span');
+            steamBadge.className = 'badge';
+            steamBadge.textContent = steamCountryCode;
+            const steamName = countryNameFromCode(steamCountryCode);
+            if (steamName && steamName !== steamCountryCode) {
+              steamBadge.title = `Steam: ${steamName}`;
+            }
+            right.appendChild(steamBadge);
           }
           if (p.vac_banned) {
             const badge = document.createElement('span');
@@ -469,6 +516,9 @@
         if (!base.last_port && base.lastPort != null) base.last_port = base.lastPort;
         if (!base.last_ip && base.ip) base.last_ip = base.ip;
         if (!base.last_port && base.port != null) base.last_port = base.port;
+        if (!base.ip_country_code && base.ipCountryCode) base.ip_country_code = base.ipCountryCode;
+        if (!base.ip_country_name && base.ipCountryName) base.ip_country_name = base.ipCountryName;
+        if (!base.ip_country_code && base.ip_country) base.ip_country_code = base.ip_country;
         if (!base.first_seen && base.firstSeen) base.first_seen = base.firstSeen;
         if (!base.last_seen && base.lastSeen) base.last_seen = base.lastSeen;
         if (base.forced_display_name == null && base.forcedDisplayName != null) base.forced_display_name = base.forcedDisplayName;
@@ -530,6 +580,10 @@
         const personaLabel = personaValue && personaValue !== displayName ? personaValue : '';
         const steamid = combined.steamid || '—';
         const country = combined.country || '';
+        const ipCountryCode = combined.ip_country_code || combined.ipCountryCode || '';
+        const ipCountryName = combined.ip_country_name || combined.ipCountryName || countryNameFromCode(ipCountryCode);
+        const steamCountryCode = country || '';
+        const steamCountryName = countryNameFromCode(steamCountryCode);
         const nameBadge = modal.elements.name;
         if (nameBadge) nameBadge.textContent = displayName;
         if (modal.elements.meta) modal.elements.meta.textContent = steamid;
@@ -549,11 +603,25 @@
         }
         if (modal.elements.badges) {
           modal.elements.badges.innerHTML = '';
-          if (country) {
+          const badgeCountryCode = ipCountryCode || steamCountryCode;
+          const badgeCountryName = countryNameFromCode(badgeCountryCode);
+          if (badgeCountryCode) {
             const badge = document.createElement('span');
             badge.className = 'badge country';
-            badge.textContent = country;
+            badge.textContent = badgeCountryCode;
+            if (badgeCountryName && badgeCountryName !== badgeCountryCode) {
+              badge.title = badgeCountryName;
+            }
             modal.elements.badges.appendChild(badge);
+          }
+          if (steamCountryCode && steamCountryCode !== badgeCountryCode) {
+            const steamBadge = document.createElement('span');
+            steamBadge.className = 'badge country steam';
+            steamBadge.textContent = steamCountryCode;
+            if (steamCountryName && steamCountryName !== steamCountryCode) {
+              steamBadge.title = `Steam: ${steamCountryName}`;
+            }
+            modal.elements.badges.appendChild(steamBadge);
           }
           const vac = Number(combined.vac_banned) > 0;
           if (vac) {
@@ -593,7 +661,12 @@
           }
           entries.push(['Steam persona', personaValue || '—']);
           entries.push(['Steam ID', steamid]);
-          entries.push(['Country', country || '—']);
+          const ipCountryDetail = formatCountryDetail(ipCountryName, ipCountryCode);
+          const steamCountryDetail = formatCountryDetail(steamCountryName, steamCountryCode);
+          entries.push(['Country', ipCountryDetail || steamCountryDetail || '—']);
+          if (steamCountryDetail && steamCountryDetail !== ipCountryDetail) {
+            entries.push(['Steam country', steamCountryDetail]);
+          }
           entries.push(['First seen', formatTimestamp(combined.first_seen) || '—']);
           entries.push(['Last seen', formatTimestamp(combined.last_seen) || '—']);
           entries.push(['Last address', combined.last_ip ? `${combined.last_ip}${combined.last_port ? ':' + combined.last_port : ''}` : '—']);
