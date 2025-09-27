@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
+import geoip from 'geoip-lite';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
@@ -37,6 +38,54 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 const MAP_GLOBAL_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'global');
 const MAP_METADATA_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'metadata');
+
+const REGION_DISPLAY = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null;
+
+const COUNTRY_NAME_FALLBACKS = {
+  UK: 'United Kingdom',
+  EU: 'European Union'
+};
+
+function lookupCountryCodeFromIp(ip) {
+  if (typeof ip !== 'string' || !ip) return null;
+  try {
+    const result = geoip.lookup(ip);
+    const code = typeof result?.country === 'string' ? result.country.trim() : '';
+    if (!code) return null;
+    return code.toUpperCase();
+  } catch {
+    return null;
+  }
+}
+
+function countryNameFromCode(code) {
+  if (!code) return null;
+  const upper = String(code).trim().toUpperCase();
+  if (!upper) return null;
+  if (COUNTRY_NAME_FALLBACKS[upper]) return COUNTRY_NAME_FALLBACKS[upper];
+  if (REGION_DISPLAY) {
+    try {
+      const label = REGION_DISPLAY.of(upper);
+      if (label && label !== upper) return label;
+    } catch {
+      // ignore lookup errors
+    }
+  }
+  return COUNTRY_NAME_FALLBACKS[upper] || upper;
+}
+
+function resolveIpCountry(ip) {
+  const code = lookupCountryCodeFromIp(ip);
+  if (!code) {
+    return { code: null, name: null };
+  }
+  return {
+    code,
+    name: countryNameFromCode(code)
+  };
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -898,6 +947,7 @@ function normaliseServerPlayer(row) {
     : (typeof row.forcedDisplayName === 'string' && row.forcedDisplayName ? row.forcedDisplayName : null);
   const rawDisplay = row.display_name || row.displayName || base.persona || base.steamid || '';
   const effectiveName = forced || rawDisplay || '';
+  const ipCountry = resolveIpCountry(ip);
   return {
     server_id: Number.isFinite(serverId) ? serverId : null,
     display_name: effectiveName,
@@ -907,6 +957,8 @@ function normaliseServerPlayer(row) {
     last_seen: toIso(row.last_seen || row.lastSeen),
     last_ip: ip || null,
     last_port: Number.isFinite(portNum) ? portNum : null,
+    ip_country_code: ipCountry.code,
+    ip_country_name: ipCountry.name,
     total_playtime_seconds: totalSeconds,
     total_playtime_minutes: Number.isFinite(totalSeconds) ? Math.floor(totalSeconds / 60) : null,
     ...base

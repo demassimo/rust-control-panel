@@ -76,6 +76,12 @@
       first_seen: player.firstSeen ?? player.first_seen ?? null,
       last_seen: player.lastSeen ?? player.last_seen ?? null,
     };
+    if (player.ip_country_code || player.ipCountryCode) {
+      payload.ip_country_code = player.ip_country_code || player.ipCountryCode;
+    }
+    if (player.ip_country_name || player.ipCountryName) {
+      payload.ip_country_name = player.ip_country_name || player.ipCountryName;
+    }
     return payload;
   }
 
