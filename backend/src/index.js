@@ -2384,14 +2384,9 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
 
     // derive a status + requirements summary for the frontend
     let status = 'ready';
-    const requirements = {};
     if (!mapPayload) {
       if (!info?.size || !info?.seed) {
-        status = 'awaiting_world_details';
-        requirements.world = {
-          sizeMissing: !info?.size,
-          seedMissing: !info?.seed
-        };
+        status = 'awaiting_server_info';
       } else {
         status = 'awaiting_imagery';
       }
@@ -2420,9 +2415,6 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       status,                    // <-- new
       fetchedAt: new Date().toISOString()
     };
-    if (Object.keys(requirements).length > 0) {
-      responsePayload.requirements = requirements;   // <-- new
-    }
 
     res.json(responsePayload);
   } catch (err) {
@@ -2573,8 +2565,15 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
     if (!server) return res.status(404).json({ error: 'not_found' });
     let record = await db.getServerMap(id);
     const info = getCachedServerInfo(id) || {};
+    const normalizedMapKey = typeof mapKey === 'string' && mapKey.trim() ? mapKey.trim() : null;
     const derivedKey = deriveMapKey(info) || null;
-    const targetKey = mapKey || record?.map_key || derivedKey || `custom-${id}`;
+    let targetKey;
+    if (record?.custom && record?.map_key) {
+      targetKey = record.map_key;
+    } else {
+      const baseKey = normalizedMapKey || derivedKey;
+      targetKey = baseKey ? `${baseKey}-server-${id}` : `server-${id}-custom`;
+    }
     if (record) await removeMapImage(record);
     if (record?.map_key && record.map_key !== targetKey) await removeGlobalMapMetadata(record.map_key);
     const filePath = serverMapImageFilePath(id, targetKey, decoded.extension);
@@ -2595,7 +2594,6 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
       image_path: filePath,
       custom: 1
     });
-    await saveGlobalMapMetadata(targetKey, data);
     record = await db.getServerMap(id);
     const map = mapRecordToPayload(id, record, data);
     res.json({ map, updatedAt: new Date().toISOString() });

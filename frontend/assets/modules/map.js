@@ -40,7 +40,7 @@
     setup(ctx){
       ctx.root?.classList.add('module-card','live-map-card');
 
-      const message = document.createElement('p');
+      const message = document.createElement('div');
       message.className = 'module-message hidden';
       ctx.body?.appendChild(message);
 
@@ -48,38 +48,8 @@
       configWrap.className = 'map-config hidden';
       const configIntro = document.createElement('p');
       configIntro.className = 'map-config-intro';
-      configIntro.textContent = 'Enter the world size and seed to generate a live map from RustMaps.';
-      const configForm = document.createElement('form');
-      configForm.className = 'map-config-form';
-      const sizeInput = document.createElement('input');
-      sizeInput.type = 'number';
-      sizeInput.min = '100';
-      sizeInput.placeholder = 'World size';
-      sizeInput.required = true;
-      const seedInput = document.createElement('input');
-      seedInput.type = 'number';
-      seedInput.placeholder = 'Seed';
-      seedInput.required = true;
-      const configActions = document.createElement('div');
-      configActions.className = 'map-config-actions';
-      const configSubmit = document.createElement('button');
-      configSubmit.type = 'submit';
-      configSubmit.className = 'accent small';
-      configSubmit.textContent = 'Fetch map';
-      configActions.appendChild(configSubmit);
-      configForm.appendChild(sizeInput);
-      configForm.appendChild(seedInput);
-      configForm.appendChild(configActions);
-      const configStatus = document.createElement('p');
-      configStatus.className = 'map-config-status hidden';
       configWrap.appendChild(configIntro);
-      configWrap.appendChild(configForm);
-      configWrap.appendChild(configStatus);
       ctx.body?.appendChild(configWrap);
-
-      sizeInput.addEventListener('input', () => hideConfigStatus());
-      seedInput.addEventListener('input', () => hideConfigStatus());
-      configForm.addEventListener('submit', handleConfigSubmit);
 
       const layout = document.createElement('div');
       layout.className = 'map-layout';
@@ -150,7 +120,6 @@
         selectedSolo: null,
         lastUpdated: null,
         pollTimer: null,
-        requirements: null,
         pendingGeneration: false,
         status: null,
         pendingRefresh: null,
@@ -172,18 +141,6 @@
         if (!uploadStatus) return;
         uploadStatus.className = 'notice hidden';
         uploadStatus.textContent = '';
-      }
-
-      function showConfigStatus(content, variant = 'info') {
-        if (!configStatus) return;
-        configStatus.textContent = content;
-        configStatus.className = 'map-config-status ' + (variant === 'error' ? 'error' : variant === 'success' ? 'success' : '');
-      }
-
-      function hideConfigStatus() {
-        if (!configStatus) return;
-        configStatus.textContent = '';
-        configStatus.className = 'map-config-status hidden';
       }
 
       function readFileAsDataURL(file) {
@@ -299,22 +256,16 @@
 
       function updateConfigPanel() {
         if (!configWrap) return;
-        const needsWorld = !!(state.requirements && state.requirements.world);
-        const shouldShow = needsWorld || state.pendingGeneration;
+        const shouldShow = state.pendingGeneration;
         configWrap.classList.toggle('hidden', !shouldShow);
         if (!shouldShow) {
-          hideConfigStatus();
+          configIntro.textContent = '';
           return;
         }
-        if (!sizeInput.value && Number.isFinite(state.serverInfo?.size)) sizeInput.value = state.serverInfo.size;
-        if (!seedInput.value && Number.isFinite(state.serverInfo?.seed)) seedInput.value = state.serverInfo.seed;
-        sizeInput.disabled = state.pendingGeneration;
-        seedInput.disabled = state.pendingGeneration;
-        configSubmit.disabled = state.pendingGeneration;
-        if (needsWorld) {
-          configIntro.textContent = 'Enter the world size and seed to generate a live map from RustMaps.';
-        } else if (state.pendingGeneration) {
+        if (state.status === 'pending') {
           configIntro.textContent = 'RustMaps is generating this map. We’ll refresh automatically.';
+        } else {
+          configIntro.textContent = 'Waiting for RustMaps imagery. We will refresh when it becomes available.';
         }
       }
 
@@ -334,115 +285,176 @@
         }, delay);
       }
 
-      function updateStatusMessage(hasImageOverride) {
-        const meta = getActiveMapMeta();
-        const hasImage = typeof hasImageOverride === 'boolean' ? hasImageOverride : hasMapImage(meta);
-        if (state.status === 'awaiting_world_details') {
-          setMessage('Enter the world size and seed to generate a live map from RustMaps.');
-        } else if (state.status === 'awaiting_upload') {
-          setMessage('Upload your rendered map image to enable the live map.');
-        } else if (state.status === 'rustmaps_not_found' || meta?.notFound) {
-          const wrap = document.createElement('span');
-          wrap.textContent = 'RustMaps has not published imagery for this seed yet. Try again shortly or upload your render below.';
-          setMessage(wrap);
-        } else if (state.status === 'awaiting_imagery') {
-          if (state.pendingGeneration) {
-            setMessage('RustMaps is generating this map. We’ll refresh automatically.');
-          } else {
-            setMessage('Map imagery is still being prepared. Try again shortly.');
-          }
-        } else if (meta?.custom && !hasImage) {
-          setMessage('Upload your rendered map image to enable the live map.');
-        } else if (!meta) {
-          setMessage('Waiting for map metadata…');
-        } else if (!hasImage) {
-          setMessage('Map imagery is still being prepared. Try again shortly.');
-        } else if (!mapReady()) {
-          setMessage('Map metadata is incomplete. Try again shortly.');
-        } else {
-          clearMessage();
+      function describeMapStatus(code) {
+        switch (code) {
+          case 'awaiting_server_info':
+            return 'Awaiting server information';
+          case 'awaiting_upload':
+            return 'Awaiting custom map upload';
+          case 'awaiting_imagery':
+            return 'Awaiting map imagery';
+          case 'rustmaps_not_found':
+            return 'RustMaps imagery unavailable';
+          case 'pending':
+            return 'Generating map imagery';
+          case 'ready':
+            return 'Ready';
+          default:
+            return null;
         }
       }
 
-      async function handleConfigSubmit(ev) {
-        ev.preventDefault();
-        if (!state.serverId) {
-          showConfigStatus('Connect to a server before requesting imagery.', 'error');
-          return;
+      function combineStatusCodes(...codes) {
+        const unique = [];
+        for (const code of codes) {
+          if (!code || typeof code !== 'string') continue;
+          if (!unique.includes(code)) unique.push(code);
         }
-        const size = Number(sizeInput.value);
-        const seed = Number(seedInput.value);
-        if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(seed)) {
-          showConfigStatus('Enter a valid world size and seed.', 'error');
-          return;
+        return unique;
+      }
+
+      function formatDetailValue(value) {
+        if (value == null) return null;
+        if (typeof value === 'number') return value.toLocaleString();
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          return trimmed ? trimmed : null;
         }
-        hideConfigStatus();
-        clearPendingRefresh();
-        sizeInput.disabled = true;
-        seedInput.disabled = true;
-        configSubmit.disabled = true;
-        showConfigStatus('Requesting map from RustMaps…');
-        try {
-          const response = await ctx.api(`/servers/${state.serverId}/live-map/world`, { size, seed }, 'POST');
-          if (response?.info) {
-            state.serverInfo = { ...(state.serverInfo || {}), ...response.info };
+        return String(value);
+      }
+
+      function mapStatusDetails() {
+        const meta = getActiveMapMeta();
+        const info = state.serverInfo || {};
+        const details = [];
+        const mapName = meta?.mapName || info.mapName || info.map;
+        if (mapName) details.push({ label: 'Map', value: mapName });
+        const size = resolveWorldSize();
+        if (size) details.push({ label: 'World size (m)', value: size });
+        const seed = meta?.seed ?? info?.seed;
+        if (seed) details.push({ label: 'Seed', value: seed });
+        const mapKey = meta?.mapKey || info?.mapKey;
+        if (mapKey) details.push({ label: 'Map key', value: mapKey });
+        return details;
+      }
+
+      function showStatusMessage(primary, options = {}) {
+        if (!primary) return;
+        const { spinner = false, details = null, note = null, statusCodes = null } = options;
+        const container = document.createElement('div');
+        container.className = 'map-status';
+        if (spinner) {
+          const spinnerEl = document.createElement('span');
+          spinnerEl.className = 'map-status-spinner';
+          container.appendChild(spinnerEl);
+        }
+        const body = document.createElement('div');
+        body.className = 'map-status-body';
+        const heading = document.createElement('div');
+        heading.className = 'map-status-heading';
+        heading.textContent = primary;
+        body.appendChild(heading);
+        const notes = [];
+        const codes = Array.isArray(statusCodes) ? statusCodes : statusCodes ? [statusCodes] : [];
+        for (const code of codes) {
+          const label = describeMapStatus(code);
+          if (label) notes.push(`Status: ${label}`);
+        }
+        if (note) {
+          if (Array.isArray(note)) {
+            for (const entry of note) {
+              if (entry) notes.push(entry);
+            }
           } else {
-            state.serverInfo = { ...(state.serverInfo || {}), size, seed };
+            notes.push(note);
           }
-          state.mapMeta = response?.map || null;
-          state.mapMetaServerId = state.serverId;
-          state.projectionMode = null;
-          state.horizontalAxis = null;
-          cancelMapImageRequest();
-          clearMapImage();
-          state.status = response?.status || null;
-          state.requirements = response?.requirements || null;
-          state.lastUpdated = response?.fetchedAt || new Date().toISOString();
-          const activeMeta = getActiveMapMeta();
-          const hasImage = hasMapImage(activeMeta);
-          const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
-          state.pendingGeneration = state.status === 'pending' || awaitingImagery;
-          if (state.pendingGeneration) {
-            const text = state.status === 'pending'
-              ? 'RustMaps is generating this map. We’ll check again shortly.'
-              : 'Map metadata saved. Waiting for imagery from RustMaps…';
-            showConfigStatus(text, 'info');
-            schedulePendingRefresh();
-          } else {
-            hideConfigStatus();
+        }
+        for (const entry of notes) {
+          const noteLine = document.createElement('div');
+          noteLine.className = 'map-status-note';
+          noteLine.textContent = entry;
+          body.appendChild(noteLine);
+        }
+        const detailList = Array.isArray(details) ? details.filter((item) => item && item.label && item.value != null) : [];
+        if (detailList.length > 0) {
+          const list = document.createElement('ul');
+          list.className = 'map-status-details';
+          for (const item of detailList) {
+            const value = formatDetailValue(item.value);
+            if (value == null) continue;
+            const row = document.createElement('li');
+            const strong = document.createElement('strong');
+            strong.textContent = value;
+            row.appendChild(strong);
+            row.appendChild(document.createTextNode(' ' + item.label));
+            list.appendChild(row);
           }
-          if (!state.pendingGeneration) {
-            sizeInput.disabled = false;
-            seedInput.disabled = false;
-            configSubmit.disabled = false;
+          if (list.childNodes.length > 0) {
+            const detailHeading = document.createElement('div');
+            detailHeading.className = 'map-status-note map-status-details-label';
+            detailHeading.textContent = 'Detected map details';
+            body.appendChild(detailHeading);
+            body.appendChild(list);
           }
-          updateConfigPanel();
-          updateStatusMessage(hasImage);
-          renderAll();
-          if (!state.pendingGeneration) clearPendingRefresh();
-        } catch (err) {
-          state.pendingGeneration = false;
-          const code = ctx.errorCode?.(err);
-          if (code === 'unauthorized') {
-            ctx.handleUnauthorized?.();
-            return;
-          }
-          if (code === 'rustmaps_api_key_missing') {
-            showConfigStatus('Add your RustMaps API key in Settings to request imagery.', 'error');
-          } else if (code === 'rustmaps_unauthorized') {
-            showConfigStatus('RustMaps rejected the configured API key. Update it in Settings.', 'error');
-          } else if (code === 'rustmaps_not_found') {
-            showConfigStatus('RustMaps has not published imagery for this seed yet. Try again shortly.', 'error');
-          } else if (code === 'invalid_world_config') {
-            showConfigStatus('Enter a valid world size and seed.', 'error');
-          } else {
-            showConfigStatus(ctx.describeError?.(err) || 'Unable to request imagery from RustMaps.', 'error');
-          }
-          sizeInput.disabled = false;
-          seedInput.disabled = false;
-          configSubmit.disabled = false;
-          updateConfigPanel();
-          renderAll();
+        }
+        container.appendChild(body);
+        setMessage(container);
+      }
+
+      function updateStatusMessage(hasImageOverride) {
+        const meta = getActiveMapMeta();
+        const hasImage = typeof hasImageOverride === 'boolean' ? hasImageOverride : hasMapImage(meta);
+        const details = mapStatusDetails();
+        if (state.status === 'awaiting_server_info') {
+          showStatusMessage('Waiting for world details from the server…', {
+            spinner: true,
+            details,
+            note: 'We’ll try again automatically.',
+            statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
+          });
+        } else if (state.status === 'awaiting_upload') {
+          showStatusMessage('Upload your rendered map image to enable the live map.', {
+            details,
+            statusCodes: combineStatusCodes(state.status)
+          });
+        } else if (state.status === 'rustmaps_not_found' || meta?.notFound) {
+          showStatusMessage('RustMaps has not published imagery for this seed yet.', {
+            details,
+            note: 'Try again shortly or upload your render below.',
+            statusCodes: combineStatusCodes(state.status || (meta?.notFound ? 'rustmaps_not_found' : null))
+          });
+        } else if (state.status === 'awaiting_imagery') {
+          const generating = state.pendingGeneration;
+          showStatusMessage(generating ? 'RustMaps is generating this map…' : 'Waiting for RustMaps imagery…', {
+            spinner: true,
+            details,
+            note: generating ? 'We’ll refresh automatically.' : 'We’ll check back periodically.',
+            statusCodes: combineStatusCodes(state.status, generating ? 'pending' : null)
+          });
+        } else if (meta?.custom && !hasImage) {
+          showStatusMessage('Upload your rendered map image to enable the live map.', {
+            details,
+            statusCodes: combineStatusCodes(state.status, 'awaiting_upload')
+          });
+        } else if (!meta) {
+          showStatusMessage('Waiting for map metadata…', {
+            spinner: true,
+            details,
+            statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
+          });
+        } else if (!hasImage) {
+          showStatusMessage('Map imagery is still being prepared…', {
+            spinner: true,
+            details,
+            statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
+          });
+        } else if (!mapReady()) {
+          showStatusMessage('Map metadata is incomplete. Try again shortly.', {
+            details,
+            statusCodes: combineStatusCodes(state.status)
+          });
+        } else {
+          clearMessage();
         }
       }
 
@@ -1082,7 +1094,13 @@
       async function refreshData(reason) {
         if (!state.serverId) return;
         hideUploadNotice();
-        if (reason !== 'poll' && reason !== 'map-pending') setMessage('Loading live map data…');
+        if (reason !== 'poll' && reason !== 'map-pending') {
+          showStatusMessage('Loading live map data…', {
+            spinner: true,
+            details: mapStatusDetails(),
+            statusCodes: combineStatusCodes(state.status)
+          });
+        }
         try {
           const data = await ctx.api(`/servers/${state.serverId}/live-map`);
           state.players = Array.isArray(data?.players) ? data.players : [];
@@ -1129,14 +1147,13 @@
           state.serverInfo = data?.info || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
           state.status = data?.status || null;
-          state.requirements = data?.requirements || null;
           updateProjectionMode();
           broadcastPlayers();
           const activeMeta = getActiveMapMeta();
           const hasImage = hasMapImage(activeMeta);
           const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
 
-          if (state.status === 'awaiting_world_details') {
+          if (state.status === 'awaiting_server_info') {
             // Need size/seed from user; don't poll for imagery yet
             state.pendingGeneration = false;
             clearPendingRefresh();
@@ -1156,7 +1173,6 @@
           renderAll();
         } catch (err) {
           state.status = null;
-          state.requirements = null;
           if (state.pendingGeneration) {
             state.pendingGeneration = false;
             clearPendingRefresh();
@@ -1197,7 +1213,6 @@
         clearPendingRefresh();
         state.pendingGeneration = false;
         state.pendingRefresh = null;
-        state.requirements = null;
         state.status = null;
         state.players = [];
         state.mapMeta = null;
@@ -1209,7 +1224,6 @@
         overlay.innerHTML = '';
         cancelMapImageRequest();
         clearMapImage();
-        hideConfigStatus();
         updateConfigPanel();
         clearSelection();
         refreshData('server-connected');
@@ -1228,7 +1242,6 @@
           state.lastUpdated = null;
           state.pendingGeneration = false;
           state.pendingRefresh = null;
-          state.requirements = null;
           state.status = null;
           state.projectionMode = null;
           state.horizontalAxis = null;
@@ -1242,7 +1255,6 @@
           updateUploadSection();
           updateConfigPanel();
           hideUploadNotice();
-          hideConfigStatus();
           broadcastPlayers();
           setMessage('Connect to a server to load the live map.');
         }
@@ -1259,7 +1271,6 @@
         state.lastUpdated = null;
         state.pendingGeneration = false;
         state.pendingRefresh = null;
-        state.requirements = null;
         state.status = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
@@ -1273,7 +1284,6 @@
         updateUploadSection();
         updateConfigPanel();
         hideUploadNotice();
-        hideConfigStatus();
         broadcastPlayers();
         setMessage('Sign in and connect to a server to view the live map.');
       });
