@@ -548,7 +548,7 @@
         ];
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
-          if (numeric != null) return numeric;
+          if (numeric != null && numeric !== 0) return numeric;
         }
         return null;
       }
@@ -562,12 +562,39 @@
         return '';
       }
 
-      function extractFirstNumber(text) {
-        if (!text) return null;
-        const match = String(text).match(/-?\d+/);
-        if (!match) return null;
-        const numeric = Number(match[0]);
-        return Number.isFinite(numeric) ? numeric : null;
+      const WORLD_SIZE_PATTERNS = [
+        /\bworld\s*size\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
+        /\bmap\s*size\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
+        /\bserver\.worldsize\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
+        /\bworldsize\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
+        /\bsize\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i
+      ];
+
+      const WORLD_SEED_PATTERNS = [
+        /\bworld\s*seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i,
+        /\bmap\s*seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i,
+        /\bserver\.seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i,
+        /\bseed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i
+      ];
+
+      function extractWorldDetailNumber(text, key) {
+        const trimmed = typeof text === 'string' ? text.trim() : '';
+        if (!trimmed) return null;
+        const normalized = String(key || '').toLowerCase();
+        const patterns = normalized === 'size' ? WORLD_SIZE_PATTERNS
+          : normalized === 'seed' ? WORLD_SEED_PATTERNS
+          : [];
+        for (const pattern of patterns) {
+          const match = trimmed.match(pattern);
+          if (!match) continue;
+          const numeric = Number(match[1]);
+          if (Number.isFinite(numeric)) return numeric;
+        }
+        if (/^-?\d+$/.test(trimmed)) {
+          const numeric = Number(trimmed);
+          return Number.isFinite(numeric) ? numeric : null;
+        }
+        return null;
       }
 
       async function ensureWorldDetails(reason = 'unknown') {
@@ -587,22 +614,36 @@
           updateStatusMessage();
           renderSummary();
         };
-        const requestDetail = async (command, key) => {
-          try {
-            const response = await ctx.runCommand(command);
-            const text = normalizeCommandReply(response).trim();
-            const numeric = extractFirstNumber(text);
-            if (numeric == null) return;
-            if (key === 'size') infoState.size = numeric;
-            else if (key === 'seed') infoState.seed = numeric;
-            handleResult();
-          } catch (err) {
-            ctx.log?.(`Failed to query ${key} via ${command} (${reason}): ${err?.message || err}`);
+        const requestDetail = async (commands, key) => {
+          const list = Array.isArray(commands) ? commands : [commands];
+          for (const command of list) {
+            if (!command) continue;
+            try {
+              const response = await ctx.runCommand(command);
+              const text = normalizeCommandReply(response).trim();
+              const numeric = extractWorldDetailNumber(text, key);
+              if (numeric == null) continue;
+              if (key === 'size') {
+                if (numeric > 0) {
+                  infoState.size = numeric;
+                  handleResult();
+                  return;
+                }
+              } else if (key === 'seed') {
+                if (numeric !== 0) {
+                  infoState.seed = numeric;
+                  handleResult();
+                  return;
+                }
+              }
+            } catch (err) {
+              ctx.log?.(`Failed to query ${key} via ${command} (${reason}): ${err?.message || err}`);
+            }
           }
         };
         try {
-          if (needsSize) await requestDetail('server.worldsize', 'size');
-          if (needsSeed) await requestDetail('server.seed', 'seed');
+          if (needsSize) await requestDetail(['server.worldsize', 'serverinfo'], 'size');
+          if (needsSeed) await requestDetail(['server.seed', 'serverinfo'], 'seed');
         } finally {
           infoState.pending = false;
         }
