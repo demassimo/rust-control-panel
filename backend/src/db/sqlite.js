@@ -118,6 +118,7 @@ function createApi(dbh, dialect) {
         guild_id TEXT,
         channel_id TEXT,
         status_message_id TEXT,
+        config_json TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
@@ -126,6 +127,9 @@ function createApi(dbh, dialect) {
       const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
       if (!discordCols.some((c) => c.name === 'status_message_id')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN status_message_id TEXT");
+      }
+      if (!discordCols.some((c) => c.name === 'config_json')) {
+        await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN config_json TEXT");
       }
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
@@ -510,10 +514,10 @@ function createApi(dbh, dialect) {
         [serverId]
       );
     },
-    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null }){
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null,config_json=null }){
       await dbh.run(
-        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,status_message_id,created_at,updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, status_message_id=excluded.status_message_id, updated_at=excluded.updated_at",
-        [serverId, bot_token, guild_id, channel_id, status_message_id]
+        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,status_message_id,config_json,created_at,updated_at) VALUES(?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, status_message_id=excluded.status_message_id, config_json=excluded.config_json, updated_at=excluded.updated_at",
+        [serverId, bot_token, guild_id, channel_id, status_message_id, config_json]
       );
     },
     async deleteServerDiscordIntegration(serverId){

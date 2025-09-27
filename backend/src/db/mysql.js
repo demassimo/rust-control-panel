@@ -142,11 +142,13 @@ function createApi(pool, dialect) {
         guild_id VARCHAR(64) NULL,
         channel_id VARCHAR(64) NULL,
         status_message_id VARCHAR(64) NULL,
+        config_json TEXT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_discord FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
       await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN status_message_id VARCHAR(64) NULL');
+      await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN config_json TEXT NULL');
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
@@ -463,16 +465,17 @@ function createApi(pool, dialect) {
       );
       return rows?.[0] ?? null;
     },
-    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null }){
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null,config_json=null }){
       await exec(`
-        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id, status_message_id)
-        VALUES(?,?,?,?,?)
+        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id, status_message_id, config_json)
+        VALUES(?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
           bot_token=VALUES(bot_token),
           guild_id=VALUES(guild_id),
           channel_id=VALUES(channel_id),
-          status_message_id=VALUES(status_message_id)
-      `,[serverId, bot_token, guild_id, channel_id, status_message_id]);
+          status_message_id=VALUES(status_message_id),
+          config_json=VALUES(config_json)
+      `,[serverId, bot_token, guild_id, channel_id, status_message_id, config_json]);
     },
     async deleteServerDiscordIntegration(serverId){
       const result = await exec('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
