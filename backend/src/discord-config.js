@@ -54,6 +54,26 @@ export const PRESENCE_TEMPLATE_TOKENS = Object.freeze([
 
 const COLOR_HEX_REGEX = /^#?([0-9a-f]{6})$/i;
 
+const normalisingSources = new WeakSet();
+
+function defaultNormalisedConfig() {
+  return {
+    presenceTemplate: sanitizePresenceTemplate(DEFAULT_DISCORD_BOT_CONFIG.presenceTemplate),
+    presenceStatuses: normalizePresenceStatuses(DEFAULT_DISCORD_BOT_CONFIG.presenceStatuses),
+    colors: normalizeColors(DEFAULT_DISCORD_BOT_CONFIG.colors),
+    fields: normalizeFields(DEFAULT_DISCORD_BOT_CONFIG.fields)
+  };
+}
+
+function cloneNormalisedConfig(normalised) {
+  return {
+    presenceTemplate: normalised.presenceTemplate,
+    presenceStatuses: { ...normalised.presenceStatuses },
+    colors: { ...normalised.colors },
+    fields: { ...normalised.fields }
+  };
+}
+
 export function parseColorString(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const clamped = Math.max(0, Math.min(0xffffff, Math.floor(value)));
@@ -120,23 +140,33 @@ function normalizeColors(colors = {}) {
 }
 
 export function normaliseDiscordBotConfig(value = {}) {
-  const source = typeof value === 'object' && value != null ? value : {};
-  return {
-    presenceTemplate: sanitizePresenceTemplate(source.presenceTemplate ?? source.presence_template),
-    presenceStatuses: normalizePresenceStatuses(source.presenceStatuses ?? source.presence_statuses),
-    colors: normalizeColors(source.colors),
-    fields: normalizeFields(source.fields)
-  };
+  const hasSource = typeof value === 'object' && value != null;
+  const source = hasSource ? value : {};
+
+  if (!hasSource) {
+    return defaultNormalisedConfig();
+  }
+
+  if (normalisingSources.has(source)) {
+    return defaultNormalisedConfig();
+  }
+
+  normalisingSources.add(source);
+  try {
+    return {
+      presenceTemplate: sanitizePresenceTemplate(source.presenceTemplate ?? source.presence_template),
+      presenceStatuses: normalizePresenceStatuses(source.presenceStatuses ?? source.presence_statuses),
+      colors: normalizeColors(source.colors),
+      fields: normalizeFields(source.fields)
+    };
+  } finally {
+    normalisingSources.delete(source);
+  }
 }
 
 export function cloneDiscordBotConfig(config = DEFAULT_DISCORD_BOT_CONFIG) {
   const normalised = normaliseDiscordBotConfig(config);
-  return {
-    presenceTemplate: normalised.presenceTemplate,
-    presenceStatuses: { ...normalised.presenceStatuses },
-    colors: { ...normalised.colors },
-    fields: { ...normalised.fields }
-  };
+  return cloneNormalisedConfig(normalised);
 }
 
 export function parseDiscordBotConfig(raw) {
