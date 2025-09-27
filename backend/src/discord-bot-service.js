@@ -577,7 +577,7 @@ async function updateBot(state, integration) {
     try {
       await state.client.user.setPresence({
         status: presence.status,
-        activities: [{ name: presence.activity, type: ActivityType.Playing }]
+        activities: [{ name: presence.activity, type: ActivityType.Watching }]
       });
       state.lastPresenceKey = presenceKey;
     } catch (err) {
