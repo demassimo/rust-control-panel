@@ -327,14 +327,14 @@
         const meta = getActiveMapMeta();
         const info = state.serverInfo || {};
         const details = [];
-        const mapName = meta?.mapName || info.mapName || info.map;
-        if (mapName) details.push({ label: 'Map', value: mapName });
         const size = resolveWorldSize();
-        if (size) details.push({ label: 'World size (m)', value: size });
+        if (size != null) details.push({ label: 'World size (m)', value: size });
         const seed = meta?.seed ?? info?.seed;
-        if (seed) details.push({ label: 'Seed', value: seed });
+        if (seed != null) details.push({ label: 'Seed', value: seed });
         const mapKey = meta?.mapKey || info?.mapKey;
-        if (mapKey) details.push({ label: 'Map key', value: mapKey });
+        if (mapKey != null) details.push({ label: 'Map key', value: mapKey });
+        const mapName = meta?.mapName || info.mapName || info.map;
+        if (mapName && details.length > 0) details.push({ label: 'Map', value: mapName });
         return details;
       }
 
