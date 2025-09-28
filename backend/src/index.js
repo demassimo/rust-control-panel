@@ -1237,16 +1237,20 @@ async function fetchSizeAndSeedViaRcon(server) {
 
   try {
     const res = await sendRconCommand(server, 'server.worldsize');
-    const m = String(res?.Message || '').match(/worldsize\s*[:=]\s*(\d+)/i);
-    if (m) out.size = parseInt(m[1], 10);
+    const text = String(res?.Message || res?.message || '');
+    const match = text.match(/worldsize\s*[:=]\s*([\d,_'\s]+)/i);
+    const parsed = match ? extractInteger(match[1]) : extractInteger(text);
+    if (parsed != null && parsed > 0) out.size = parsed;
   } catch {
     // ignore
   }
 
   try {
     const res = await sendRconCommand(server, 'server.seed');
-    const m = String(res?.Message || '').match(/seed\s*[:=]\s*(\d+)/i);
-    if (m) out.seed = parseInt(m[1], 10);
+    const text = String(res?.Message || res?.message || '');
+    const match = text.match(/seed\s*[:=]\s*([-\d,_'\s]+)/i);
+    const parsed = match ? extractInteger(match[1]) : extractInteger(text);
+    if (parsed != null) out.seed = parsed;
   } catch {
     // ignore
   }
