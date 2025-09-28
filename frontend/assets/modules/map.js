@@ -40,10 +40,6 @@
     setup(ctx){
       ctx.root?.classList.add('module-card','live-map-card');
 
-      const message = document.createElement('div');
-      message.className = 'module-message hidden';
-      ctx.body?.appendChild(message);
-
       const configWrap = document.createElement('div');
       configWrap.className = 'map-config hidden';
       const configIntro = document.createElement('p');
@@ -62,8 +58,11 @@
       mapImage.loading = 'lazy';
       const overlay = document.createElement('div');
       overlay.className = 'map-overlay';
+      const message = document.createElement('div');
+      message.className = 'map-placeholder';
       mapView.appendChild(mapImage);
       mapView.appendChild(overlay);
+      mapView.appendChild(message);
 
       const sidebar = document.createElement('div');
       sidebar.className = 'map-sidebar';
@@ -163,18 +162,19 @@
         message.innerHTML = '';
         if (content instanceof Node) {
           message.appendChild(content);
-        } else if (typeof content === 'string') {
-          message.textContent = content;
         } else if (content != null) {
-          message.textContent = String(content);
+          const paragraph = document.createElement('p');
+          paragraph.className = 'map-placeholder-text';
+          paragraph.textContent = typeof content === 'string' ? content : String(content);
+          message.appendChild(paragraph);
         }
-        message.classList.remove('hidden');
+        mapView.classList.add('map-view-has-message');
       }
 
       function clearMessage() {
         if (!message) return;
         message.innerHTML = '';
-        message.classList.add('hidden');
+        mapView.classList.remove('map-view-has-message');
       }
 
       function stopPolling() {
@@ -321,10 +321,19 @@
 
       function formatDetailValue(value) {
         if (value == null) return null;
-        if (typeof value === 'number') return value.toLocaleString();
+        if (typeof value === 'number') {
+          if (!Number.isFinite(value)) return null;
+          return `${value}`;
+        }
         if (typeof value === 'string') {
           const trimmed = value.trim();
-          return trimmed ? trimmed : null;
+          if (!trimmed) return null;
+          const normalised = trimmed.replace(/[\s,]/g, '');
+          if (/^-?\d+(?:\.\d+)?$/.test(normalised)) {
+            const numeric = Number(normalised);
+            if (Number.isFinite(numeric)) return `${numeric}`;
+          }
+          return trimmed;
         }
         return String(value);
       }
@@ -516,7 +525,14 @@
       }
 
       function toNumber(value) {
-        const num = Number(value);
+        if (value == null) return null;
+        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        const text = String(value).trim();
+        if (!text) return null;
+        const normalised = text.replace(/[_\s,]/g, '');
+        if (!normalised) return null;
+        const num = Number(normalised);
         return Number.isFinite(num) ? num : null;
       }
 
@@ -563,18 +579,18 @@
       }
 
       const WORLD_SIZE_PATTERNS = [
-        /\bworld\s*size\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
-        /\bmap\s*size\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
-        /\bserver\.worldsize\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
-        /\bworldsize\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i,
-        /\bsize\s*(?:[:=]\s*|is\s+)?["']?(\d{3,})/i
+        /\bworld\s*size\s*(?:[:=]\s*|is\s+)?["']?(\d[\d_,\s]*)/i,
+        /\bmap\s*size\s*(?:[:=]\s*|is\s+)?["']?(\d[\d_,\s]*)/i,
+        /\bserver\.worldsize\s*(?:[:=]\s*|is\s+)?["']?(\d[\d_,\s]*)/i,
+        /\bworldsize\s*(?:[:=]\s*|is\s+)?["']?(\d[\d_,\s]*)/i,
+        /\bsize\s*(?:[:=]\s*|is\s+)?["']?(\d[\d_,\s]*)/i
       ];
 
       const WORLD_SEED_PATTERNS = [
-        /\bworld\s*seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i,
-        /\bmap\s*seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i,
-        /\bserver\.seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i,
-        /\bseed\s*(?:[:=]\s*|is\s+)?["']?(-?\d+)/i
+        /\bworld\s*seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d[\d_,\s]*)/i,
+        /\bmap\s*seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d[\d_,\s]*)/i,
+        /\bserver\.seed\s*(?:[:=]\s*|is\s+)?["']?(-?\d[\d_,\s]*)/i,
+        /\bseed\s*(?:[:=]\s*|is\s+)?["']?(-?\d[\d_,\s]*)/i
       ];
 
       function extractWorldDetailNumber(text, key) {
@@ -587,12 +603,12 @@
         for (const pattern of patterns) {
           const match = trimmed.match(pattern);
           if (!match) continue;
-          const numeric = Number(match[1]);
-          if (Number.isFinite(numeric)) return numeric;
+          const numeric = toNumber(match[1]);
+          if (numeric != null) return numeric;
         }
-        if (/^-?\d+$/.test(trimmed)) {
-          const numeric = Number(trimmed);
-          return Number.isFinite(numeric) ? numeric : null;
+        const numericValue = toNumber(trimmed);
+        if (numericValue != null) {
+          return numericValue;
         }
         return null;
       }
