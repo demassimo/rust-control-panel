@@ -1516,8 +1516,8 @@ function mapRecordToPayload(serverId, record, metadataOverride = null) {
 }
 
 function deriveMapKey(info = {}, metadata = null) {
-  const rawSize = Number(metadata?.size ?? info.size);
-  const rawSeed = Number(metadata?.seed ?? info.seed);
+  const rawSize = extractInteger(metadata?.size ?? info.size);
+  const rawSeed = extractInteger(metadata?.seed ?? info.seed);
   const saveVersion = metadata?.saveVersion || null;
   if (Number.isFinite(rawSeed) && Number.isFinite(rawSize)) {
     let key = `${rawSeed}_${rawSize}`;
