@@ -1506,11 +1506,12 @@ function mapRecordToPayload(serverId, record, metadataOverride = null) {
     cachedAt: cachedAt || updatedAt || null,
     custom: !!record.custom
   };
+  const imagePath = `/servers/${serverId}/map-image?v=${version}`;
   if (record.image_path) {
-    payload.imageUrl = `/api/servers/${serverId}/map-image?v=${version}`;
+    payload.imageUrl = imagePath;
     payload.localImage = true;
   } else if (hasRemote) {
-    payload.imageUrl = `/api/servers/${serverId}/map-image?v=${version}`;
+    payload.imageUrl = imagePath;
     payload.remoteImage = true;
   } else {
     payload.imageUrl = null;
