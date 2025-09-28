@@ -3,6 +3,7 @@
 
   const COLOR_PALETTE = ['#f97316','#22d3ee','#a855f7','#84cc16','#ef4444','#facc15','#14b8a6','#e11d48','#3b82f6','#8b5cf6','#10b981','#fb7185'];
   const POLL_INTERVAL = 20000;
+  const WORLD_SYNC_THROTTLE = 15000;
 
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
@@ -128,7 +129,13 @@
           seed: null,
           size: null,
           pending: false,
-          lastAttempt: 0
+          lastAttempt: 0,
+          lastSyncAt: 0,
+          lastSyncKey: null,
+          lastSyncStatus: null,
+          reportedKey: null,
+          syncing: false,
+          syncError: null
         }
       };
 
@@ -536,6 +543,12 @@
         return Number.isFinite(num) ? num : null;
       }
 
+      function worldDetailKey(size, seed) {
+        if (!Number.isFinite(size) || size <= 0) return null;
+        if (!Number.isFinite(seed)) return null;
+        return `${seed}_${size}`;
+      }
+
       function resolveWorldSize() {
         const meta = getActiveMapMeta();
         const candidates = [
@@ -567,6 +580,69 @@
           if (numeric != null && numeric !== 0) return numeric;
         }
         return null;
+      }
+
+      async function syncWorldDetailsWithServer({ size, seed, key, reason }) {
+        if (!state.serverId || typeof ctx.api !== 'function') return;
+        const infoState = state.worldDetails;
+        if (!infoState) return;
+        infoState.syncing = true;
+        infoState.lastSyncKey = key;
+        infoState.lastSyncAt = Date.now();
+        infoState.lastSyncStatus = 'pending';
+        try {
+          const result = await ctx.api(`/servers/${state.serverId}/live-map/world`, { size, seed }, 'POST');
+          infoState.lastSyncStatus = 'success';
+          infoState.reportedKey = key;
+          infoState.syncError = null;
+          const pendingError = result?.error === 'rustmaps_generation_pending';
+          const nextStatus = result?.status
+            || (pendingError ? 'pending' : null);
+          if (result?.info) {
+            state.serverInfo = result.info;
+          }
+          if (result?.map) {
+            state.mapMeta = result.map;
+            state.mapMetaServerId = state.serverId;
+          }
+          if (nextStatus) {
+            state.status = nextStatus;
+          }
+          const hasImage = hasMapImage(result?.map || getActiveMapMeta());
+          if (nextStatus === 'pending' || nextStatus === 'awaiting_imagery' || pendingError || !hasImage) {
+            schedulePendingRefresh();
+            state.pendingGeneration = true;
+          }
+        } catch (err) {
+          const code = ctx.errorCode?.(err) || err?.message || 'error';
+          infoState.lastSyncStatus = code;
+          infoState.syncError = code;
+          ctx.log?.(`Failed to sync world details (${reason}): ${err?.message || err}`);
+        } finally {
+          infoState.syncing = false;
+          updateUploadSection();
+          updateConfigPanel();
+          updateStatusMessage();
+          renderSummary();
+          renderAll();
+        }
+      }
+
+      async function maybeSubmitWorldDetails(reason = 'auto') {
+        if (!state.serverId || typeof ctx.api !== 'function') return;
+        const infoState = state.worldDetails;
+        if (!infoState) return;
+        const size = toNumber(infoState.size);
+        const seed = toNumber(infoState.seed);
+        if (!Number.isFinite(size) || size <= 0) return;
+        if (!Number.isFinite(seed) || seed === 0) return;
+        const key = worldDetailKey(size, seed);
+        if (!key) return;
+        if (infoState.syncing) return;
+        if (infoState.lastSyncKey === key && infoState.lastSyncStatus === 'success') return;
+        const now = Date.now();
+        if (infoState.lastSyncKey === key && infoState.lastSyncAt && now - infoState.lastSyncAt < WORLD_SYNC_THROTTLE) return;
+        await syncWorldDetailsWithServer({ size, seed, key, reason });
       }
 
       function normalizeCommandReply(reply) {
@@ -629,6 +705,7 @@
         const handleResult = () => {
           updateStatusMessage();
           renderSummary();
+          maybeSubmitWorldDetails('rcon').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
         };
         const requestDetail = async (commands, key) => {
           const list = Array.isArray(commands) ? commands : [commands];
@@ -641,13 +718,35 @@
               if (numeric == null) continue;
               if (key === 'size') {
                 if (numeric > 0) {
-                  infoState.size = numeric;
+                  const previous = toNumber(infoState.size);
+                  if (previous !== numeric) {
+                    infoState.size = numeric;
+                    infoState.syncError = null;
+                    const candidateSeed = toNumber(infoState.seed);
+                    const nextKey = worldDetailKey(numeric, candidateSeed);
+                    if (nextKey && infoState.reportedKey && infoState.reportedKey !== nextKey) {
+                      infoState.reportedKey = null;
+                      infoState.lastSyncStatus = null;
+                      infoState.lastSyncKey = null;
+                    }
+                  }
                   handleResult();
                   return;
                 }
               } else if (key === 'seed') {
                 if (numeric !== 0) {
-                  infoState.seed = numeric;
+                  const previous = toNumber(infoState.seed);
+                  if (previous !== numeric) {
+                    infoState.seed = numeric;
+                    infoState.syncError = null;
+                    const candidateSize = toNumber(infoState.size);
+                    const nextKey = worldDetailKey(candidateSize, numeric);
+                    if (nextKey && infoState.reportedKey && infoState.reportedKey !== nextKey) {
+                      infoState.reportedKey = null;
+                      infoState.lastSyncStatus = null;
+                      infoState.lastSyncKey = null;
+                    }
+                  }
                   handleResult();
                   return;
                 }
@@ -1310,7 +1409,9 @@
           updateUploadSection();
           updateStatusMessage(hasImage);
           renderAll();
-          ensureWorldDetails('refresh').catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
+          ensureWorldDetails('refresh')
+            .catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
+          maybeSubmitWorldDetails('refresh').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
         } catch (err) {
           state.status = null;
           if (state.pendingGeneration) {
@@ -1366,6 +1467,12 @@
           state.worldDetails.size = null;
           state.worldDetails.pending = false;
           state.worldDetails.lastAttempt = 0;
+          state.worldDetails.lastSyncAt = 0;
+          state.worldDetails.lastSyncKey = null;
+          state.worldDetails.lastSyncStatus = null;
+          state.worldDetails.reportedKey = null;
+          state.worldDetails.syncing = false;
+          state.worldDetails.syncError = null;
         }
         overlay.innerHTML = '';
         cancelMapImageRequest();
@@ -1374,7 +1481,11 @@
         clearSelection();
         refreshData('server-connected');
         schedulePolling();
-        ensureWorldDetails('server-connected').catch((err) => ctx.log?.('World detail query failed: ' + (err?.message || err)));
+        ensureWorldDetails('server-connected')
+          .catch((err) => ctx.log?.('World detail query failed: ' + (err?.message || err)))
+          .finally(() => {
+            maybeSubmitWorldDetails('server-connected').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
+          });
       });
 
       const offDisconnect = ctx.on?.('server:disconnected', ({ serverId }) => {
@@ -1397,6 +1508,12 @@
             state.worldDetails.size = null;
             state.worldDetails.pending = false;
             state.worldDetails.lastAttempt = 0;
+            state.worldDetails.lastSyncAt = 0;
+            state.worldDetails.lastSyncKey = null;
+            state.worldDetails.lastSyncStatus = null;
+            state.worldDetails.reportedKey = null;
+            state.worldDetails.syncing = false;
+            state.worldDetails.syncError = null;
           }
           clearSelection();
           overlay.innerHTML = '';
@@ -1432,6 +1549,12 @@
           state.worldDetails.size = null;
           state.worldDetails.pending = false;
           state.worldDetails.lastAttempt = 0;
+          state.worldDetails.lastSyncAt = 0;
+          state.worldDetails.lastSyncKey = null;
+          state.worldDetails.lastSyncStatus = null;
+          state.worldDetails.reportedKey = null;
+          state.worldDetails.syncing = false;
+          state.worldDetails.syncError = null;
         }
         clearSelection();
         overlay.innerHTML = '';
