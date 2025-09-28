@@ -14,7 +14,14 @@ function ensureApiKey(apiKey) {
 }
 
 function toInt(value) {
-  const num = Number(value);
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === 'bigint') return Number(value);
+  const text = String(value).trim();
+  if (!text) return null;
+  const normalised = text.replace(/[_\s,]/g, '');
+  if (!normalised) return null;
+  const num = Number(normalised);
   return Number.isFinite(num) ? Math.trunc(num) : null;
 }
 
