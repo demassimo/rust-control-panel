@@ -428,25 +428,30 @@
         const meta = getActiveMapMeta();
         const hasImage = typeof hasImageOverride === 'boolean' ? hasImageOverride : hasMapImage(meta);
         const details = mapStatusDetails();
-        if (state.status === 'awaiting_server_info') {
+        const awaitingImagery = state.status === 'awaiting_imagery';
+        const awaitingUpload = state.status === 'awaiting_upload';
+        const awaitingServerInfo = state.status === 'awaiting_server_info';
+        const rustmapsMissing = state.status === 'rustmaps_not_found' || meta?.notFound;
+
+        if (awaitingServerInfo) {
           showStatusMessage('Waiting for world details from the server…', {
             spinner: true,
             details,
             note: 'We’ll try again automatically.',
             statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
           });
-        } else if (state.status === 'awaiting_upload') {
+        } else if (awaitingUpload && !hasImage) {
           showStatusMessage('Upload your rendered map image to enable the live map.', {
             details,
             statusCodes: combineStatusCodes(state.status)
           });
-        } else if (state.status === 'rustmaps_not_found' || meta?.notFound) {
+        } else if (rustmapsMissing && !hasImage) {
           showStatusMessage('RustMaps has not published imagery for this seed yet.', {
             details,
             note: 'Try again shortly or upload your render below.',
             statusCodes: combineStatusCodes(state.status || (meta?.notFound ? 'rustmaps_not_found' : null))
           });
-        } else if (state.status === 'awaiting_imagery') {
+        } else if (awaitingImagery && !hasImage) {
           const generating = state.pendingGeneration;
           showStatusMessage(generating ? 'RustMaps is generating this map…' : 'Waiting for RustMaps imagery…', {
             spinner: true,
