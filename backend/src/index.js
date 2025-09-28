@@ -674,7 +674,12 @@ function parseStatusMessage(message) {
 function extractInteger(value) {
   if (value == null) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
-  const match = String(value).match(/-?\d+/);
+  const normalized = String(value)
+    .replace(/[_'\s]/g, '')
+    .replace(/,/g, '')
+    .trim();
+  if (!normalized) return null;
+  const match = normalized.match(/-?\d+/);
   if (!match) return null;
   const num = parseInt(match[0], 10);
   return Number.isFinite(num) ? num : null;
@@ -683,7 +688,12 @@ function extractInteger(value) {
 function extractFloat(value) {
   if (value == null) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const match = String(value).match(/-?\d+(?:\.\d+)?/);
+  const normalized = String(value)
+    .replace(/[_'\s]/g, '')
+    .replace(/,/g, '')
+    .trim();
+  if (!normalized) return null;
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
   if (!match) return null;
   const num = parseFloat(match[0]);
   return Number.isFinite(num) ? num : null;
@@ -1227,16 +1237,20 @@ async function fetchSizeAndSeedViaRcon(server) {
 
   try {
     const res = await sendRconCommand(server, 'server.worldsize');
-    const m = String(res?.Message || '').match(/worldsize\s*[:=]\s*(\d+)/i);
-    if (m) out.size = parseInt(m[1], 10);
+    const text = String(res?.Message || res?.message || '');
+    const match = text.match(/worldsize\s*[:=]\s*([\d,_'\s]+)/i);
+    const parsed = match ? extractInteger(match[1]) : extractInteger(text);
+    if (parsed != null && parsed > 0) out.size = parsed;
   } catch {
     // ignore
   }
 
   try {
     const res = await sendRconCommand(server, 'server.seed');
-    const m = String(res?.Message || '').match(/seed\s*[:=]\s*(\d+)/i);
-    if (m) out.seed = parseInt(m[1], 10);
+    const text = String(res?.Message || res?.message || '');
+    const match = text.match(/seed\s*[:=]\s*([-\d,_'\s]+)/i);
+    const parsed = match ? extractInteger(match[1]) : extractInteger(text);
+    if (parsed != null) out.seed = parsed;
   } catch {
     // ignore
   }
@@ -1506,8 +1520,8 @@ function mapRecordToPayload(serverId, record, metadataOverride = null) {
 }
 
 function deriveMapKey(info = {}, metadata = null) {
-  const rawSize = Number(metadata?.size ?? info.size);
-  const rawSeed = Number(metadata?.seed ?? info.seed);
+  const rawSize = extractInteger(metadata?.size ?? info.size);
+  const rawSeed = extractInteger(metadata?.seed ?? info.seed);
   const saveVersion = metadata?.saveVersion || null;
   if (Number.isFinite(rawSeed) && Number.isFinite(rawSize)) {
     let key = `${rawSeed}_${rawSize}`;
