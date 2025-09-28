@@ -674,7 +674,12 @@ function parseStatusMessage(message) {
 function extractInteger(value) {
   if (value == null) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
-  const match = String(value).match(/-?\d+/);
+  const normalized = String(value)
+    .replace(/[_'\s]/g, '')
+    .replace(/,/g, '')
+    .trim();
+  if (!normalized) return null;
+  const match = normalized.match(/-?\d+/);
   if (!match) return null;
   const num = parseInt(match[0], 10);
   return Number.isFinite(num) ? num : null;
@@ -683,7 +688,12 @@ function extractInteger(value) {
 function extractFloat(value) {
   if (value == null) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const match = String(value).match(/-?\d+(?:\.\d+)?/);
+  const normalized = String(value)
+    .replace(/[_'\s]/g, '')
+    .replace(/,/g, '')
+    .trim();
+  if (!normalized) return null;
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
   if (!match) return null;
   const num = parseFloat(match[0]);
   return Number.isFinite(num) ? num : null;
