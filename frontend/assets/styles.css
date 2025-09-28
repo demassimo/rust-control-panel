@@ -2129,6 +2129,42 @@ button.menu-tab.active {
   min-height: 420px;
 }
 
+.map-placeholder {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 18px;
+  padding: 32px 24px;
+  text-align: center;
+  background: rgba(9, 1, 4, 0.94);
+  color: var(--muted);
+  font-size: 0.96rem;
+  line-height: 1.5;
+  z-index: 2;
+}
+
+.map-placeholder .map-status {
+  width: min(100%, 420px);
+  margin: 0 auto;
+}
+
+.map-placeholder-text {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.map-view.map-view-has-message > .map-placeholder {
+  display: flex;
+}
+
+.map-view.map-view-has-message > img,
+.map-view.map-view-has-message > .map-overlay {
+  display: none;
+}
+
 .map-view img {
   width: 100%;
   height: auto;

@@ -40,10 +40,6 @@
     setup(ctx){
       ctx.root?.classList.add('module-card','live-map-card');
 
-      const message = document.createElement('div');
-      message.className = 'module-message hidden';
-      ctx.body?.appendChild(message);
-
       const configWrap = document.createElement('div');
       configWrap.className = 'map-config hidden';
       const configIntro = document.createElement('p');
@@ -62,8 +58,11 @@
       mapImage.loading = 'lazy';
       const overlay = document.createElement('div');
       overlay.className = 'map-overlay';
+      const message = document.createElement('div');
+      message.className = 'map-placeholder';
       mapView.appendChild(mapImage);
       mapView.appendChild(overlay);
+      mapView.appendChild(message);
 
       const sidebar = document.createElement('div');
       sidebar.className = 'map-sidebar';
@@ -163,18 +162,19 @@
         message.innerHTML = '';
         if (content instanceof Node) {
           message.appendChild(content);
-        } else if (typeof content === 'string') {
-          message.textContent = content;
         } else if (content != null) {
-          message.textContent = String(content);
+          const paragraph = document.createElement('p');
+          paragraph.className = 'map-placeholder-text';
+          paragraph.textContent = typeof content === 'string' ? content : String(content);
+          message.appendChild(paragraph);
         }
-        message.classList.remove('hidden');
+        mapView.classList.add('map-view-has-message');
       }
 
       function clearMessage() {
         if (!message) return;
         message.innerHTML = '';
-        message.classList.add('hidden');
+        mapView.classList.remove('map-view-has-message');
       }
 
       function stopPolling() {
