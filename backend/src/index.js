@@ -1051,7 +1051,50 @@ function parsePlayerListMessage(message) {
     const steamId = String(steamIdRaw || '').trim();
     if (!STEAM_ID_REGEX.test(steamId)) continue;
 
-    const rawPosition = entry.Position ?? entry.position ?? null;
+    let rawPosition = entry.Position ?? entry.position ?? null;
+    if (!rawPosition && entry && typeof entry === 'object') {
+      const positionFields = {};
+      const xCandidates = [
+        entry.X,
+        entry.x,
+        entry.PosX,
+        entry.posX,
+        entry.PositionX,
+        entry.positionX,
+        entry.XPos,
+        entry.xPos
+      ];
+      const yCandidates = [
+        entry.Y,
+        entry.y,
+        entry.PosY,
+        entry.posY,
+        entry.PositionY,
+        entry.positionY,
+        entry.YPos,
+        entry.yPos
+      ];
+      const zCandidates = [
+        entry.Z,
+        entry.z,
+        entry.PosZ,
+        entry.posZ,
+        entry.PositionZ,
+        entry.positionZ,
+        entry.ZPos,
+        entry.zPos
+      ];
+      for (const candidate of xCandidates) {
+        if (candidate != null) { positionFields.x = candidate; break; }
+      }
+      for (const candidate of yCandidates) {
+        if (candidate != null) { positionFields.y = candidate; break; }
+      }
+      for (const candidate of zCandidates) {
+        if (candidate != null) { positionFields.z = candidate; break; }
+      }
+      if (Object.keys(positionFields).length > 0) rawPosition = positionFields;
+    }
     const position = parseVector3(rawPosition);
 
     result.push({
@@ -1064,7 +1107,15 @@ function parsePlayerListMessage(message) {
       violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
       health: Number(entry.Health ?? entry.health ?? 0) || 0,
       position,
-      teamId: Number(entry.TeamId ?? entry.teamId ?? 0) || 0,
+      teamId: Number(
+        entry.TeamId
+        ?? entry.TeamID
+        ?? entry.teamId
+        ?? entry.teamID
+        ?? entry.Team
+        ?? entry.team
+        ?? 0
+      ) || 0,
       networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
     });
   }
@@ -1405,7 +1456,7 @@ async function fetchSizeAndSeedViaRcon(server) {
   const out = { size: null, seed: null };
 
   try {
-    const res = await sendRconCommand(server, 'server.worldsize');
+    const res = await sendRconCommand(server, 'server.worldsize', { silent: true });
     const text = String(res?.Message || res?.message || '');
     const match = text.match(/worldsize\s*[:=]\s*([\d,_'\s]+)/i);
     const parsed = match ? extractInteger(match[1]) : extractInteger(text);
@@ -1415,7 +1466,7 @@ async function fetchSizeAndSeedViaRcon(server) {
   }
 
   try {
-    const res = await sendRconCommand(server, 'server.seed');
+    const res = await sendRconCommand(server, 'server.seed', { silent: true });
     const text = String(res?.Message || res?.message || '');
     const match = text.match(/seed\s*[:=]\s*([-\d,_'\s]+)/i);
     const parsed = match ? extractInteger(match[1]) : extractInteger(text);
@@ -2538,7 +2589,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     ensureRconBinding(server);
     let playerPayload = '';
     try {
-      const reply = await sendRconCommand(server, 'playerlist');
+      const reply = await sendRconCommand(server, 'playerlist', { silent: true });
       playerPayload = reply?.Message || '';
     } catch (err) {
       logger.error('playerlist command failed', err);
@@ -2551,7 +2602,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     let info = getCachedServerInfo(id);
     if (!info) {
       try {
-        const reply = await sendRconCommand(server, 'serverinfo');
+        const reply = await sendRconCommand(server, 'serverinfo', { silent: true });
         info = parseServerInfoMessage(reply?.Message || '');
         cacheServerInfo(id, info);
         logger.debug('Fetched serverinfo via RCON', { size: info?.size, seed: info?.seed, mapName: info?.mapName });
