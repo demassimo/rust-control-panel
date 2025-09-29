@@ -3536,7 +3536,12 @@
     try {
       const reply = await runRconCommand(cmd);
       ui.log('> ' + cmd);
-      if (reply?.Message) ui.log(reply.Message.trim());
+      const shouldEchoReply = !socket?.connected
+        || !hasServerCapability('console')
+        || !canAccessServerId(state.currentServerId);
+      if (reply?.Message && shouldEchoReply) {
+        ui.log(reply.Message.trim());
+      }
       cmdInput.value = '';
     } catch (err) {
       if (errorCode(err) === 'no_server_selected') {
