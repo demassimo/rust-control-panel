@@ -3,6 +3,7 @@
 
   const COLOR_PALETTE = ['#f97316','#22d3ee','#a855f7','#84cc16','#ef4444','#facc15','#14b8a6','#e11d48','#3b82f6','#8b5cf6','#10b981','#fb7185'];
   const POLL_INTERVAL = 20000;
+  const PLAYER_REFRESH_INTERVAL = 60000;
   const WORLD_SYNC_THROTTLE = 15000;
 
   function clamp(value, min, max) {
@@ -120,6 +121,7 @@
         selectedSolo: null,
         lastUpdated: null,
         pollTimer: null,
+        playerReloadTimer: null,
         pendingGeneration: false,
         status: null,
         pendingRefresh: null,
@@ -189,6 +191,10 @@
           clearInterval(state.pollTimer);
           state.pollTimer = null;
         }
+        if (state.playerReloadTimer) {
+          clearInterval(state.playerReloadTimer);
+          state.playerReloadTimer = null;
+        }
       }
 
       function schedulePolling() {
@@ -197,6 +203,9 @@
         state.pollTimer = setInterval(() => {
           refreshData('poll').catch((err) => ctx.log?.('Map refresh failed: ' + (err?.message || err)));
         }, POLL_INTERVAL);
+        state.playerReloadTimer = setInterval(() => {
+          refreshData('player-reload').catch((err) => ctx.log?.('Map refresh failed: ' + (err?.message || err)));
+        }, PLAYER_REFRESH_INTERVAL);
       }
 
       function teamKey(player) {
@@ -637,6 +646,8 @@
         if (!state.serverId || typeof ctx.api !== 'function') return;
         const infoState = state.worldDetails;
         if (!infoState) return;
+        const activeMeta = getActiveMapMeta();
+        if (hasMapImage(activeMeta)) return;
         const size = toNumber(infoState.size);
         const seed = toNumber(infoState.seed);
         if (!Number.isFinite(size) || size <= 0) return;
@@ -644,7 +655,10 @@
         const key = worldDetailKey(size, seed);
         if (!key) return;
         if (infoState.syncing) return;
-        if (infoState.lastSyncKey === key && infoState.lastSyncStatus === 'success') return;
+        const awaitingServerInfo = state.status === 'awaiting_server_info';
+        const syncedSuccessfully = infoState.lastSyncKey === key && infoState.lastSyncStatus === 'success';
+        const alreadyReported = infoState.reportedKey === key;
+        if (syncedSuccessfully && alreadyReported && !awaitingServerInfo) return;
         const now = Date.now();
         if (infoState.lastSyncKey === key && infoState.lastSyncAt && now - infoState.lastSyncAt < WORLD_SYNC_THROTTLE) return;
         await syncWorldDetailsWithServer({ size, seed, key, reason });
@@ -697,6 +711,8 @@
       async function ensureWorldDetails(reason = 'unknown') {
         if (!state.serverId) return;
         if (typeof ctx.runCommand !== 'function') return;
+        const activeMeta = getActiveMapMeta();
+        if (hasMapImage(activeMeta)) return;
         const needsSize = resolveWorldSize() == null;
         const needsSeed = resolveWorldSeed() == null;
         if (!needsSize && !needsSeed) return;
@@ -1332,7 +1348,7 @@
       async function refreshData(reason) {
         if (!state.serverId) return;
         hideUploadNotice();
-        if (reason !== 'poll' && reason !== 'map-pending') {
+        if (reason !== 'poll' && reason !== 'map-pending' && reason !== 'player-reload') {
           showStatusMessage('Loading live map data…', {
             spinner: true,
             details: mapStatusDetails(),
@@ -1414,9 +1430,12 @@
           updateUploadSection();
           updateStatusMessage(hasImage);
           renderAll();
-          ensureWorldDetails('refresh')
-            .catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
-          maybeSubmitWorldDetails('refresh').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
+          const shouldUpdateWorldDetails = !hasImage;
+          if (shouldUpdateWorldDetails) {
+            ensureWorldDetails('refresh')
+              .catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
+            maybeSubmitWorldDetails('refresh').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
+          }
         } catch (err) {
           state.status = null;
           if (state.pendingGeneration) {
