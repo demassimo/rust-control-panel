@@ -36,6 +36,25 @@ function createApi(pool, dialect) {
       } catch (e) {
         if (e.code !== 'ER_DUP_FIELDNAME') throw e;
       }
+      await exec(`CREATE TABLE IF NOT EXISTS teams(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(190) NOT NULL,
+        owner_user_id INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX(owner_user_id),
+        CONSTRAINT fk_team_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS team_members(
+        team_id INT NOT NULL,
+        user_id INT NOT NULL,
+        role VARCHAR(32) NOT NULL DEFAULT 'user',
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(team_id, user_id),
+        INDEX(user_id),
+        INDEX(role),
+        CONSTRAINT fk_member_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+        CONSTRAINT fk_member_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS servers(
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(190) NOT NULL,
@@ -43,7 +62,10 @@ function createApi(pool, dialect) {
         port INT NOT NULL,
         password VARCHAR(255) NOT NULL,
         tls TINYINT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        team_id INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX(team_id),
+        CONSTRAINT fk_server_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL
       ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS players(
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -89,6 +111,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN total_playtime_seconds BIGINT NULL');
+      await ensureColumn('ALTER TABLE servers ADD COLUMN team_id INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN queued INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN sleepers INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN joining INT NULL');
@@ -169,23 +192,118 @@ function createApi(pool, dialect) {
       return rows[0] || null;
     },
 
-    async listUsers(){
-      return await exec(`SELECT u.id, u.username, u.role, u.created_at, r.name AS role_name FROM users u LEFT JOIN roles r ON r.role_key = u.role ORDER BY u.id ASC`);
+    async listUsers(teamId){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return [];
+      return await exec(
+        `SELECT u.id, u.username, tm.role, tm.joined_at, u.created_at, r.name AS role_name
+         FROM team_members tm
+         JOIN users u ON u.id = tm.user_id
+         LEFT JOIN roles r ON r.role_key = tm.role
+         WHERE tm.team_id=?
+         ORDER BY LOWER(u.username) ASC`,
+        [numeric]
+      );
+    },
+    async listTeamMembers(teamId){
+      return await this.listUsers(teamId);
+    },
+    async listAllUsersBasic(){
+      return await exec('SELECT id, username, role, created_at FROM users ORDER BY id ASC');
+    },
+    async getTeam(teamId){
+      const rows = await exec('SELECT * FROM teams WHERE id=?', [teamId]);
+      return rows[0] || null;
+    },
+    async listUserTeams(userId){
+      const numeric = Number(userId);
+      if (!Number.isFinite(numeric)) return [];
+      return await exec(
+        `SELECT t.id, t.name, t.owner_user_id, t.created_at, tm.role, tm.joined_at
+         FROM team_members tm
+         JOIN teams t ON t.id = tm.team_id
+         WHERE tm.user_id=?
+         ORDER BY t.created_at ASC`,
+        [numeric]
+      );
+    },
+    async createTeam({ name, owner_user_id }){
+      const res = await exec('INSERT INTO teams(name, owner_user_id) VALUES(?,?)', [name, owner_user_id]);
+      return res.insertId;
+    },
+    async addTeamMember({ team_id, user_id, role = 'user' }){
+      await exec(
+        `INSERT INTO team_members(team_id, user_id, role, joined_at)
+         VALUES(?,?,?,CURRENT_TIMESTAMP)
+         ON DUPLICATE KEY UPDATE role=VALUES(role), joined_at=VALUES(joined_at)`,
+        [team_id, user_id, role]
+      );
+    },
+    async updateTeamMemberRole(teamId, userId, role){
+      const res = await exec('UPDATE team_members SET role=? WHERE team_id=? AND user_id=?', [role, teamId, userId]);
+      return res.affectedRows || 0;
+    },
+    async removeTeamMember(teamId, userId){
+      const res = await exec('DELETE FROM team_members WHERE team_id=? AND user_id=?', [teamId, userId]);
+      return res.affectedRows || 0;
+    },
+    async getTeamMember(teamId, userId){
+      const rows = await exec('SELECT * FROM team_members WHERE team_id=? AND user_id=?', [teamId, userId]);
+      return rows[0] || null;
+    },
+    async listTeamServerIds(teamId){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return [];
+      const rows = await exec('SELECT id FROM servers WHERE team_id=? ORDER BY id ASC', [numeric]);
+      return rows
+        .map((row) => Number(row?.id))
+        .filter((id) => Number.isFinite(id));
+    },
+    async countTeams(){
+      const rows = await exec('SELECT COUNT(*) AS c FROM teams');
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      return Number(row?.c || row?.['COUNT(*)'] || 0);
+    },
+    async getUserActiveTeam(userId){
+      const rows = await exec(`SELECT value FROM user_settings WHERE user_id=? AND key='active_team'`, [userId]);
+      if (!rows.length) return null;
+      const value = Number(rows[0].value);
+      return Number.isFinite(value) ? value : null;
+    },
+    async setUserActiveTeam(userId, teamId){
+      if (teamId == null) {
+        await exec(`DELETE FROM user_settings WHERE user_id=? AND key='active_team'`, [userId]);
+        return;
+      }
+      await exec(
+        `INSERT INTO user_settings(user_id, key, value, updated_at)
+         VALUES(?,?,?,CURRENT_TIMESTAMP)
+         ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`,
+        [userId, 'active_team', String(teamId)]
+      );
     },
     async countAdmins(){ const r = await exec("SELECT COUNT(*) c FROM users WHERE role='admin'"); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await exec('UPDATE users SET role=? WHERE id=?',[role,id]); },
     async deleteUser(id){ const r = await exec('DELETE FROM users WHERE id=?',[id]); return r.affectedRows||0; },
-    async listServers(){ return await exec('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
-    async listServersWithSecrets(){
-      return await exec('SELECT id,name,host,port,password,tls,created_at FROM servers ORDER BY id DESC');
+    async listServers(teamId){
+      if (typeof teamId === 'undefined' || teamId === null) {
+        return await exec('SELECT id,name,host,port,tls,team_id,created_at FROM servers ORDER BY id DESC');
+      }
+      return await exec('SELECT id,name,host,port,tls,team_id,created_at FROM servers WHERE team_id=? ORDER BY id DESC', [teamId]);
+    },
+    async listServersWithSecrets(teamId){
+      if (typeof teamId === 'undefined' || teamId === null) {
+        return await exec('SELECT id,name,host,port,password,tls,team_id,created_at FROM servers ORDER BY id DESC');
+      }
+      return await exec('SELECT id,name,host,port,password,tls,team_id,created_at FROM servers WHERE team_id=? ORDER BY id DESC', [teamId]);
     },
     async getServer(id){ const r = await exec('SELECT * FROM servers WHERE id=?',[id]); return r[0]||null; },
-    async createServer(s){ const r = await exec('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.insertId; },
+    async createServer(s){ const r = await exec('INSERT INTO servers(name,host,port,password,tls,team_id) VALUES(?,?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0,s.team_id ?? null]); return r.insertId; },
     async updateServer(id,s){
       const cur = await this.getServer(id); if (!cur) return 0;
       const next = { ...cur, ...s };
-      const r = await exec('UPDATE servers SET name=?,host=?,port=?,password=?,tls=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,id]);
+      const r = await exec('UPDATE servers SET name=?,host=?,port=?,password=?,tls=?,team_id=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,next.team_id ?? cur.team_id ?? null,id]);
       return r.affectedRows||0;
     },
     async deleteServer(id){ const r = await exec('DELETE FROM servers WHERE id=?',[id]); return r.affectedRows||0; },

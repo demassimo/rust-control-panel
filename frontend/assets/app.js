@@ -10,6 +10,8 @@
   const navDashboard = $('#navDashboard');
   const navTeam = $('#navTeam');
   const navSettings = $('#navSettings');
+  const teamSwitcher = $('#teamSwitcher');
+  const teamSelect = $('#teamSelect');
   const dashboardPanel = $('#dashboardPanel');
   const teamPanel = $('#teamPanel');
   const workspacePanel = $('#workspacePanel');
@@ -46,6 +48,10 @@
   const newUserPassword = $('#newUserPassword');
   const newUserRole = $('#newUserRole');
   const btnCreateUser = $('#btnCreateUser');
+  const existingUserName = $('#existingUserName');
+  const existingUserRole = $('#existingUserRole');
+  const btnAddExistingUser = $('#btnAddExistingUser');
+  const existingUserFeedback = $('#existingUserFeedback');
   const roleManager = $('#roleManager');
   const roleEditor = $('#roleEditor');
   const rolesHeader = $('#rolesHeader');
@@ -246,6 +252,9 @@
     statusTimer: null,
     settings: {},
     activePanel: 'dashboard',
+    activeTeamId: null,
+    activeTeamName: null,
+    teams: [],
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] }
   };
@@ -279,8 +288,16 @@
   function allowedServerList() {
     if (!state.currentUser) return [];
     const allowed = serverPermissionConfig().allowed;
-    if (!Array.isArray(allowed) || allowed.length === 0) return ['*'];
-    return allowed;
+    if (Array.isArray(allowed)) {
+      return allowed;
+    }
+    if (typeof allowed === 'string') {
+      const normalized = allowed.trim().toLowerCase();
+      if (normalized === '*' || normalized === 'all') {
+        return ['*'];
+      }
+    }
+    return [];
   }
 
   function canAccessServerId(serverId) {
@@ -292,6 +309,51 @@
       if (String(entry) === idStr) return true;
       const numeric = Number(entry);
       return Number.isFinite(numeric) && numeric === idNum;
+    });
+  }
+
+  function syncServerPermissions(servers = []) {
+    if (!state.currentUser) return;
+    const current = state.currentUser.permissions || {};
+    const serverPerms = current.servers || {};
+    let allowed = serverPerms.allowed;
+    if (allowed === '*' || allowed === 'all') {
+      allowed = ['*'];
+    }
+    if (!Array.isArray(allowed)) {
+      allowed = [];
+    }
+    if (allowed.includes('*')) return;
+    const toKey = (value) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? String(numeric) : String(value);
+    };
+    const allowedKeys = new Set(allowed.map(toKey));
+    let changed = false;
+    for (const server of Array.isArray(servers) ? servers : []) {
+      const id = server?.id;
+      if (id == null) continue;
+      const key = toKey(id);
+      if (!allowedKeys.has(key)) {
+        allowedKeys.add(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const nextAllowed = Array.from(allowedKeys).map((value) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : value;
+    });
+    state.currentUser.permissions = {
+      ...current,
+      servers: {
+        ...serverPerms,
+        allowed: nextAllowed
+      }
+    };
+    moduleBus.emit('permissions:updated', {
+      permissions: currentUserPermissions(),
+      allowedServers: allowedServerList()
     });
   }
 
@@ -319,6 +381,104 @@
     if (!userBox) return;
     const shouldOpen = typeof force === 'boolean' ? force : userBox.classList.contains('hidden');
     setProfileMenuOpen(shouldOpen);
+  }
+
+  function applyTeamContext(context = {}) {
+    if (typeof context.activeTeamId !== 'undefined') {
+      state.activeTeamId = context.activeTeamId == null ? null : Number(context.activeTeamId);
+    }
+    if (typeof context.activeTeamName !== 'undefined') {
+      state.activeTeamName = context.activeTeamName || null;
+    }
+    if (Array.isArray(context.teams)) {
+      state.teams = context.teams.map((team) => ({ ...team }));
+    }
+    if (state.currentUser) {
+      if (context.role) state.currentUser.role = context.role;
+      if (context.roleName) state.currentUser.roleName = context.roleName;
+      if (context.permissions) state.currentUser.permissions = context.permissions;
+      state.currentUser.activeTeamId = state.activeTeamId;
+      state.currentUser.activeTeamName = state.activeTeamName;
+    }
+    renderTeamSwitcher();
+  }
+
+  function renderTeamSwitcher() {
+    if (!teamSwitcher || !teamSelect) return;
+    const teams = Array.isArray(state.teams) ? state.teams : [];
+    if (!teams.length) {
+      teamSwitcher.classList.add('hidden');
+      teamSwitcher.setAttribute('aria-hidden', 'true');
+      teamSelect.innerHTML = '';
+      return;
+    }
+    teamSwitcher.classList.remove('hidden');
+    teamSwitcher.setAttribute('aria-hidden', 'false');
+    teamSelect.innerHTML = '';
+    teams.forEach((team) => {
+      if (!team) return;
+      const option = document.createElement('option');
+      option.value = String(team.id);
+      const label = team.name || `Team ${team.id}`;
+      const roleSuffix = team.roleName || team.role;
+      option.textContent = roleSuffix ? `${label} (${roleSuffix})` : label;
+      teamSelect.appendChild(option);
+    });
+    const selectedTeam = teams.find((team) => Number(team.id) === Number(state.activeTeamId));
+    if (selectedTeam) {
+      teamSelect.value = String(selectedTeam.id);
+    } else if (teams.length) {
+      teamSelect.value = String(teams[0].id);
+    }
+    teamSelect.disabled = teams.length <= 1;
+  }
+
+  async function onTeamSelectionChange() {
+    if (!teamSelect) return;
+    const value = teamSelect.value;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric === Number(state.activeTeamId)) return;
+    try {
+      const response = await api('/me/active-team', { teamId: numeric }, 'POST');
+      applyTeamContext(response || {});
+      ui.setUser(state.currentUser);
+      updateTeamAccessView({ refreshUsers: true });
+      applyPermissionGates();
+      await loadRoles();
+      closeUserDetails();
+      hideWorkspace('team-switch');
+      await refreshServers();
+      moduleBus.emit('players:refresh', { reason: 'team-switch', teamId: numeric });
+    } catch (err) {
+      if (teamSelect && state.activeTeamId != null) {
+        teamSelect.value = String(state.activeTeamId);
+      }
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to switch team: ' + describeError(err));
+    }
+  }
+
+  async function refreshUserContext() {
+    if (!state.TOKEN) return;
+    try {
+      const me = await api('/me');
+      if (!me) return;
+      state.currentUser = {
+        id: me.id,
+        username: me.username,
+        role: me.role,
+        roleName: me.roleName || me.role,
+        permissions: me.permissions || {},
+        activeTeamId: me.activeTeamId ?? null,
+        activeTeamName: me.activeTeamName || null
+      };
+      applyTeamContext(me);
+      ui.setUser(state.currentUser);
+      applyPermissionGates();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to refresh account context: ' + describeError(err));
+    }
   }
 
   function closeProfileMenu() {
@@ -847,6 +1007,13 @@
     if (newUserPassword) newUserPassword.disabled = !canManageUsers;
     if (btnCreateUser) btnCreateUser.disabled = !canManageUsers;
     if (newUserRole) newUserRole.disabled = !canManageUsers || !state.roles.length;
+    if (existingUserName) existingUserName.disabled = !canManageUsers;
+    if (existingUserRole) existingUserRole.disabled = !canManageUsers || !state.roles.length;
+    if (btnAddExistingUser) btnAddExistingUser.disabled = !canManageUsers;
+    if (!canManageUsers) {
+      hideNotice(userFeedback);
+      hideNotice(existingUserFeedback);
+    }
 
     const hasConsole = hasServerCapability('console');
     const hasCommands = hasServerCapability('commands');
@@ -991,6 +1158,10 @@
     unauthorized: 'Your session expired. Please sign in again.',
     last_admin: 'You cannot remove the final administrator.',
     cannot_delete_self: 'You cannot remove your own account.',
+    no_active_team: 'Select or create a team before performing this action.',
+    invalid_team: 'The selected team is not available to you.',
+    user_not_found: 'No account exists with that username.',
+    already_member: 'That user is already part of this team.',
     rustmaps_api_key_missing: 'Add your RustMaps API key in Settings to enable the live map.',
     rustmaps_unauthorized: 'RustMaps rejected the configured API key. Double-check it in Settings.',
     rustmaps_not_found: 'RustMaps has not published a generated map for this seed yet.',
@@ -1969,6 +2140,7 @@
   async function refreshServers() {
     try {
       const list = await api('/servers');
+      syncServerPermissions(list);
       serversEl.innerHTML = '';
       state.serverItems.clear();
       if (addServerPrompt) {
@@ -2206,6 +2378,9 @@
     hideWorkspace('logout');
     state.TOKEN = '';
     state.currentUser = null;
+    state.activeTeamId = null;
+    state.activeTeamName = null;
+    state.teams = [];
     stopStatusPolling();
     disconnectSocket();
     localStorage.removeItem('token');
@@ -2218,6 +2393,7 @@
     updateRoleOptions();
     updateRoleManagerVisibility(false);
     updateTeamAccessView();
+    renderTeamSwitcher();
     serversEl.innerHTML = '';
     ui.clearConsole();
     ui.setUser(null);
@@ -2610,6 +2786,7 @@
   function updateRoleOptions() {
     const roles = state.roles || [];
     populateRoleSelectOptions(newUserRole, roles);
+    populateRoleSelectOptions(existingUserRole, roles);
     populateRoleSelectOptions(userDetailsRoleSelect, roles);
     populateRoleSelectOptions(roleSelect, roles, false);
   }
@@ -2803,6 +2980,9 @@
       state.roleTemplates = data?.templates || { serverCapabilities: [], globalPermissions: [] };
       renderRoleEditorFields();
       updateRoleOptions();
+      const defaultRoleKey = state.roles.find((role) => role.key === 'user')?.key || state.roles[0]?.key || '';
+      if (newUserRole && !newUserRole.value && defaultRoleKey) newUserRole.value = defaultRoleKey;
+      if (existingUserRole && !existingUserRole.value && defaultRoleKey) existingUserRole.value = defaultRoleKey;
       if (!state.roles.length) {
         activeRoleEditKey = null;
         applyRoleToEditor(null);
@@ -2868,6 +3048,7 @@
   function updateRoleOptions() {
     const roles = state.roles || [];
     populateRoleSelectOptions(newUserRole, roles);
+    populateRoleSelectOptions(existingUserRole, roles);
     populateRoleSelectOptions(userDetailsRoleSelect, roles);
     populateRoleSelectOptions(roleSelect, roles, false);
   }
@@ -3152,6 +3333,7 @@
         roleName: me.roleName || me.role,
         permissions: me.permissions || {}
       };
+      applyTeamContext(me);
       await loadRoles();
       await loadSettings();
       ui.setUser(state.currentUser);
@@ -3196,6 +3378,7 @@
         roleName: data.roleName || data.role,
         permissions: data.permissions || {}
       };
+      applyTeamContext(data);
       await loadRoles();
       await loadSettings();
       ui.setUser(state.currentUser);
@@ -3272,6 +3455,7 @@
       if (svTLS) svTLS.checked = false;
       addServerPinned = false;
       hideAddServerCard({ force: true });
+      await refreshUserContext();
       await refreshServers();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -3366,9 +3550,11 @@
     btnClearConsole?.addEventListener('click', () => ui.clearConsole());
     addServerPrompt?.addEventListener('click', () => toggleAddServerCardVisibility());
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
+    teamSelect?.addEventListener('change', onTeamSelectionChange);
     btnCreateUser?.addEventListener('click', async () => {
       if (!hasGlobalPermission('manageUsers')) return;
       hideNotice(userFeedback);
+      hideNotice(existingUserFeedback);
       const username = newUserName?.value.trim();
       const password = newUserPassword?.value || '';
       const role = newUserRole?.value || 'user';
@@ -3386,12 +3572,35 @@
         if (newUserName) newUserName.value = '';
         if (newUserPassword) newUserPassword.value = '';
         if (newUserRole) newUserRole.value = 'user';
+        if (existingUserRole) existingUserRole.value = 'user';
         loadUsers();
       } catch (err) {
         if (errorCode(err) === 'unauthorized') handleUnauthorized();
         else showNotice(userFeedback, describeError(err), 'error');
       }
     });
+    btnAddExistingUser?.addEventListener('click', async () => {
+      if (!hasGlobalPermission('manageUsers')) return;
+      hideNotice(existingUserFeedback);
+      const username = existingUserName?.value.trim();
+      const role = existingUserRole?.value || 'user';
+      if (!username) {
+        showNotice(existingUserFeedback, describeError('missing_fields'), 'error');
+        return;
+      }
+      try {
+        await api('/users', { username, role }, 'POST');
+        showNotice(existingUserFeedback, `Added ${username} to the team.`, 'success');
+        if (existingUserName) existingUserName.value = '';
+        if (existingUserRole) existingUserRole.value = 'user';
+        loadUsers();
+      } catch (err) {
+        if (errorCode(err) === 'unauthorized') handleUnauthorized();
+        else showNotice(existingUserFeedback, describeError(err), 'error');
+      }
+    });
+    existingUserName?.addEventListener('input', () => hideNotice(existingUserFeedback));
+    existingUserRole?.addEventListener('change', () => hideNotice(existingUserFeedback));
     userDetailsRoleSelect?.addEventListener('change', () => hideNotice(userDetailsRoleStatus));
     roleSelect?.addEventListener('change', () => {
       if (!hasGlobalPermission('manageRoles')) return;
