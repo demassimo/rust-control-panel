@@ -833,6 +833,49 @@ function extractFloat(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function parseLevelUrlMessage(message) {
+  if (message == null) return null;
+  const text = String(message).trim();
+  if (!text) return null;
+
+  try {
+    const json = JSON.parse(text);
+    if (typeof json === 'string') {
+      const parsed = json.trim();
+      if (parsed) return parsed;
+    }
+    if (json && typeof json === 'object') {
+      for (const value of Object.values(json)) {
+        const nested = parseLevelUrlMessage(value);
+        if (nested) return nested;
+      }
+    }
+  } catch {
+    // not JSON, continue with pattern-based parsing
+  }
+
+  const quotedMatch = text.match(/["']\s*(https?:\/\/[^"']+?)\s*["']/i);
+  if (quotedMatch && quotedMatch[1]) {
+    return quotedMatch[1].trim();
+  }
+
+  const urlMatch = text.match(/https?:\/\/\S+/i);
+  if (urlMatch && urlMatch[0]) {
+    return urlMatch[0].replace(/["'\s>;\]]+$/, '').trim();
+  }
+
+  const colonIndex = text.indexOf(':');
+  if (colonIndex >= 0) {
+    const candidate = text.slice(colonIndex + 1).trim()
+      .replace(/^["']+/, '')
+      .replace(/["',;>\]]+$/, '')
+      .trim();
+    if (candidate) return candidate;
+  }
+
+  return null;
+}
+
 function parseServerInfoMessage(message) {
   const result = { raw: message, mapName: null, size: null, seed: null, fps: null };
   if (!message) return { ...result };
@@ -863,10 +906,15 @@ function parseServerInfoMessage(message) {
       if (seed != null) result.seed = seed;
     }
     if (lower.includes('level') && lower.includes('url')) {
-      if (!result.levelUrl && typeof trimmedValue === 'string' && trimmedValue.trim()) {
-        result.levelUrl = trimmedValue.trim();
-      } else if (!result.levelUrl && trimmedValue != null && trimmedValue !== '') {
-        result.levelUrl = String(trimmedValue).trim();
+      if (!result.levelUrl) {
+        const parsed = parseLevelUrlMessage(trimmedValue);
+        if (parsed) {
+          result.levelUrl = parsed;
+        } else if (typeof trimmedValue === 'string' && trimmedValue.trim()) {
+          result.levelUrl = trimmedValue.trim();
+        } else if (trimmedValue != null && trimmedValue !== '') {
+          result.levelUrl = String(trimmedValue).trim();
+        }
       }
     }
     if (lower.includes('fps') || lower.includes('framerate')) {
@@ -964,14 +1012,17 @@ function parseServerInfoMessage(message) {
       fields['Level URL']
     ];
     for (const candidate of candidates) {
-      if (typeof candidate === 'string') {
-        const trimmed = candidate.trim();
-        if (trimmed) {
-          output.levelUrl = trimmed;
-          break;
-        }
+      const parsed = parseLevelUrlMessage(candidate);
+      if (parsed) {
+        output.levelUrl = parsed;
+        break;
       }
     }
+  }
+
+  if (!output.levelUrl) {
+    const parsed = parseLevelUrlMessage(trimmed);
+    if (parsed) output.levelUrl = parsed;
   }
 
   if (output.fps == null) {
@@ -2736,7 +2787,22 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         logger.warn('Failed to fetch serverinfo via RCON', err);
       }
     }
-    const levelUrl = typeof info?.levelUrl === 'string' ? info.levelUrl.trim() : '';
+    let levelUrl = typeof info?.levelUrl === 'string' ? info.levelUrl.trim() : '';
+    if (!levelUrl) {
+      try {
+        const reply = await sendRconCommand(server, 'levelurl', { silent: true });
+        const parsedLevelUrl = parseLevelUrlMessage(reply?.Message || reply?.message || '');
+        if (parsedLevelUrl) {
+          levelUrl = parsedLevelUrl;
+          if (info) {
+            info.levelUrl = levelUrl;
+            cacheServerInfo(id, info);
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to fetch level URL via RCON', err);
+      }
+    }
     const hasLevelUrl = levelUrl.length > 0;
 
     if (!info?.size || !info?.seed) {
