@@ -2736,6 +2736,9 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         logger.warn('Failed to fetch serverinfo via RCON', err);
       }
     }
+    const levelUrl = typeof info?.levelUrl === 'string' ? info.levelUrl.trim() : '';
+    const hasLevelUrl = levelUrl.length > 0;
+
     if (!info?.size || !info?.seed) {
       try {
         const { size, seed } = await fetchSizeAndSeedViaRcon(server);
@@ -2755,6 +2758,13 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       logger.info('Existing map record expired, removing cached image');
       await removeMapImage(mapRecord);
       if (!mapRecord.custom && mapRecord.map_key) await removeGlobalMapMetadata(mapRecord.map_key);
+      await db.deleteServerMap(id);
+      mapRecord = null;
+    }
+    if (mapRecord && !mapRecord.custom && hasLevelUrl) {
+      logger.info('Server reports custom level URL, clearing procedural map cache');
+      await removeMapImage(mapRecord);
+      if (mapRecord.map_key) await removeGlobalMapMetadata(mapRecord.map_key);
       await db.deleteServerMap(id);
       mapRecord = null;
     }
@@ -2800,9 +2810,25 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
 
     let map = mapRecordToPayload(id, mapRecord, mapMetadata);
+    if (!map && hasLevelUrl) {
+      const baseKey = infoMapKey || null;
+      const customKey = baseKey ? `${baseKey}-server-${id}` : `server-${id}-custom`;
+      map = {
+        mapKey: customKey,
+        custom: true,
+        cached: false,
+        cachedAt: null,
+        imageUrl: null,
+        needsUpload: true,
+        levelUrl
+      };
+      if (Number.isFinite(info?.size)) map.size = info.size;
+      if (Number.isFinite(info?.seed)) map.seed = info.seed;
+      if (info?.mapName) map.mapName = info.mapName;
+    }
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
-      if (info?.size && info?.seed) {
+      if (!hasLevelUrl && info?.size && info?.seed) {
         const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
         const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
         try {
