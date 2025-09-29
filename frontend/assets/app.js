@@ -12,6 +12,7 @@
   const navSettings = $('#navSettings');
   const teamSwitcher = $('#teamSwitcher');
   const teamSelect = $('#teamSelect');
+  const teamSelectLabel = $('#teamSelectLabel');
   const dashboardPanel = $('#dashboardPanel');
   const teamPanel = $('#teamPanel');
   const workspacePanel = $('#workspacePanel');
@@ -403,6 +404,32 @@
     renderTeamSwitcher();
   }
 
+  function updateTeamSelectLabel(teams, selectedTeam) {
+    if (!teamSelectLabel) return;
+    const username = typeof state.currentUser?.username === 'string'
+      ? state.currentUser.username.trim()
+      : '';
+    const roleLabelSource = selectedTeam || state.currentUser || null;
+    const roleLabel = formatUserRole(roleLabelSource);
+    const roleLabelNormalized = roleLabel && roleLabel !== '—'
+      ? roleLabel.toLowerCase()
+      : '';
+    let labelText = 'Team';
+    if (username) {
+      labelText = roleLabelNormalized
+        ? `${username} (${roleLabelNormalized})`
+        : username;
+    } else if (selectedTeam) {
+      const teamName = selectedTeam.name || `Team ${selectedTeam.id}`;
+      labelText = roleLabel && roleLabel !== '—'
+        ? `${teamName} (${roleLabel})`
+        : teamName;
+    } else if (roleLabel && roleLabel !== '—') {
+      labelText = roleLabel;
+    }
+    teamSelectLabel.textContent = labelText;
+  }
+
   function renderTeamSwitcher() {
     if (!teamSwitcher || !teamSelect) return;
     const teams = Array.isArray(state.teams) ? state.teams : [];
@@ -410,6 +437,7 @@
       teamSwitcher.classList.add('hidden');
       teamSwitcher.setAttribute('aria-hidden', 'true');
       teamSelect.innerHTML = '';
+      updateTeamSelectLabel([], null);
       return;
     }
     teamSwitcher.classList.remove('hidden');
@@ -431,6 +459,7 @@
       teamSelect.value = String(teams[0].id);
     }
     teamSelect.disabled = teams.length <= 1;
+    updateTeamSelectLabel(teams, selectedTeam || teams[0]);
   }
 
   async function onTeamSelectionChange() {
@@ -714,13 +743,18 @@
   function renderUserDetails(user) {
     if (!userDetailsPanel || !user) return;
     const isSelf = user.id === state.currentUser?.id;
-    if (userDetailsName) userDetailsName.textContent = user.username;
+    const roleLabel = formatUserRole(user);
+    if (userDetailsName) {
+      const baseName = user.username || '—';
+      userDetailsName.textContent = roleLabel && roleLabel !== '—'
+        ? `${baseName} (${roleLabel})`
+        : baseName;
+    }
     if (userDetailsSubtitle) {
       userDetailsSubtitle.textContent = isSelf
         ? 'Signed in with this account'
         : 'Review access and credentials';
     }
-    const roleLabel = formatUserRole(user);
     if (userDetailsRole) userDetailsRole.textContent = roleLabel;
     if (userDetailsRoleBadge) userDetailsRoleBadge.textContent = roleLabel;
     if (userDetailsCreated) userDetailsCreated.textContent = formatUserJoined(user.created_at);
