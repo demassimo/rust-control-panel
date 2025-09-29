@@ -2756,6 +2756,27 @@
     setRoleEditorLocked(roleEditorLocked);
   }
 
+  function getDefaultRoleKey(roles = state.roles) {
+    const list = Array.isArray(roles) ? roles : [];
+    if (!list.length) return '';
+    const preferred = list.find((role) => role?.key === 'user');
+    if (preferred?.key) return preferred.key;
+    return list[0]?.key || '';
+  }
+
+  function applyDefaultRoleSelection(select, roles = state.roles) {
+    if (!select) return;
+    const defaultKey = getDefaultRoleKey(roles);
+    const options = Array.from(select.options || []).map((opt) => opt.value);
+    if (defaultKey && options.includes(defaultKey)) {
+      select.value = defaultKey;
+    } else if (options.length) {
+      select.value = options[0];
+    } else {
+      select.value = '';
+    }
+  }
+
   function populateRoleSelectOptions(select, roles = [], preserve = true) {
     if (!select) return;
     const previous = preserve ? select.value : '';
@@ -2779,7 +2800,7 @@
     if (previous && roles.some((role) => role.key === previous)) {
       select.value = previous;
     } else {
-      select.value = roles[0].key;
+      applyDefaultRoleSelection(select, roles);
     }
   }
 
@@ -2980,9 +3001,8 @@
       state.roleTemplates = data?.templates || { serverCapabilities: [], globalPermissions: [] };
       renderRoleEditorFields();
       updateRoleOptions();
-      const defaultRoleKey = state.roles.find((role) => role.key === 'user')?.key || state.roles[0]?.key || '';
-      if (newUserRole && !newUserRole.value && defaultRoleKey) newUserRole.value = defaultRoleKey;
-      if (existingUserRole && !existingUserRole.value && defaultRoleKey) existingUserRole.value = defaultRoleKey;
+      if (newUserRole && !newUserRole.value) applyDefaultRoleSelection(newUserRole);
+      if (existingUserRole && !existingUserRole.value) applyDefaultRoleSelection(existingUserRole);
       if (!state.roles.length) {
         activeRoleEditKey = null;
         applyRoleToEditor(null);
@@ -3571,8 +3591,8 @@
         showNotice(userFeedback, 'Created user ' + username, 'success');
         if (newUserName) newUserName.value = '';
         if (newUserPassword) newUserPassword.value = '';
-        if (newUserRole) newUserRole.value = 'user';
-        if (existingUserRole) existingUserRole.value = 'user';
+        if (newUserRole) applyDefaultRoleSelection(newUserRole);
+        if (existingUserRole) applyDefaultRoleSelection(existingUserRole);
         loadUsers();
       } catch (err) {
         if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -3592,7 +3612,7 @@
         await api('/users', { username, role }, 'POST');
         showNotice(existingUserFeedback, `Added ${username} to the team.`, 'success');
         if (existingUserName) existingUserName.value = '';
-        if (existingUserRole) existingUserRole.value = 'user';
+        if (existingUserRole) applyDefaultRoleSelection(existingUserRole);
         loadUsers();
       } catch (err) {
         if (errorCode(err) === 'unauthorized') handleUnauthorized();
