@@ -31,6 +31,22 @@ function createApi(dbh, dialect) {
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(role) REFERENCES roles(role_key) ON UPDATE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS teams(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        owner_user_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS team_members(
+        team_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        joined_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(team_id, user_id),
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS servers(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -38,7 +54,9 @@ function createApi(dbh, dialect) {
         port INTEGER NOT NULL,
         password TEXT NOT NULL,
         tls INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
+        team_id INTEGER,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE SET NULL
       );
       CREATE TABLE IF NOT EXISTS players(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,6 +153,10 @@ function createApi(dbh, dialect) {
       if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
       }
+      const serverCols = await dbh.all("PRAGMA table_info('servers')");
+      if (!serverCols.some((c) => c.name === 'team_id')) {
+        await dbh.run('ALTER TABLE servers ADD COLUMN team_id INTEGER');
+      }
       const playerCols = await dbh.all("PRAGMA table_info('players')");
       const ensureColumn = async (name, definition) => {
         if (!playerCols.some((c) => c.name === name)) {
@@ -202,28 +224,145 @@ function createApi(dbh, dialect) {
         [u]
       );
     },
-    async listUsers(){
+    async listUsers(teamId){
+      const teamNumeric = Number(teamId);
+      if (!Number.isFinite(teamNumeric)) return [];
       return await dbh.all(
-        `SELECT u.id, u.username, u.role, u.created_at, r.name AS role_name
+        `SELECT u.id, u.username, tm.role, tm.joined_at, u.created_at, r.name AS role_name
+         FROM team_members tm
+         JOIN users u ON u.id = tm.user_id
+         LEFT JOIN roles r ON r.role_key = tm.role
+         WHERE tm.team_id=?
+         ORDER BY LOWER(u.username) ASC`
+        ,[teamNumeric]
+      );
+    },
+    async listTeamMembers(teamId){
+      return await this.listUsers(teamId);
+    },
+    async listAllUsersBasic(){
+      return await dbh.all(
+        `SELECT u.id, u.username, u.role, u.created_at
          FROM users u
-         LEFT JOIN roles r ON r.role_key = u.role
          ORDER BY u.id ASC`
+      );
+    },
+    async getTeam(teamId){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return null;
+      return await dbh.get(`SELECT * FROM teams WHERE id=?`, [numeric]);
+    },
+    async listUserTeams(userId){
+      const numeric = Number(userId);
+      if (!Number.isFinite(numeric)) return [];
+      return await dbh.all(
+        `SELECT t.id, t.name, t.owner_user_id, t.created_at, tm.role, tm.joined_at
+         FROM team_members tm
+         JOIN teams t ON t.id = tm.team_id
+         WHERE tm.user_id=?
+         ORDER BY t.created_at ASC`
+        ,[numeric]
+      );
+    },
+    async createTeam({ name, owner_user_id }){
+      const now = new Date().toISOString();
+      const res = await dbh.run(
+        `INSERT INTO teams(name, owner_user_id, created_at) VALUES(?,?,?)`,
+        [name, owner_user_id, now]
+      );
+      return res.lastID;
+    },
+    async addTeamMember({ team_id, user_id, role = 'user' }){
+      const now = new Date().toISOString();
+      await dbh.run(
+        `INSERT INTO team_members(team_id, user_id, role, joined_at) VALUES(?,?,?,?)
+         ON CONFLICT(team_id, user_id) DO UPDATE SET role=excluded.role, joined_at=excluded.joined_at`,
+        [team_id, user_id, role, now]
+      );
+    },
+    async updateTeamMemberRole(teamId, userId, role){
+      const result = await dbh.run(
+        `UPDATE team_members SET role=? WHERE team_id=? AND user_id=?`,
+        [role, teamId, userId]
+      );
+      return result?.changes ? Number(result.changes) : 0;
+    },
+    async removeTeamMember(teamId, userId){
+      const result = await dbh.run(`DELETE FROM team_members WHERE team_id=? AND user_id=?`, [teamId, userId]);
+      return result?.changes ? Number(result.changes) : 0;
+    },
+    async getTeamMember(teamId, userId){
+      const teamNumeric = Number(teamId);
+      const userNumeric = Number(userId);
+      if (!Number.isFinite(teamNumeric) || !Number.isFinite(userNumeric)) return null;
+      return await dbh.get(`SELECT * FROM team_members WHERE team_id=? AND user_id=?`, [teamNumeric, userNumeric]);
+    },
+    async listTeamServerIds(teamId){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return [];
+      const rows = await dbh.all(`SELECT id FROM servers WHERE team_id=? ORDER BY id ASC`, [numeric]);
+      return rows
+        .map((row) => Number(row?.id))
+        .filter((id) => Number.isFinite(id));
+    },
+    async countTeams(){
+      const row = await dbh.get('SELECT COUNT(*) AS c FROM teams');
+      return Number(row?.c || 0);
+    },
+    async getUserActiveTeam(userId){
+      const numeric = Number(userId);
+      if (!Number.isFinite(numeric)) return null;
+      const row = await dbh.get(
+        `SELECT value FROM user_settings WHERE user_id=? AND key='active_team'`,
+        [numeric]
+      );
+      const value = Number(row?.value);
+      return Number.isFinite(value) ? value : null;
+    },
+    async setUserActiveTeam(userId, teamId){
+      const numericUser = Number(userId);
+      if (!Number.isFinite(numericUser)) return;
+      if (teamId == null) {
+        await dbh.run(`DELETE FROM user_settings WHERE user_id=? AND key='active_team'`, [numericUser]);
+        return;
+      }
+      const numericTeam = Number(teamId);
+      if (!Number.isFinite(numericTeam)) return;
+      const now = new Date().toISOString();
+      await dbh.run(
+        `INSERT INTO user_settings(user_id, key, value, updated_at) VALUES(?,?,?,?)
+         ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+        [numericUser, 'active_team', String(numericTeam), now]
       );
     },
     async countAdmins(){ const r = await dbh.get("SELECT COUNT(*) c FROM users WHERE role='admin'"); return r.c; },
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await dbh.run('UPDATE users SET role=? WHERE id=?',[role,id]); },
     async deleteUser(id){ const r = await dbh.run('DELETE FROM users WHERE id=?',[id]); return r.changes; },
-    async listServers(){ return await dbh.all('SELECT id,name,host,port,tls,created_at FROM servers ORDER BY id DESC'); },
-    async listServersWithSecrets(){
-      return await dbh.all('SELECT id,name,host,port,password,tls,created_at FROM servers ORDER BY id DESC');
+    async listServers(teamId){
+      if (typeof teamId === 'undefined' || teamId === null) {
+        return await dbh.all('SELECT id,name,host,port,tls,team_id,created_at FROM servers ORDER BY id DESC');
+      }
+      return await dbh.all(
+        'SELECT id,name,host,port,tls,team_id,created_at FROM servers WHERE team_id=? ORDER BY id DESC',
+        [teamId]
+      );
+    },
+    async listServersWithSecrets(teamId){
+      if (typeof teamId === 'undefined' || teamId === null) {
+        return await dbh.all('SELECT id,name,host,port,password,tls,team_id,created_at FROM servers ORDER BY id DESC');
+      }
+      return await dbh.all(
+        'SELECT id,name,host,port,password,tls,team_id,created_at FROM servers WHERE team_id=? ORDER BY id DESC',
+        [teamId]
+      );
     },
     async getServer(id){ return await dbh.get('SELECT * FROM servers WHERE id=?',[id]); },
-    async createServer(s){ const r = await dbh.run('INSERT INTO servers(name,host,port,password,tls) VALUES(?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0]); return r.lastID; },
+    async createServer(s){ const r = await dbh.run('INSERT INTO servers(name,host,port,password,tls,team_id) VALUES(?,?,?,?,?,?)',[s.name,s.host,s.port,s.password,s.tls?1:0,s.team_id ?? null]); return r.lastID; },
     async updateServer(id,s){
       const cur = await dbh.get('SELECT * FROM servers WHERE id=?',[id]); if (!cur) return 0;
       const next = { ...cur, ...s };
-      const r = await dbh.run('UPDATE servers SET name=?,host=?,port=?,password=?,tls=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,id]);
+      const r = await dbh.run('UPDATE servers SET name=?,host=?,port=?,password=?,tls=?,team_id=? WHERE id=?',[next.name,next.host,next.port,next.password,next.tls?1:0,next.team_id ?? cur.team_id ?? null,id]);
       return r.changes;
     },
     async deleteServer(id){ const r = await dbh.run('DELETE FROM servers WHERE id=?',[id]); return r.changes; },

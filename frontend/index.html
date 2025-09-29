@@ -66,6 +66,10 @@
           </div>
         </div>
         <div class="header-controls">
+          <div id="teamSwitcher" class="team-switcher hidden" aria-hidden="true">
+            <label class="sr-only" for="teamSelect">Select team</label>
+            <select id="teamSelect" aria-label="Select active team"></select>
+          </div>
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
             <button id="navTeam" type="button" class="nav-btn">Team</button>
@@ -134,6 +138,15 @@
                   <button id="btnCreateUser" class="accent">Create user</button>
                 </div>
                 <p id="userFeedback" class="notice hidden"></p>
+                <div class="team-card-divider" aria-hidden="true"><span>Or add existing user</span></div>
+                <input id="existingUserName" placeholder="Existing username">
+                <label>Role
+                  <select id="existingUserRole"></select>
+                </label>
+                <div class="row">
+                  <button id="btnAddExistingUser" class="ghost">Add to team</button>
+                </div>
+                <p id="existingUserFeedback" class="notice hidden"></p>
               </div>
             </aside>
             <div class="team-card-main">

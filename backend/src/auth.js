@@ -37,6 +37,6 @@ export function authMiddleware(secret, options = {}) {
 
 export function requireAdmin(req, res, next) {
   const hasPermission = req.authUser?.permissions?.global?.manageUsers;
-  if (req.user?.role !== 'admin' && !hasPermission) return res.status(403).json({ error: 'forbidden' });
+  if (!hasPermission) return res.status(403).json({ error: 'forbidden' });
   next();
 }
