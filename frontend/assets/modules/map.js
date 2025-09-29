@@ -1361,33 +1361,37 @@
           const previousMeta = getActiveMapMeta();
           const previousKey = previousMeta?.mapKey ?? null;
           const previousImage = previousMeta?.imageUrl ?? null;
-          const previousCached = previousMeta?.cachedAt ?? null;
           const previousLocal = previousMeta?.localImage ?? null;
           const previousRemote = previousMeta?.remoteImage ?? null;
           const previousCustom = previousMeta?.custom ?? null;
           let mapChanged = false;
+          const allowMapRefresh = reason !== 'player-reload';
           const hasMapField = data && Object.prototype.hasOwnProperty.call(data, 'map');
           if (hasMapField) {
             const nextMeta = data?.map || null;
             const nextKey = nextMeta?.mapKey ?? null;
             const nextImage = nextMeta?.imageUrl ?? null;
-            const nextCached = nextMeta?.cachedAt ?? null;
             const nextLocal = nextMeta?.localImage ?? null;
             const nextRemote = nextMeta?.remoteImage ?? null;
             const nextCustom = nextMeta?.custom ?? null;
-            mapChanged = !!(previousMeta || nextMeta)
-              && (
-                (!!previousMeta) !== (!!nextMeta)
-                || previousKey !== nextKey
-                || previousImage !== nextImage
-                || previousCached !== nextCached
-                || !!previousLocal !== !!nextLocal
-                || !!previousRemote !== !!nextRemote
-                || !!previousCustom !== !!nextCustom
-              );
-            state.mapMeta = nextMeta;
-            state.mapMetaServerId = state.serverId;
-          } else if (state.mapMetaServerId !== state.serverId) {
+            if (allowMapRefresh) {
+              mapChanged = !!(previousMeta || nextMeta)
+                && (
+                  (!!previousMeta) !== (!!nextMeta)
+                  || previousKey !== nextKey
+                  || previousImage !== nextImage
+                  || !!previousLocal !== !!nextLocal
+                  || !!previousRemote !== !!nextRemote
+                  || !!previousCustom !== !!nextCustom
+                );
+              state.mapMeta = nextMeta;
+              state.mapMetaServerId = state.serverId;
+            } else if (!state.mapMeta && nextMeta) {
+              // Ensure initial metadata is stored even if we're only refreshing players
+              state.mapMeta = nextMeta;
+              state.mapMetaServerId = state.serverId;
+            }
+          } else if (allowMapRefresh && state.mapMetaServerId !== state.serverId) {
             state.mapMeta = null;
             state.mapMetaServerId = state.serverId;
             mapChanged = true;
