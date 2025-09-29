@@ -714,13 +714,18 @@
   function renderUserDetails(user) {
     if (!userDetailsPanel || !user) return;
     const isSelf = user.id === state.currentUser?.id;
-    if (userDetailsName) userDetailsName.textContent = user.username;
+    const roleLabel = formatUserRole(user);
+    if (userDetailsName) {
+      const baseName = user.username || '—';
+      userDetailsName.textContent = roleLabel && roleLabel !== '—'
+        ? `${baseName} (${roleLabel})`
+        : baseName;
+    }
     if (userDetailsSubtitle) {
       userDetailsSubtitle.textContent = isSelf
         ? 'Signed in with this account'
         : 'Review access and credentials';
     }
-    const roleLabel = formatUserRole(user);
     if (userDetailsRole) userDetailsRole.textContent = roleLabel;
     if (userDetailsRoleBadge) userDetailsRoleBadge.textContent = roleLabel;
     if (userDetailsCreated) userDetailsCreated.textContent = formatUserJoined(user.created_at);

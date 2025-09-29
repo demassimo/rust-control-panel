@@ -67,8 +67,13 @@
         </div>
         <div class="header-controls">
           <div id="teamSwitcher" class="team-switcher hidden" aria-hidden="true">
-            <label class="sr-only" for="teamSelect">Select team</label>
-            <select id="teamSelect" aria-label="Select active team"></select>
+            <div class="team-select-group">
+              <label class="team-select-label" for="teamSelect">Username (owner)</label>
+              <div class="team-select-wrap">
+                <select id="teamSelect"></select>
+                <span class="team-select-arrow" aria-hidden="true">▾</span>
+              </div>
+            </div>
           </div>
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
