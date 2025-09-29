@@ -782,7 +782,12 @@
           if (Array.isArray(note)) return [...note, customMapNote];
           return [note, customMapNote];
         };
+        const ready = hasImage && mapReady();
 
+        if (ready) {
+          clearMessage();
+          return;
+        }
         if (awaitingServerInfo) {
           showStatusMessage('Waiting for world details from the server…', {
             spinner: true,
