@@ -1208,6 +1208,7 @@
     invalid_payload: 'The request payload was not accepted.',
     missing_image: 'Choose an image before uploading.',
     invalid_image: 'The selected image could not be processed.',
+    unsupported_image_type: 'Only PNG, JPEG, or WebP images are supported.',
     image_too_large: 'The image is too large. Please upload a file under 20 MB.',
     map_upload_failed: 'Uploading the map image failed. Please try again.',
     invalid_current_password: 'The current password you entered is incorrect.',

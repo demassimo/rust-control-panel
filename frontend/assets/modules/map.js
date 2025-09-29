@@ -771,23 +771,35 @@
         const awaitingUpload = state.status === 'awaiting_upload';
         const awaitingServerInfo = state.status === 'awaiting_server_info';
         const rustmapsMissing = state.status === 'rustmaps_not_found' || meta?.notFound;
+        const levelUrl = resolveLevelUrl();
+        const customMapNote = levelUrl
+          ? 'This server is using a custom map. Use RustMaps, RustEdit, or run the render commands on the server to generate a map image.'
+          : null;
+
+        const noteWithCustomMap = (note) => {
+          if (!customMapNote) return note;
+          if (!note) return customMapNote;
+          if (Array.isArray(note)) return [...note, customMapNote];
+          return [note, customMapNote];
+        };
 
         if (awaitingServerInfo) {
           showStatusMessage('Waiting for world details from the server…', {
             spinner: true,
             details,
-            note: 'We’ll try again automatically.',
+            note: noteWithCustomMap('We’ll try again automatically.'),
             statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
           });
         } else if (awaitingUpload && !hasImage) {
           showStatusMessage('Upload your rendered map image to enable the live map.', {
             details,
+            note: noteWithCustomMap(null),
             statusCodes: combineStatusCodes(state.status)
           });
         } else if (rustmapsMissing && !hasImage) {
           showStatusMessage('RustMaps has not published imagery for this seed yet.', {
             details,
-            note: 'Try again shortly or upload your render below.',
+            note: noteWithCustomMap('Try again shortly or upload your render below.'),
             statusCodes: combineStatusCodes(state.status || (meta?.notFound ? 'rustmaps_not_found' : null))
           });
         } else if (awaitingImagery && !hasImage) {
@@ -795,34 +807,78 @@
           showStatusMessage(generating ? 'RustMaps is generating this map…' : 'Waiting for RustMaps imagery…', {
             spinner: true,
             details,
-            note: generating ? 'We’ll refresh automatically.' : 'We’ll check back periodically.',
+            note: noteWithCustomMap(generating ? 'We’ll refresh automatically.' : 'We’ll check back periodically.'),
             statusCodes: combineStatusCodes(state.status, generating ? 'pending' : null)
           });
         } else if (meta?.custom && !hasImage) {
           showStatusMessage('Upload your rendered map image to enable the live map.', {
             details,
+            note: noteWithCustomMap(null),
             statusCodes: combineStatusCodes(state.status, 'awaiting_upload')
           });
         } else if (!meta) {
           showStatusMessage('Waiting for map metadata…', {
             spinner: true,
             details,
+            note: noteWithCustomMap(null),
             statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
           });
         } else if (!hasImage) {
           showStatusMessage('Map imagery is still being prepared…', {
             spinner: true,
             details,
+            note: noteWithCustomMap(null),
             statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
           });
         } else if (!mapReady()) {
           showStatusMessage('Map metadata is incomplete. Try again shortly.', {
             details,
+            note: noteWithCustomMap(null),
             statusCodes: combineStatusCodes(state.status)
           });
         } else {
           clearMessage();
         }
+      }
+
+      async function uploadMapFormData(file, mapKey) {
+        if (!ctx.authorizedFetch) throw new Error('unsupported');
+        const formData = new FormData();
+        formData.append('image', file);
+        if (mapKey) formData.append('mapKey', mapKey);
+        const res = await ctx.authorizedFetch(`/servers/${state.serverId}/map-image/upload`, {
+          method: 'POST',
+          body: formData
+        });
+        const contentType = res?.headers?.get?.('content-type') || '';
+        let payload = null;
+        if (contentType.includes('application/json')) {
+          try { payload = await res.json(); }
+          catch { payload = null; }
+        }
+        if (!res.ok) {
+          const err = new Error(payload?.error || 'map_upload_failed');
+          err.status = res.status;
+          if (payload?.error) err.code = payload.error;
+          throw err;
+        }
+        return payload;
+      }
+
+      async function uploadMapImageFile(file) {
+        const activeMeta = getActiveMapMeta();
+        const mapKey = activeMeta?.mapKey || null;
+        if (ctx.authorizedFetch) {
+          try {
+            return await uploadMapFormData(file, mapKey);
+          } catch (err) {
+            if (!err) throw err;
+            const shouldFallback = !err.code && (err.status === 404 || err.status === 405);
+            if (!shouldFallback) throw err;
+          }
+        }
+        const dataUrl = await readFileAsDataURL(file);
+        return ctx.api(`/servers/${state.serverId}/map-image`, { image: dataUrl, mapKey }, 'POST');
       }
 
       async function handleUpload() {
@@ -840,10 +896,7 @@
         const previousLabel = uploadBtn.textContent;
         uploadBtn.textContent = 'Uploading…';
         try {
-          const dataUrl = await readFileAsDataURL(file);
-          const activeMeta = getActiveMapMeta();
-          const payload = { image: dataUrl, mapKey: activeMeta?.mapKey || null };
-          const response = await ctx.api(`/servers/${state.serverId}/map-image`, payload, 'POST');
+          const response = await uploadMapImageFile(file);
           if (response?.map) {
             state.mapMeta = response.map;
             state.mapMetaServerId = state.serverId;
@@ -866,6 +919,7 @@
           const code = ctx.errorCode?.(err);
           if (code === 'missing_image') showUploadNotice('Choose an image before uploading.');
           else if (code === 'invalid_image') showUploadNotice('The selected image could not be processed.');
+          else if (code === 'unsupported_image_type') showUploadNotice('Only PNG, JPEG, or WebP images are supported.');
           else if (code === 'image_too_large') showUploadNotice('The image is too large. Please upload a file under 20 MB.');
           else showUploadNotice(ctx.describeError?.(err) || 'Uploading the map image failed.');
         } finally {
@@ -922,6 +976,34 @@
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
           if (numeric != null && numeric !== 0) return numeric;
+        }
+        return null;
+      }
+
+      function resolveLevelUrl() {
+        const meta = getActiveMapMeta();
+        const info = state.serverInfo || {};
+        const candidates = [
+          meta?.levelUrl,
+          meta?.levelURL,
+          meta?.LevelUrl,
+          meta?.LevelURL,
+          meta?.level?.url,
+          info?.levelUrl,
+          info?.levelURL,
+          info?.LevelUrl,
+          info?.LevelURL,
+          info?.Levelurl,
+          info?.levelurl,
+          info?.['Level Url'],
+          info?.['Level URL'],
+          info?.['level url']
+        ];
+        for (const candidate of candidates) {
+          if (typeof candidate === 'string') {
+            const trimmed = candidate.trim();
+            if (trimmed) return trimmed;
+          }
         }
         return null;
       }

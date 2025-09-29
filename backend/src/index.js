@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
 import geoip from 'geoip-lite';
+import multer from 'multer';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
@@ -39,6 +40,24 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 const MAP_GLOBAL_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'global');
 const MAP_METADATA_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'metadata');
+const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
+
+const mapImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_MAP_IMAGE_BYTES }
+});
+
+const mapImageUploadMiddleware = (req, res, next) => {
+  mapImageUpload.single('image')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'image_too_large' });
+      }
+      return res.status(400).json({ error: 'invalid_image' });
+    }
+    next();
+  });
+};
 
 const REGION_DISPLAY = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
   ? new Intl.DisplayNames(['en'], { type: 'region' })
@@ -843,6 +862,13 @@ function parseServerInfoMessage(message) {
       const seed = extractInteger(trimmedValue);
       if (seed != null) result.seed = seed;
     }
+    if (lower.includes('level') && lower.includes('url')) {
+      if (!result.levelUrl && typeof trimmedValue === 'string' && trimmedValue.trim()) {
+        result.levelUrl = trimmedValue.trim();
+      } else if (!result.levelUrl && trimmedValue != null && trimmedValue !== '') {
+        result.levelUrl = String(trimmedValue).trim();
+      }
+    }
     if (lower.includes('fps') || lower.includes('framerate')) {
       const fpsValue = extractFloat(trimmedValue);
       if (fpsValue != null) result.fps = fpsValue;
@@ -925,6 +951,27 @@ function parseServerInfoMessage(message) {
   if (output.size == null) {
     const mapSize = extractInteger(output.Map ?? output.map ?? null);
     if (mapSize != null) output.size = mapSize;
+  }
+
+  if (!output.levelUrl) {
+    const candidates = [
+      result.levelUrl,
+      fields.levelUrl,
+      fields.levelURL,
+      fields.LevelUrl,
+      fields.LevelURL,
+      fields['Level Url'],
+      fields['Level URL']
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed) {
+          output.levelUrl = trimmed;
+          break;
+        }
+      }
+    }
   }
 
   if (output.fps == null) {
@@ -1707,6 +1754,34 @@ function deriveMapKey(info = {}, metadata = null) {
   return parts.length ? parts.join(':') : null;
 }
 
+const SUPPORTED_IMAGE_EXTENSIONS = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp'
+};
+
+function resolveImageFormat(mime, filename = '') {
+  const normalizedMime = typeof mime === 'string' ? mime.trim().toLowerCase() : '';
+  if (normalizedMime && SUPPORTED_IMAGE_EXTENSIONS[normalizedMime]) {
+    return { mime: normalizedMime, extension: SUPPORTED_IMAGE_EXTENSIONS[normalizedMime] };
+  }
+  const name = typeof filename === 'string' ? filename.trim().toLowerCase() : '';
+  if (name.endsWith('.png')) return { mime: 'image/png', extension: 'png' };
+  if (name.endsWith('.webp')) return { mime: 'image/webp', extension: 'webp' };
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) {
+    return { mime: 'image/jpeg', extension: 'jpg' };
+  }
+  return null;
+}
+
+function createRequestError(code, status = 400) {
+  const err = new Error(code || 'error');
+  err.code = code || 'error';
+  err.status = status;
+  return err;
+}
+
 function decodeBase64Image(input) {
   if (typeof input !== 'string' || !input) return null;
   let data = input.trim();
@@ -1718,14 +1793,64 @@ function decodeBase64Image(input) {
   }
   try {
     const buffer = Buffer.from(data, 'base64');
-    let extension = 'jpg';
-    if (mime.includes('png')) extension = 'png';
-    else if (mime.includes('webp')) extension = 'webp';
-    else if (mime.includes('jpeg')) extension = 'jpg';
-    return { buffer, mime, extension };
+    const format = resolveImageFormat(mime);
+    if (!format) return null;
+    return { buffer, ...format };
   } catch {
     return null;
   }
+}
+
+async function persistServerMapImageUpload(serverId, { buffer, extension, mapKey }) {
+  if (!Number.isFinite(serverId)) throw createRequestError('invalid_id');
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw createRequestError('invalid_image');
+  if (buffer.length > MAX_MAP_IMAGE_BYTES) throw createRequestError('image_too_large', 413);
+  const server = await db.getServer(serverId);
+  if (!server) throw createRequestError('not_found', 404);
+  let record = await db.getServerMap(serverId);
+  const info = getCachedServerInfo(serverId) || {};
+  const normalizedMapKey = typeof mapKey === 'string' && mapKey.trim() ? mapKey.trim() : null;
+  const derivedKey = deriveMapKey(info) || null;
+  let targetKey;
+  if (record?.custom && record?.map_key) {
+    targetKey = record.map_key;
+  } else {
+    const baseKey = normalizedMapKey || derivedKey;
+    targetKey = baseKey ? `${baseKey}-server-${serverId}` : `server-${serverId}-custom`;
+  }
+  if (record) await removeMapImage(record);
+  if (record?.map_key && record.map_key !== targetKey) await removeGlobalMapMetadata(record.map_key);
+  const filePath = serverMapImageFilePath(serverId, targetKey, extension);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, buffer);
+  let data = {};
+  if (record?.data) {
+    try { data = typeof record.data === 'string' ? JSON.parse(record.data) : { ...record.data }; }
+    catch { data = {}; }
+  }
+  if (info?.size && !data.size) data.size = info.size;
+  if (info?.seed && !data.seed) data.seed = info.seed;
+  if (info?.mapName && !data.mapName) data.mapName = info.mapName;
+  const stored = { ...data, mapKey: targetKey, manualUpload: true };
+  if (!stored.cachedAt) stored.cachedAt = new Date().toISOString();
+  await db.saveServerMap(serverId, {
+    map_key: targetKey,
+    data: JSON.stringify(stored),
+    image_path: filePath,
+    custom: 1
+  });
+  const updatedRecord = await db.getServerMap(serverId);
+  const map = mapRecordToPayload(serverId, updatedRecord, stored);
+  return { map, updatedAt: new Date().toISOString() };
+}
+
+function respondToMapUploadError(err, res) {
+  const code = err?.code || err?.message;
+  if (code === 'image_too_large') return res.status(413).json({ error: 'image_too_large' });
+  if (code === 'invalid_image' || code === 'invalid_id') return res.status(400).json({ error: 'invalid_image' });
+  if (code === 'not_found') return res.status(404).json({ error: 'not_found' });
+  console.error('map upload failed', err);
+  return res.status(500).json({ error: 'map_upload_failed' });
 }
 
 function toServerId(value) {
@@ -2913,49 +3038,51 @@ app.post('/api/servers/:id/map-image', auth, async (req, res) => {
   if (!image) return res.status(400).json({ error: 'missing_image' });
   const decoded = decodeBase64Image(image);
   if (!decoded?.buffer || decoded.buffer.length === 0) return res.status(400).json({ error: 'invalid_image' });
-  if (decoded.buffer.length > 20 * 1024 * 1024) return res.status(413).json({ error: 'image_too_large' });
   try {
-    const server = await db.getServer(id);
-    if (!server) return res.status(404).json({ error: 'not_found' });
-    let record = await db.getServerMap(id);
-    const info = getCachedServerInfo(id) || {};
-    const normalizedMapKey = typeof mapKey === 'string' && mapKey.trim() ? mapKey.trim() : null;
-    const derivedKey = deriveMapKey(info) || null;
-    let targetKey;
-    if (record?.custom && record?.map_key) {
-      targetKey = record.map_key;
-    } else {
-      const baseKey = normalizedMapKey || derivedKey;
-      targetKey = baseKey ? `${baseKey}-server-${id}` : `server-${id}-custom`;
-    }
-    if (record) await removeMapImage(record);
-    if (record?.map_key && record.map_key !== targetKey) await removeGlobalMapMetadata(record.map_key);
-    const filePath = serverMapImageFilePath(id, targetKey, decoded.extension);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, decoded.buffer);
-    let data = {};
-    if (record?.data) {
-      try { data = JSON.parse(record.data); } catch { data = {}; }
-    }
-    if (info?.size && !data.size) data.size = info.size;
-    if (info?.seed && !data.seed) data.seed = info.seed;
-    if (info?.mapName && !data.mapName) data.mapName = info.mapName;
-    data = { ...data, mapKey: targetKey, manualUpload: true };
-    if (!data.cachedAt) data.cachedAt = new Date().toISOString();
-    await db.saveServerMap(id, {
-      map_key: targetKey,
-      data: JSON.stringify(data),
-      image_path: filePath,
-      custom: 1
+    const payload = await persistServerMapImageUpload(id, {
+      buffer: decoded.buffer,
+      extension: decoded.extension,
+      mapKey
     });
-    record = await db.getServerMap(id);
-    const map = mapRecordToPayload(id, record, data);
-    res.json({ map, updatedAt: new Date().toISOString() });
+    res.json(payload);
   } catch (err) {
-    console.error('map upload failed', err);
-    res.status(500).json({ error: 'map_upload_failed' });
+    respondToMapUploadError(err, res);
   }
 });
+
+app.post(
+  '/api/servers/:id/map-image/upload',
+  auth,
+  (req, res, next) => {
+    const id = ensureServerCapability(req, res, 'manage');
+    if (id == null) return;
+    req.serverId = id;
+    next();
+  },
+  mapImageUploadMiddleware,
+  async (req, res) => {
+    const id = req.serverId ?? ensureServerCapability(req, res, 'manage');
+    if (id == null) return;
+    const file = req.file;
+    if (!file || !file.buffer || file.buffer.length === 0) {
+      return res.status(400).json({ error: 'missing_image' });
+    }
+    const format = resolveImageFormat(file.mimetype, file.originalname);
+    if (!format) {
+      return res.status(415).json({ error: 'unsupported_image_type' });
+    }
+    try {
+      const payload = await persistServerMapImageUpload(id, {
+        buffer: file.buffer,
+        extension: format.extension,
+        mapKey: req.body?.mapKey
+      });
+      res.json(payload);
+    } catch (err) {
+      respondToMapUploadError(err, res);
+    }
+  }
+);
 
 app.get('/api/servers/:id/map-image', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'liveMap');
