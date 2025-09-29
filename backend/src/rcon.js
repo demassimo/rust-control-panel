@@ -98,6 +98,11 @@ class RustWebRcon extends EventEmitter {
 
     // track inbound activity
     this.lastMessageAt = 0;
+
+    // reconnection control
+    this.failedAttempts = 0;
+    this.hardBackoffMs = 30000;
+    this.hardBackoffUntil = 0;
   }
 
   get url() {
@@ -112,6 +117,10 @@ class RustWebRcon extends EventEmitter {
 
   async connect() {
     if (this.connected && this.ws?.readyState === WebSocket.OPEN) return;
+    const waitFor = this._remainingHardBackoff();
+    if (waitFor > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitFor));
+    }
     this.manualClose = false;
     this._clearReconnect();
 
@@ -123,6 +132,8 @@ class RustWebRcon extends EventEmitter {
       const onOpen = () => {
         this.connected = true;
         this.lastMessageAt = Date.now();
+        this.failedAttempts = 0;
+        this.hardBackoffUntil = 0;
         this.emit('open');
         this._startKeepalive();
         settled = true;
@@ -131,6 +142,7 @@ class RustWebRcon extends EventEmitter {
 
       const onMessage = (data) => {
         this.lastMessageAt = Date.now();
+        this.failedAttempts = 0;
         const text = data?.toString?.() ?? String(data);
 
         let obj = null;
@@ -280,6 +292,33 @@ class RustWebRcon extends EventEmitter {
 
   _scheduleReconnect() {
     if (this.reconnectTimer || this.manualClose) return;
+
+    this.failedAttempts += 1;
+
+    if (this.failedAttempts >= 3) {
+      const now = Date.now();
+      const silence = this.lastMessageAt ? now - this.lastMessageAt : null;
+      let delay = this.hardBackoffMs;
+
+      if (silence != null) {
+        delay = silence >= this.hardBackoffMs ? 0 : this.hardBackoffMs - silence;
+      }
+
+      if (delay > 0) {
+        this.hardBackoffUntil = now + delay;
+        this.emit('rcon_error', new Error('Maximum reconnect attempts reached; backing off.'));
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this.failedAttempts = 0;
+          this._scheduleReconnect();
+        }, delay);
+        return;
+      }
+
+      this.failedAttempts = 0;
+      this.hardBackoffUntil = 0;
+    }
+
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       if (this.manualClose) return;
@@ -298,6 +337,16 @@ class RustWebRcon extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  }
+
+  _remainingHardBackoff() {
+    if (!this.hardBackoffUntil) return 0;
+    const now = Date.now();
+    if (now >= this.hardBackoffUntil) {
+      this.hardBackoffUntil = 0;
+      return 0;
+    }
+    return this.hardBackoffUntil - now;
   }
 
   _rejectAll(err) {
