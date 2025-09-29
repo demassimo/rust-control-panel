@@ -404,30 +404,9 @@
     renderTeamSwitcher();
   }
 
-  function updateTeamSelectLabel(teams, selectedTeam) {
+  function updateTeamSelectLabel() {
     if (!teamSelectLabel) return;
-    const username = typeof state.currentUser?.username === 'string'
-      ? state.currentUser.username.trim()
-      : '';
-    const roleLabelSource = selectedTeam || state.currentUser || null;
-    const roleLabel = formatUserRole(roleLabelSource);
-    const roleLabelNormalized = roleLabel && roleLabel !== '—'
-      ? roleLabel.toLowerCase()
-      : '';
-    let labelText = 'Team';
-    if (username) {
-      labelText = roleLabelNormalized
-        ? `${username} (${roleLabelNormalized})`
-        : username;
-    } else if (selectedTeam) {
-      const teamName = selectedTeam.name || `Team ${selectedTeam.id}`;
-      labelText = roleLabel && roleLabel !== '—'
-        ? `${teamName} (${roleLabel})`
-        : teamName;
-    } else if (roleLabel && roleLabel !== '—') {
-      labelText = roleLabel;
-    }
-    teamSelectLabel.textContent = labelText;
+    teamSelectLabel.textContent = 'Team Selector';
   }
 
   function renderTeamSwitcher() {
@@ -437,19 +416,33 @@
       teamSwitcher.classList.add('hidden');
       teamSwitcher.setAttribute('aria-hidden', 'true');
       teamSelect.innerHTML = '';
-      updateTeamSelectLabel([], null);
+      updateTeamSelectLabel();
       return;
     }
     teamSwitcher.classList.remove('hidden');
     teamSwitcher.setAttribute('aria-hidden', 'false');
     teamSelect.innerHTML = '';
+    const currentUserId = Number(state.currentUser?.id);
+    const hasCurrentUserId = Number.isFinite(currentUserId);
+    const currentUsername = typeof state.currentUser?.username === 'string'
+      ? state.currentUser.username.trim()
+      : '';
+
     teams.forEach((team) => {
       if (!team) return;
       const option = document.createElement('option');
       option.value = String(team.id);
-      const label = team.name || `Team ${team.id}`;
-      const roleSuffix = team.roleName || team.role;
-      option.textContent = roleSuffix ? `${label} (${roleSuffix})` : label;
+      const ownerId = Number(team.ownerId ?? team.owner_id ?? team.owner_user_id);
+      const isOwner = hasCurrentUserId && Number.isFinite(ownerId) && ownerId === currentUserId;
+      let label = team.name || `Team ${team.id}`;
+      if (isOwner) {
+        const ownerLabel = currentUsername || label;
+        label = `${ownerLabel} (owner)`;
+      } else {
+        const roleSuffix = team.roleName || team.role;
+        label = roleSuffix ? `${label} (${roleSuffix})` : label;
+      }
+      option.textContent = label;
       teamSelect.appendChild(option);
     });
     const selectedTeam = teams.find((team) => Number(team.id) === Number(state.activeTeamId));
@@ -459,7 +452,7 @@
       teamSelect.value = String(teams[0].id);
     }
     teamSelect.disabled = teams.length <= 1;
-    updateTeamSelectLabel(teams, selectedTeam || teams[0]);
+    updateTeamSelectLabel();
   }
 
   async function onTeamSelectionChange() {
