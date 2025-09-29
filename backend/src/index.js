@@ -116,13 +116,128 @@ async function loadUserContext(userId) {
   if (!Number.isFinite(numeric)) return null;
   const row = await db.getUser(numeric);
   if (!row) return null;
-  const permissions = normaliseRolePermissions(row.role_permissions, row.role);
+  let teams = [];
+  if (typeof db.listUserTeams === 'function') {
+    try {
+      teams = await db.listUserTeams(numeric);
+    } catch (err) {
+      console.warn('Failed to load user teams', err);
+    }
+  }
+  let activeTeamId = null;
+  if (typeof db.getUserActiveTeam === 'function') {
+    try {
+      const storedTeam = await db.getUserActiveTeam(numeric);
+      if (storedTeam && teams.some((team) => team.id === storedTeam)) {
+        activeTeamId = storedTeam;
+      }
+    } catch (err) {
+      console.warn('Failed to load active team', err);
+    }
+  }
+  if (!activeTeamId && teams.length > 0) {
+    activeTeamId = teams[0].id;
+    if (typeof db.setUserActiveTeam === 'function') {
+      db.setUserActiveTeam(numeric, activeTeamId).catch((err) => {
+        console.warn('Failed to persist default active team', err);
+      });
+    }
+  }
+  if (!activeTeamId && typeof db.createTeam === 'function') {
+    try {
+      const name = row.username ? `${row.username}'s Team` : 'My Team';
+      const teamId = await db.createTeam({ name, owner_user_id: row.id });
+      await db.addTeamMember({ team_id: teamId, user_id: row.id, role: row.role || 'admin' });
+      if (typeof db.setUserActiveTeam === 'function') {
+        await db.setUserActiveTeam(row.id, teamId);
+      }
+      activeTeamId = teamId;
+      teams = await db.listUserTeams(numeric);
+    } catch (err) {
+      console.warn('Failed to create default team for user', err);
+    }
+  }
+  let effectiveRole = row.role;
+  let rolePermissions = row.role_permissions;
+  let activeTeamName = null;
+  let activeTeamRoleName = null;
+  const roleCache = new Map();
+  let teamServers = [];
+  if (activeTeamId && Array.isArray(teams)) {
+    const membership = teams.find((team) => team.id === activeTeamId) || null;
+    if (membership?.role) {
+      effectiveRole = membership.role;
+      if (typeof db.getRole === 'function') {
+        if (!roleCache.has(membership.role)) {
+          const roleRecord = await db.getRole(membership.role);
+          roleCache.set(membership.role, roleRecord);
+        }
+        const roleRecord = roleCache.get(membership.role);
+        if (roleRecord?.permissions) {
+          rolePermissions = roleRecord.permissions;
+          activeTeamRoleName = roleRecord.name || membership.role;
+        }
+      }
+    }
+    if (membership) {
+      activeTeamName = membership.name || null;
+    }
+    if (typeof db.listTeamServerIds === 'function') {
+      try {
+        teamServers = await db.listTeamServerIds(activeTeamId);
+      } catch (err) {
+        console.warn('Failed to list team server ids', err);
+      }
+    }
+  }
+  const permissions = normaliseRolePermissions(rolePermissions, effectiveRole);
+  if (Array.isArray(permissions?.servers?.allowed)) {
+    const teamIds = teamServers.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+    if (permissions.servers.allowed.includes('*')) {
+      permissions.servers.allowed = teamIds;
+    } else {
+      const allowedSet = new Set(
+        permissions.servers.allowed
+          .map((value) => {
+            const numericValue = Number(value);
+            return Number.isFinite(numericValue) ? numericValue : null;
+          })
+          .filter((value) => value != null)
+      );
+      permissions.servers.allowed = teamIds.filter((id) => allowedSet.has(id));
+    }
+  }
+  const projectedTeams = [];
+  if (Array.isArray(teams)) {
+    for (const team of teams) {
+      let roleName = null;
+      if (team?.role) {
+        if (!roleCache.has(team.role) && typeof db.getRole === 'function') {
+          const roleRecord = await db.getRole(team.role);
+          roleCache.set(team.role, roleRecord);
+        }
+        const cachedRole = roleCache.get(team.role);
+        roleName = cachedRole?.name || team.role;
+      }
+      projectedTeams.push({
+        id: team.id,
+        name: team.name,
+        ownerId: team.owner_user_id,
+        role: team.role,
+        roleName
+      });
+    }
+  }
   return {
     id: row.id,
     username: row.username,
-    role: row.role,
-    roleName: row.role_name || row.role,
-    permissions
+    role: effectiveRole,
+    roleName: activeTeamRoleName || row.role_name || effectiveRole,
+    permissions,
+    activeTeamId,
+    activeTeamName,
+    teams: projectedTeams,
+    created_at: row.created_at
   };
 }
 
@@ -1803,10 +1918,20 @@ app.post('/api/login', async (req, res) => {
     if (!row) return res.status(401).json({ error: 'invalid_login' });
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid_login' });
-    const permissions = normaliseRolePermissions(row.role_permissions, row.role);
-    const roleName = row.role_name || row.role;
-    const token = signToken(row, JWT_SECRET);
-    res.json({ token, username: row.username, role: row.role, roleName, id: row.id, permissions });
+    const context = await loadUserContext(row.id);
+    const roleForToken = context?.role || row.role;
+    const token = signToken({ ...row, role: roleForToken }, JWT_SECRET);
+    res.json({
+      token,
+      username: context?.username || row.username,
+      role: roleForToken,
+      roleName: context?.roleName || row.role_name || roleForToken,
+      id: row.id,
+      permissions: context?.permissions || normaliseRolePermissions(row.role_permissions, row.role),
+      activeTeamId: context?.activeTeamId || null,
+      activeTeamName: context?.activeTeamName || null,
+      teams: context?.teams || []
+    });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1832,15 +1957,18 @@ app.post('/api/register', async (req, res) => {
 
 app.get('/api/me', auth, async (req, res) => {
   try {
-    const row = await db.getUser(req.user.uid);
-    if (!row) return res.status(404).json({ error: 'not_found' });
+    const context = await loadUserContext(req.user.uid);
+    if (!context) return res.status(404).json({ error: 'not_found' });
     res.json({
-      id: row.id,
-      username: row.username,
-      role: row.role,
-      roleName: row.role_name || row.role,
-      permissions: normaliseRolePermissions(row.role_permissions, row.role),
-      created_at: row.created_at
+      id: context.id,
+      username: context.username,
+      role: context.role,
+      roleName: context.roleName,
+      permissions: context.permissions,
+      created_at: context.created_at || null,
+      activeTeamId: context.activeTeamId,
+      activeTeamName: context.activeTeamName,
+      teams: context.teams
     });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
@@ -1877,6 +2005,50 @@ app.post('/api/me/settings', auth, async (req, res) => {
   }
 });
 
+app.get('/api/teams', auth, async (req, res) => {
+  try {
+    const context = await loadUserContext(req.authUser.id);
+    res.json({
+      activeTeamId: context?.activeTeamId ?? null,
+      activeTeamName: context?.activeTeamName ?? null,
+      teams: context?.teams || []
+    });
+  } catch (err) {
+    console.error('failed to load teams', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/active-team', auth, async (req, res) => {
+  const { teamId } = req.body || {};
+  const numeric = Number(teamId);
+  if (!Number.isFinite(numeric)) return res.status(400).json({ error: 'invalid_team' });
+  try {
+    let teams = req.authUser?.teams || [];
+    if (!teams.some((team) => team.id === numeric)) {
+      teams = await db.listUserTeams(req.authUser.id);
+      if (!teams.some((team) => team.id === numeric)) {
+        return res.status(404).json({ error: 'not_found' });
+      }
+    }
+    await db.setUserActiveTeam(req.authUser.id, numeric);
+    const context = await loadUserContext(req.authUser.id);
+    req.authUser = context;
+    res.json({
+      ok: true,
+      activeTeamId: context?.activeTeamId ?? numeric,
+      activeTeamName: context?.activeTeamName ?? null,
+      role: context?.role,
+      roleName: context?.roleName,
+      permissions: context?.permissions,
+      teams: context?.teams || []
+    });
+  } catch (err) {
+    console.error('failed to set active team', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 app.post('/api/password', auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'missing_fields' });
@@ -1897,7 +2069,9 @@ app.post('/api/password', auth, async (req, res) => {
 
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
   try {
-    const rows = await db.listUsers();
+    const teamId = req.authUser?.activeTeamId;
+    if (teamId == null) return res.json([]);
+    const rows = await db.listUsers(teamId);
     const payload = rows.map((row) => ({
       id: row.id,
       username: row.username,
@@ -1914,18 +2088,33 @@ app.get('/api/users', auth, requireAdmin, async (req, res) => {
 app.post('/api/users', auth, requireAdmin, async (req, res) => {
   const { username, password, role = 'user' } = req.body || {};
   const userName = normalizeUsername(username);
-  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (!userName) return res.status(400).json({ error: 'missing_fields' });
   if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
-  if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
   const roleKey = typeof role === 'string' && role.trim() ? role.trim() : 'user';
   try {
     const roleRecord = await db.getRole(roleKey);
     if (!roleRecord) return res.status(400).json({ error: 'invalid_role' });
     const existing = await findUserCaseInsensitive(userName);
-    if (existing) return res.status(409).json({ error: 'username_taken' });
-    const hash = bcrypt.hashSync(password, 10);
-    const id = await db.createUser({ username: userName, password_hash: hash, role: roleKey });
-    res.status(201).json({ id, username: userName, role: roleKey, roleName: roleRecord.name });
+    let targetUser = existing || null;
+    let created = false;
+    if (password && password.length > 0) {
+      if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
+      if (existing) return res.status(409).json({ error: 'username_taken' });
+      const hash = bcrypt.hashSync(password, 10);
+      const id = await db.createUser({ username: userName, password_hash: hash, role: roleKey });
+      targetUser = { id, username: userName, role: roleKey };
+      created = true;
+    } else {
+      if (!existing) return res.status(404).json({ error: 'user_not_found' });
+    }
+    if (!targetUser) return res.status(500).json({ error: 'user_create_failed' });
+    const membership = await db.getTeamMember(teamId, targetUser.id);
+    if (membership) return res.status(409).json({ error: 'already_member' });
+    await db.addTeamMember({ team_id: teamId, user_id: targetUser.id, role: roleKey });
+    const status = created ? 201 : 200;
+    res.status(status).json({ id: targetUser.id, username: targetUser.username, role: roleKey, roleName: roleRecord.name });
   } catch (e) {
     res.status(500).json({ error: 'db_error' });
   }
@@ -1937,10 +2126,14 @@ app.patch('/api/users/:id', auth, requireAdmin, async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   const roleKey = typeof role === 'string' && role.trim() ? role.trim() : '';
   if (!roleKey) return res.status(400).json({ error: 'invalid_role' });
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
   try {
     const roleRecord = await db.getRole(roleKey);
     if (!roleRecord) return res.status(400).json({ error: 'invalid_role' });
-    await db.updateUserRole(id, roleKey);
+    const membership = await db.getTeamMember(teamId, id);
+    if (!membership) return res.status(404).json({ error: 'not_found' });
+    await db.updateTeamMemberRole(teamId, id, roleKey);
     res.json({ ok: true, role: roleKey, roleName: roleRecord.name });
   } catch {
     res.status(500).json({ error: 'db_error' });
@@ -1965,15 +2158,18 @@ app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   if (id === req.user.uid) return res.status(400).json({ error: 'cannot_delete_self' });
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
   try {
-    const user = await db.getUser(id);
-    if (!user) return res.status(404).json({ error: 'not_found' });
-    if (user.role === 'admin') {
-      const count = await db.countAdmins();
-      if (count <= 1) return res.status(400).json({ error: 'last_admin' });
+    const membership = await db.getTeamMember(teamId, id);
+    if (!membership) return res.status(404).json({ error: 'not_found' });
+    if (membership.role === 'admin') {
+      const members = await db.listUsers(teamId);
+      const adminCount = members.filter((member) => member.role === 'admin').length;
+      if (adminCount <= 1) return res.status(400).json({ error: 'last_admin' });
     }
-    const deleted = await db.deleteUser(id);
-    res.json({ deleted });
+    const removed = await db.removeTeamMember(teamId, id);
+    res.json({ deleted: removed });
   } catch {
     res.status(500).json({ error: 'db_error' });
   }
@@ -2074,7 +2270,9 @@ app.delete('/api/roles/:key', auth, requireGlobalPermissionMiddleware('manageRol
 // --- Servers CRUD
 app.get('/api/servers', auth, async (req, res) => {
   try {
-    const rows = await db.listServers();
+    const teamId = req.authUser?.activeTeamId;
+    if (teamId == null) return res.json([]);
+    const rows = await db.listServers(teamId);
     const sanitized = rows.map((row) => {
       if (!row || typeof row !== 'object') return row;
       const { password: _pw, ...rest } = row;
@@ -2188,7 +2386,36 @@ app.post('/api/servers', auth, requireGlobalPermissionMiddleware('manageServers'
   const { name, host, port, password, tls } = req.body || {};
   if (!name || !host || !port || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
-    const id = await db.createServer({ name, host, port: parseInt(port, 10), password, tls: tls ? 1 : 0 });
+    let teamId = req.authUser?.activeTeamId || null;
+    if (teamId == null && typeof db.createTeam === 'function') {
+      const teamName = req.authUser?.username ? `${req.authUser.username}'s Team` : 'My Team';
+      teamId = await db.createTeam({ name: teamName, owner_user_id: req.authUser.id });
+      await db.addTeamMember({ team_id: teamId, user_id: req.authUser.id, role: req.authUser.role || 'admin' });
+      if (typeof db.setUserActiveTeam === 'function') {
+        await db.setUserActiveTeam(req.authUser.id, teamId);
+      }
+      if (req.authUser) {
+        req.authUser.activeTeamId = teamId;
+        req.authUser.activeTeamName = teamName;
+        if (Array.isArray(req.authUser.teams)) {
+          if (!req.authUser.teams.some((team) => team?.id === teamId)) {
+            req.authUser.teams.push({ id: teamId, name: teamName, ownerId: req.authUser.id, role: req.authUser.role || 'admin', roleName: req.authUser.roleName || req.authUser.role || 'admin' });
+          }
+        } else {
+          req.authUser.teams = [{ id: teamId, name: teamName, ownerId: req.authUser.id, role: req.authUser.role || 'admin', roleName: req.authUser.roleName || req.authUser.role || 'admin' }];
+        }
+      }
+    }
+    if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+    const id = await db.createServer({ name, host, port: parseInt(port, 10), password, tls: tls ? 1 : 0, team_id: teamId });
+    if (req.authUser) {
+      try {
+        const refreshed = await loadUserContext(req.authUser.id);
+        if (refreshed) req.authUser = refreshed;
+      } catch (err) {
+        console.warn('Failed to refresh user context after server creation', err);
+      }
+    }
     refreshMonitoredServers().catch((err) => console.error('monitor refresh (create) failed', err));
     res.json({ id });
   } catch {
@@ -2208,7 +2435,8 @@ function shouldResetRcon(payload) {
 app.patch('/api/servers/:id', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'manage');
   if (id == null) return;
-  const changes = req.body || {};
+  const payload = req.body || {};
+  const { team_id: _teamId, teamId: _teamIdAlt, ...changes } = payload;
   const needsReset = shouldResetRcon(changes);
   try {
     const updated = await db.updateServer(id, changes);
