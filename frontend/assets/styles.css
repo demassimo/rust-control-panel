@@ -2197,6 +2197,11 @@ button.menu-tab.active {
   align-items: start;
 }
 
+.live-map-card .map-layout {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
 @media (max-width: 1200px) {
   .map-layout { grid-template-columns: 1fr; }
 }
@@ -2208,6 +2213,10 @@ button.menu-tab.active {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(9, 1, 4, 0.9);
   min-height: 420px;
+}
+
+.live-map-card .map-view {
+  min-height: clamp(260px, 45vh, 420px);
 }
 
 .map-placeholder {
@@ -2277,6 +2286,26 @@ button.menu-tab.active {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.live-map-card .map-player-list {
+  max-height: clamp(240px, 48vh, 520px);
+  overflow-y: auto;
+}
+
+.map-fullscreen-button {
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-fullscreen-button::after {
+  content: '\1F5D6';
+  font-size: 1rem;
 }
 
 .settings-card .card-header p {
@@ -2516,6 +2545,15 @@ button.menu-tab.active {
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.map-color-chip {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(15, 23, 42, 0.6);
+  vertical-align: middle;
 }
 
 .map-config {

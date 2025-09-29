@@ -2,9 +2,20 @@
   if (typeof window.registerModule !== 'function') return;
 
   const COLOR_PALETTE = ['#f97316','#22d3ee','#a855f7','#84cc16','#ef4444','#facc15','#14b8a6','#e11d48','#3b82f6','#8b5cf6','#10b981','#fb7185'];
-  const POLL_INTERVAL = 20000;
+  const DEFAULT_POLL_INTERVAL = 20000;
+  const MIN_POLL_INTERVAL = 5000;
+  const MAX_POLL_INTERVAL = 120000;
   const PLAYER_REFRESH_INTERVAL = 60000;
   const WORLD_SYNC_THROTTLE = 15000;
+  const REFRESH_STORAGE_KEY = 'live-map:poll-interval';
+  const REFRESH_OPTIONS = [
+    { value: 5000, label: 'Every 5 seconds' },
+    { value: 10000, label: 'Every 10 seconds' },
+    { value: 20000, label: 'Every 20 seconds' },
+    { value: 30000, label: 'Every 30 seconds' },
+    { value: 60000, label: 'Every minute' },
+    { value: 120000, label: 'Every 2 minutes' }
+  ];
 
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
@@ -28,6 +39,47 @@
   function formatPing(value) {
     if (!Number.isFinite(value)) return '—';
     return `${Math.round(value)}ms`;
+  }
+
+  function normaliseRefreshInterval(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return DEFAULT_POLL_INTERVAL;
+    return clamp(numeric, MIN_POLL_INTERVAL, MAX_POLL_INTERVAL);
+  }
+
+  function loadRefreshInterval() {
+    if (typeof window === 'undefined') return DEFAULT_POLL_INTERVAL;
+    try {
+      const stored = window.localStorage?.getItem?.(REFRESH_STORAGE_KEY);
+      if (stored == null) return DEFAULT_POLL_INTERVAL;
+      return normaliseRefreshInterval(stored);
+    } catch (err) {
+      return DEFAULT_POLL_INTERVAL;
+    }
+  }
+
+  function persistRefreshInterval(value) {
+    if (typeof window === 'undefined') return;
+    try {
+      const interval = normaliseRefreshInterval(value);
+      window.localStorage?.setItem?.(REFRESH_STORAGE_KEY, String(interval));
+    } catch (err) {
+      // Ignore storage errors
+    }
+  }
+
+  function describeRefreshInterval(interval) {
+    const value = normaliseRefreshInterval(interval);
+    if (value >= 60000 && value % 60000 === 0) {
+      const minutes = Math.round(value / 60000);
+      return minutes === 1 ? 'Every minute' : `Every ${minutes} minutes`;
+    }
+    if (value % 1000 === 0) {
+      const seconds = Math.round(value / 1000);
+      return seconds === 1 ? 'Every second' : `Every ${seconds} seconds`;
+    }
+    const seconds = value / 1000;
+    return `Every ${seconds.toFixed(1)} seconds`;
   }
 
   function generateColor(index) {
@@ -120,6 +172,7 @@
         selectedTeam: null,
         selectedSolo: null,
         lastUpdated: null,
+        pollInterval: loadRefreshInterval(),
         pollTimer: null,
         playerReloadTimer: null,
         pendingGeneration: false,
@@ -141,9 +194,105 @@
         }
       };
 
+      if (ctx.actions) {
+        ctx.actions.classList.add('module-header-actions');
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.type = 'button';
+        fullscreenBtn.className = 'ghost map-fullscreen-button';
+        fullscreenBtn.textContent = 'Open fullscreen';
+        fullscreenBtn.setAttribute('aria-label', 'Open the live map in a new window');
+        fullscreenBtn.addEventListener('click', () => openFullscreenMap());
+        ctx.actions.appendChild(fullscreenBtn);
+      }
+
       let mapImageSource = null;
       let mapImageObjectUrl = null;
       let mapImageAbort = null;
+      const FULLSCREEN_WINDOW_FEATURES = 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
+      const FULLSCREEN_STYLES = `
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, rgba(30, 41, 59, 0.45), rgba(2, 6, 23, 0.95)); color: #e2e8f0; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.45; }
+        .map-popup { display: flex; flex-direction: column; min-height: 100vh; padding: 20px 24px 28px; gap: 18px; }
+        .map-popup-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+        .map-popup-header h1 { margin: 0; font-size: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
+        .map-popup-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 320px); gap: 20px; flex: 1; align-items: start; }
+        @media (max-width: 1200px) { .map-popup-layout { grid-template-columns: 1fr; } }
+        .map-view { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.28); background: rgba(8, 11, 19, 0.95); min-height: min(70vh, 720px); }
+        .map-view img { display: block; width: 100%; height: auto; }
+        .map-overlay { position: absolute; inset: 0; pointer-events: none; }
+        .map-overlay .map-marker { position: absolute; width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(0, 0, 0, 0.45); box-shadow: 0 0 14px rgba(0, 0, 0, 0.45); transform: translate(-50%, -50%); pointer-events: auto; }
+        .map-overlay .map-marker.active { box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.45); }
+        .map-overlay .map-marker.dimmed { opacity: 0.38; }
+        .map-placeholder { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center; align-items: center; gap: 18px; padding: 32px 28px; text-align: center; background: rgba(4, 7, 15, 0.9); color: #cbd5f5; font-size: 1rem; }
+        .map-placeholder .map-status { width: min(100%, 540px); }
+        .map-view.map-view-has-message > .map-placeholder { display: flex; }
+        .map-view.map-view-has-message > img,
+        .map-view.map-view-has-message > .map-overlay { display: none; }
+        .map-sidebar { display: flex; flex-direction: column; gap: 18px; }
+        .map-summary, .map-team-info { background: rgba(10, 14, 24, 0.88); border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+        .map-summary strong { font-weight: 600; }
+        .map-team-info .map-team-members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+        .map-team-info .map-team-members li { display: flex; justify-content: space-between; gap: 14px; font-size: 0.95rem; }
+        .map-player-list { background: rgba(10, 14, 24, 0.88); border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 16px; overflow: hidden; max-height: min(52vh, 620px); display: flex; flex-direction: column; }
+        .map-player-table { width: 100%; border-collapse: collapse; min-width: 420px; color: inherit; font-size: 0.92rem; }
+        .map-player-table thead th { text-align: left; padding: 12px 18px; font-weight: 600; background: rgba(15, 23, 42, 0.65); position: sticky; top: 0; z-index: 1; }
+        .map-player-table tbody td { padding: 12px 18px; border-bottom: 1px solid rgba(30, 41, 59, 0.65); }
+        .map-player-table tbody tr { cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+        .map-player-table tbody tr:hover { background: rgba(30, 41, 59, 0.7); }
+        .map-player-table tbody tr.active { background: rgba(225, 29, 72, 0.24); color: #fbcfe8; }
+        .map-player-table tbody tr.dimmed { opacity: 0.45; }
+        .map-player-name { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+        .map-player-name-cell { display: flex; flex-direction: column; gap: 6px; }
+        .map-player-color { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.7); }
+        .map-player-sub { font-size: 0.75rem; color: #94a3b8; }
+        .map-player-team, .map-player-stat { font-variant-numeric: tabular-nums; text-align: right; color: #cbd5f5; }
+        .map-filter-note { margin: 0 18px 18px; color: #94a3b8; }
+        .map-color-chip { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(15, 23, 42, 0.7); }
+        .map-status { display: flex; gap: 16px; align-items: flex-start; background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 14px; padding: 18px; text-align: left; }
+        .map-status-spinner { width: 18px; height: 18px; border-radius: 50%; border: 3px solid rgba(148, 163, 184, 0.35); border-top-color: #f472b6; animation: map-status-spin 1s linear infinite; margin-top: 4px; }
+        .map-status-body { display: flex; flex-direction: column; gap: 10px; }
+        .map-status-heading { font-weight: 600; font-size: 1rem; }
+        .map-status-note { font-size: 0.88rem; color: #a5b4fc; }
+        .map-status-details { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 0.86rem; }
+        .map-status-details li strong { color: #f8fafc; margin-right: 6px; }
+        button.map-popup-close { background: rgba(15, 23, 42, 0.7); color: #e2e8f0; border: 1px solid rgba(148, 163, 184, 0.5); border-radius: 999px; padding: 8px 16px; font-size: 0.92rem; font-weight: 500; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+        button.map-popup-close:hover { background: rgba(30, 41, 59, 0.85); border-color: rgba(148, 163, 184, 0.8); }
+        @keyframes map-status-spin { to { transform: rotate(360deg); } }
+      `;
+
+      const mainViewport = {
+        win: window,
+        doc: document,
+        mapView,
+        mapImage,
+        overlay,
+        message,
+        summary,
+        listWrap,
+        teamInfo,
+        refreshDisplay: null
+      };
+
+      let fullscreenViewport = null;
+
+      function isFullscreenOpen() {
+        return !!(fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed);
+      }
+
+      function cleanupFullscreenViewport() {
+        if (fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed) {
+          return;
+        }
+        fullscreenViewport = null;
+      }
+
+      function getActiveViewports() {
+        cleanupFullscreenViewport();
+        const viewports = [mainViewport];
+        if (fullscreenViewport) viewports.push(fullscreenViewport);
+        return viewports;
+      }
 
       function showUploadNotice(msg, variant = 'error') {
         if (!uploadStatus) return;
@@ -157,6 +306,137 @@
         uploadStatus.textContent = '';
       }
 
+      function closeFullscreenWindow() {
+        if (fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed) {
+          try { fullscreenViewport.win.close(); }
+          catch { /* ignore */ }
+        }
+        fullscreenViewport = null;
+      }
+
+      function syncFullscreenMessageFromPrimary() {
+        if (!isFullscreenOpen() || !fullscreenViewport) return;
+        if (mainViewport.mapView.classList.contains('map-view-has-message')) {
+          const source = mainViewport.message.cloneNode(true);
+          const clone = cloneMessageContent(source, fullscreenViewport, false);
+          applyMessageToViewport(fullscreenViewport, clone);
+        } else {
+          fullscreenViewport.message.innerHTML = '';
+          fullscreenViewport.mapView.classList.remove('map-view-has-message');
+        }
+      }
+
+      function openFullscreenMap() {
+        if (isFullscreenOpen()) {
+          try { fullscreenViewport.win.focus(); }
+          catch { /* ignore */ }
+          return;
+        }
+        const popup = window.open('', 'live-map-fullscreen', FULLSCREEN_WINDOW_FEATURES);
+        if (!popup) {
+          ctx.log?.('Unable to open fullscreen map window. Check popup blockers.');
+          return;
+        }
+        try {
+          popup.document.write('<!DOCTYPE html><html lang="en"><head><title>Live Map</title></head><body></body></html>');
+          popup.document.close();
+        } catch (err) {
+          ctx.log?.('Failed to initialise fullscreen map window: ' + (err?.message || err));
+          try { popup.close(); }
+          catch { /* ignore */ }
+          return;
+        }
+        const doc = popup.document;
+        const style = doc.createElement('style');
+        style.textContent = FULLSCREEN_STYLES;
+        doc.head.appendChild(style);
+
+        const root = doc.createElement('div');
+        root.className = 'map-popup';
+        doc.body.appendChild(root);
+
+        const header = doc.createElement('div');
+        header.className = 'map-popup-header';
+        root.appendChild(header);
+
+        const title = doc.createElement('h1');
+        title.textContent = 'Live Map';
+        header.appendChild(title);
+
+        const closeBtn = doc.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'map-popup-close';
+        closeBtn.textContent = 'Close';
+        closeBtn.addEventListener('click', () => closeFullscreenWindow());
+        header.appendChild(closeBtn);
+
+        const layout = doc.createElement('div');
+        layout.className = 'map-popup-layout';
+        root.appendChild(layout);
+
+        const mapContainer = doc.createElement('div');
+        mapContainer.className = 'map-view';
+        const popupImage = doc.createElement('img');
+        popupImage.alt = 'Rust world map';
+        const popupOverlay = doc.createElement('div');
+        popupOverlay.className = 'map-overlay';
+        const popupMessage = doc.createElement('div');
+        popupMessage.className = 'map-placeholder';
+        mapContainer.appendChild(popupImage);
+        mapContainer.appendChild(popupOverlay);
+        mapContainer.appendChild(popupMessage);
+        mapContainer.addEventListener('click', () => clearSelection());
+        layout.appendChild(mapContainer);
+
+        const sidebar = doc.createElement('div');
+        sidebar.className = 'map-sidebar';
+        layout.appendChild(sidebar);
+
+        const summary = doc.createElement('div');
+        summary.className = 'map-summary';
+        sidebar.appendChild(summary);
+
+        const list = doc.createElement('div');
+        list.className = 'map-player-list';
+        sidebar.appendChild(list);
+
+        const teamInfo = doc.createElement('div');
+        teamInfo.className = 'map-team-info';
+        sidebar.appendChild(teamInfo);
+
+        fullscreenViewport = {
+          win: popup,
+          doc,
+          mapView: mapContainer,
+          mapImage: popupImage,
+          overlay: popupOverlay,
+          message: popupMessage,
+          summary,
+          listWrap: list,
+          teamInfo,
+          refreshDisplay: null
+        };
+
+        popup.addEventListener('beforeunload', () => {
+          fullscreenViewport = null;
+        });
+
+        renderAll();
+        syncFullscreenMessageFromPrimary();
+        updateRefreshDisplays();
+        if (isFullscreenOpen()) {
+          const activeSrc = mainViewport.mapImage?.currentSrc || mainViewport.mapImage?.src || '';
+          if (activeSrc) {
+            try { fullscreenViewport.mapImage.src = activeSrc; }
+            catch { /* ignore */ }
+          }
+          try { fullscreenViewport.win.focus(); }
+          catch { /* ignore */ }
+        }
+      }
+
+      window.addEventListener('beforeunload', () => closeFullscreenWindow());
+
       function readFileAsDataURL(file) {
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -166,24 +446,48 @@
         });
       }
 
-      function setMessage(content) {
-        if (!message) return;
-        message.innerHTML = '';
+      function cloneMessageContent(content, viewport, useOriginal = false) {
+        if (content == null) return content;
         if (content instanceof Node) {
-          message.appendChild(content);
+          if (useOriginal) return content;
+          try {
+            return viewport.doc?.importNode ? viewport.doc.importNode(content, true) : content.cloneNode(true);
+          } catch (err) {
+            return content.cloneNode(true);
+          }
+        }
+        return content;
+      }
+
+      function applyMessageToViewport(viewport, content) {
+        if (!viewport || !viewport.message || !viewport.mapView) return;
+        const target = viewport.message;
+        target.innerHTML = '';
+        if (content instanceof Node) {
+          target.appendChild(content);
         } else if (content != null) {
-          const paragraph = document.createElement('p');
+          const paragraph = viewport.doc.createElement('p');
           paragraph.className = 'map-placeholder-text';
           paragraph.textContent = typeof content === 'string' ? content : String(content);
-          message.appendChild(paragraph);
+          target.appendChild(paragraph);
         }
-        mapView.classList.add('map-view-has-message');
+        viewport.mapView.classList.add('map-view-has-message');
+      }
+
+      function setMessage(content) {
+        const viewports = getActiveViewports();
+        viewports.forEach((viewport, index) => {
+          const payload = cloneMessageContent(content, viewport, index === 0);
+          applyMessageToViewport(viewport, payload);
+        });
       }
 
       function clearMessage() {
-        if (!message) return;
-        message.innerHTML = '';
-        mapView.classList.remove('map-view-has-message');
+        for (const viewport of getActiveViewports()) {
+          if (!viewport.message || !viewport.mapView) continue;
+          viewport.message.innerHTML = '';
+          viewport.mapView.classList.remove('map-view-has-message');
+        }
       }
 
       function stopPolling() {
@@ -197,15 +501,40 @@
         }
       }
 
+      function getPollInterval() {
+        const interval = normaliseRefreshInterval(state.pollInterval);
+        state.pollInterval = interval;
+        return interval;
+      }
+
+      function updateRefreshDisplays() {
+        const interval = getPollInterval();
+        const description = describeRefreshInterval(interval);
+        const detail = description === 'Custom'
+          ? 'at a custom interval'
+          : description.toLowerCase();
+        const suffix = state.serverId ? '.' : ' when live data is available.';
+        for (const viewport of getActiveViewports()) {
+          const target = viewport.refreshDisplay;
+          if (!target) continue;
+          target.textContent = `Player positions refresh ${detail}${suffix}`;
+        }
+      }
+
       function schedulePolling() {
         stopPolling();
-        if (!state.serverId) return;
+        if (!state.serverId) {
+          updateRefreshDisplays();
+          return;
+        }
+        const pollInterval = getPollInterval();
         state.pollTimer = setInterval(() => {
           refreshData('poll').catch((err) => ctx.log?.('Map refresh failed: ' + (err?.message || err)));
-        }, POLL_INTERVAL);
+        }, pollInterval);
         state.playerReloadTimer = setInterval(() => {
           refreshData('player-reload').catch((err) => ctx.log?.('Map refresh failed: ' + (err?.message || err)));
         }, PLAYER_REFRESH_INTERVAL);
+        updateRefreshDisplays();
       }
 
       function teamKey(player) {
@@ -638,7 +967,11 @@
           updateConfigPanel();
           updateStatusMessage();
           renderSummary();
-          renderAll();
+          if (reason === 'player-reload') {
+            renderPlayerSections();
+          } else {
+            renderAll();
+          }
         }
       }
 
@@ -955,6 +1288,9 @@
         mapImageObjectUrl = null;
         mapImageSource = null;
         mapImage.removeAttribute('src');
+        if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
+          fullscreenViewport.mapImage.removeAttribute('src');
+        }
       }
 
       function cancelMapImageRequest() {
@@ -1000,6 +1336,9 @@
         }
         mapImageObjectUrl = objectUrl;
         mapImage.src = objectUrl;
+        if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
+          fullscreenViewport.mapImage.src = objectUrl;
+        }
       }
 
       async function updateMapImage(meta) {
@@ -1035,6 +1374,9 @@
           } else if (result.url) {
             clearMapImage();
             mapImage.src = result.url;
+            if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
+              fullscreenViewport.mapImage.src = result.url;
+            }
             mapImageSource = next;
           }
         } catch (err) {
@@ -1047,7 +1389,11 @@
           ctx.log?.('Failed to load map image: ' + (err?.message || err));
           if (typeof ctx.authorizedFetch !== 'function') {
             clearMapImage();
-            mapImage.src = resolveImageUrl(next);
+            const resolved = resolveImageUrl(next);
+            mapImage.src = resolved;
+            if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
+              fullscreenViewport.mapImage.src = resolved;
+            }
             mapImageSource = next;
           } else {
             mapImageSource = previousSource;
@@ -1067,14 +1413,15 @@
         return true;
       }
 
-      function renderMarkers() {
-        overlay.innerHTML = '';
+      function renderMarkersInViewport(viewport) {
+        if (!viewport || !viewport.overlay) return;
+        viewport.overlay.innerHTML = '';
         if (!mapReady()) return;
         const axis = resolveHorizontalAxis();
         for (const player of state.players) {
           const position = projectPosition(player.position, axis);
           if (!position) continue;
-          const marker = document.createElement('div');
+          const marker = viewport.doc.createElement('div');
           marker.className = 'map-marker';
           marker.style.backgroundColor = colorForPlayer(player);
           marker.style.left = position.left + '%';
@@ -1087,63 +1434,72 @@
             e.stopPropagation();
             selectPlayer(player);
           });
-          overlay.appendChild(marker);
+          viewport.overlay.appendChild(marker);
+        }
+      }
+
+      function renderMarkers() {
+        for (const viewport of getActiveViewports()) {
+          renderMarkersInViewport(viewport);
         }
       }
 
       // ---- CONFLICT-FIXED: main version of renderPlayerList ----
-      function renderPlayerList() {
-        listWrap.innerHTML = '';
+
+      function renderPlayerListInViewport(viewport) {
+        if (!viewport || !viewport.listWrap) return;
+        const target = viewport.listWrap;
+        target.innerHTML = '';
 
         const hasServer = !!state.serverId;
         if (!hasServer) {
-          const empty = document.createElement('p');
+          const empty = viewport.doc.createElement('p');
           empty.className = 'module-message';
           empty.textContent = 'Connect to a server to view live positions.';
-          listWrap.appendChild(empty);
+          target.appendChild(empty);
           return;
         }
 
         if (state.players.length === 0) {
-          const empty = document.createElement('p');
+          const empty = viewport.doc.createElement('p');
           empty.className = 'module-message';
           empty.textContent = 'No players online right now.';
-          listWrap.appendChild(empty);
+          target.appendChild(empty);
           return;
         }
 
         const hasSelection = selectionActive();
         const matches = state.players.filter((p) => isPlayerFocused(p));
 
-        const table = document.createElement('table');
+        const table = viewport.doc.createElement('table');
         table.className = 'map-player-table';
 
-        const head = document.createElement('thead');
+        const head = viewport.doc.createElement('thead');
         head.innerHTML = '<tr><th>Player</th><th>Team</th><th>Ping</th><th>Health</th><th>Connected</th></tr>';
         table.appendChild(head);
 
-        const body = document.createElement('tbody');
+        const body = viewport.doc.createElement('tbody');
         for (const player of state.players) {
-          const row = document.createElement('tr');
+          const row = viewport.doc.createElement('tr');
           row.dataset.steamid = player.steamId || '';
 
           const focused = isPlayerFocused(player);
           if (focused) row.classList.add('active');
           else if (hasSelection) row.classList.add('dimmed');
 
-          const nameCell = document.createElement('td');
+          const nameCell = viewport.doc.createElement('td');
           nameCell.className = 'map-player-name-cell';
-          const nameRow = document.createElement('div');
+          const nameRow = viewport.doc.createElement('div');
           nameRow.className = 'map-player-name';
-          const swatch = document.createElement('span');
+          const swatch = viewport.doc.createElement('span');
           swatch.className = 'map-player-color';
           swatch.style.background = colorForPlayer(player);
           nameRow.appendChild(swatch);
-          const label = document.createElement('span');
+          const label = viewport.doc.createElement('span');
           label.textContent = player.displayName || player.persona || player.steamId;
           nameRow.appendChild(label);
           nameCell.appendChild(nameRow);
-          const sub = document.createElement('div');
+          const sub = viewport.doc.createElement('div');
           sub.className = 'map-player-sub';
           const details = [];
           const persona = player.persona && player.persona !== label.textContent ? player.persona : null;
@@ -1153,24 +1509,24 @@
           nameCell.appendChild(sub);
           row.appendChild(nameCell);
 
-          const teamCell = document.createElement('td');
+          const teamCell = viewport.doc.createElement('td');
           teamCell.className = 'map-player-team';
           const team = teamKey(player);
           teamCell.textContent = team > 0 ? `Team ${team}` : 'Solo';
           row.appendChild(teamCell);
 
-          const pingCell = document.createElement('td');
+          const pingCell = viewport.doc.createElement('td');
           pingCell.className = 'map-player-stat';
           pingCell.textContent = formatPing(player.ping);
           row.appendChild(pingCell);
 
-          const healthCell = document.createElement('td');
+          const healthCell = viewport.doc.createElement('td');
           healthCell.className = 'map-player-stat';
           const hp = formatHealth(player.health);
           healthCell.textContent = hp === '—' ? '—' : `${hp} hp`;
           row.appendChild(healthCell);
 
-          const connectedCell = document.createElement('td');
+          const connectedCell = viewport.doc.createElement('td');
           connectedCell.className = 'map-player-stat';
           connectedCell.textContent = formatDuration(player.connectedSeconds);
           row.appendChild(connectedCell);
@@ -1179,21 +1535,54 @@
           body.appendChild(row);
         }
         table.appendChild(body);
-        listWrap.appendChild(table);
+        target.appendChild(table);
 
         if (hasSelection) {
-          const note = document.createElement('p');
+          const note = viewport.doc.createElement('p');
           note.className = 'map-filter-note muted small';
           note.textContent = matches.length > 0
             ? 'Players outside your selection are dimmed.'
             : 'No players match the current selection.';
-          listWrap.appendChild(note);
+          target.appendChild(note);
         }
       }
-      // ---------------------------------------------------------
 
-      function renderSummary() {
-        summary.innerHTML = '';
+      function renderPlayerList() {
+        for (const viewport of getActiveViewports()) {
+          renderPlayerListInViewport(viewport);
+        }
+      }
+
+      function bindRefreshSelect(select) {
+        if (!select) return;
+        select.addEventListener('change', (event) => {
+          const nextValue = Number(event.target.value);
+          if (!Number.isFinite(nextValue)) {
+            event.target.value = String(getPollInterval());
+            return;
+          }
+          const normalised = normaliseRefreshInterval(nextValue);
+          const current = getPollInterval();
+          if (normalised === current) {
+            event.target.value = String(current);
+            updateRefreshDisplays();
+            return;
+          }
+          state.pollInterval = normalised;
+          persistRefreshInterval(normalised);
+          event.target.value = String(normalised);
+          schedulePolling();
+          updateRefreshDisplays();
+        });
+      }
+
+      function renderSummaryInViewport(viewport) {
+        if (!viewport || !viewport.summary) return;
+        const target = viewport.summary;
+        target.innerHTML = '';
+        viewport.refreshDisplay = null;
+
+        const pollInterval = getPollInterval();
         const total = state.players.length;
         const teamCounts = new Map();
         let soloCount = 0;
@@ -1225,59 +1614,116 @@
           const ts = new Date(state.lastUpdated);
           metaLines.push({ label: 'Updated', value: ts.toLocaleTimeString() });
         }
-        const title = document.createElement('div');
+
+        const title = viewport.doc.createElement('div');
         title.innerHTML = `<strong>${mapName}</strong>`;
-        summary.appendChild(title);
+        target.appendChild(title);
+
+        const refreshLabel = viewport.doc.createElement('label');
+        refreshLabel.className = 'map-refresh-control';
+        refreshLabel.appendChild(viewport.doc.createTextNode('Player refresh rate '));
+        const refreshSelect = viewport.doc.createElement('select');
+        refreshSelect.className = 'map-refresh-select';
+        let hasMatch = false;
+        for (const option of REFRESH_OPTIONS) {
+          const opt = viewport.doc.createElement('option');
+          opt.value = String(option.value);
+          opt.textContent = option.label;
+          if (!hasMatch && option.value === pollInterval) {
+            opt.selected = true;
+            hasMatch = true;
+          }
+          refreshSelect.appendChild(opt);
+        }
+        if (!hasMatch) {
+          const customOption = viewport.doc.createElement('option');
+          customOption.value = String(pollInterval);
+          customOption.textContent = describeRefreshInterval(pollInterval);
+          customOption.selected = true;
+          refreshSelect.appendChild(customOption);
+        }
+        bindRefreshSelect(refreshSelect);
+        refreshLabel.appendChild(refreshSelect);
+        target.appendChild(refreshLabel);
+
+        const note = viewport.doc.createElement('p');
+        note.className = 'map-filter-note muted small';
+        target.appendChild(note);
+        viewport.refreshDisplay = note;
+
         for (const item of metaLines) {
-          const row = document.createElement('div');
+          const row = viewport.doc.createElement('div');
           row.innerHTML = `<strong>${item.value ?? '—'}</strong> ${item.label}`;
-          summary.appendChild(row);
+          target.appendChild(row);
         }
       }
 
-      function renderTeamInfo() {
-        teamInfo.innerHTML = '';
+      function renderSummary() {
+        for (const viewport of getActiveViewports()) {
+          renderSummaryInViewport(viewport);
+        }
+        updateRefreshDisplays();
+      }
+
+      function renderTeamInfoInViewport(viewport) {
+        if (!viewport || !viewport.teamInfo) return;
+        const target = viewport.teamInfo;
+        target.innerHTML = '';
         if (!state.players.length) {
-          teamInfo.innerHTML = '<strong>No live data</strong><p class="muted">Connect to a server to see team breakdowns.</p>';
+          target.innerHTML = '<strong>No live data</strong><p class="muted">Connect to a server to see team breakdowns.</p>';
           return;
         }
-        if (!state.selectedTeam && !state.selectedSolo) {
-          teamInfo.innerHTML = '<strong>Select a player</strong><p class="muted">Click a player or marker to focus on their team.</p>';
+        if (!selectionActive()) {
+          target.innerHTML = '<strong>Select a team or player</strong><p class="muted">Choose from the table to inspect team members.</p>';
           return;
         }
         const collection = state.selectedSolo
           ? state.players.filter((p) => p.steamId === state.selectedSolo)
           : state.players.filter((p) => Number(p.teamId) === state.selectedTeam);
-        if (collection.length === 0) {
-          teamInfo.innerHTML = '<strong>No matching players</strong><p class="muted">They might have disconnected.</p>';
+        if (!collection.length) {
+          target.innerHTML = '<strong>No matching players</strong><p class="muted">They might have disconnected.</p>';
           return;
         }
         const color = colorForPlayer(collection[0]);
-        const heading = document.createElement('div');
+        const heading = viewport.doc.createElement('div');
         heading.innerHTML = `<strong>${state.selectedSolo ? 'Solo player' : 'Team ' + state.selectedTeam}</strong>`;
-        const colorChip = document.createElement('span');
+        const colorChip = viewport.doc.createElement('span');
         colorChip.className = 'map-color-chip';
         colorChip.style.background = color;
-        heading.appendChild(document.createTextNode(' '));
+        heading.appendChild(viewport.doc.createTextNode(' '));
         heading.appendChild(colorChip);
-        teamInfo.appendChild(heading);
-        const detail = document.createElement('p');
+        target.appendChild(heading);
+        const detail = viewport.doc.createElement('p');
         detail.className = 'muted';
         detail.textContent = state.selectedSolo ? 'Individual survivor stats' : `${collection.length} member(s)`;
-        teamInfo.appendChild(detail);
-        const list = document.createElement('ul');
+        target.appendChild(detail);
+        const list = viewport.doc.createElement('ul');
         list.className = 'map-team-members';
         for (const player of collection) {
-          const li = document.createElement('li');
-          const name = document.createElement('span');
+          const li = viewport.doc.createElement('li');
+          const name = viewport.doc.createElement('span');
           name.textContent = player.displayName || player.persona || player.steamId;
-          const stats = document.createElement('span');
+          const stats = viewport.doc.createElement('span');
           stats.textContent = `${formatHealth(player.health)} hp · ${formatDuration(player.connectedSeconds)}`;
           li.appendChild(name);
           li.appendChild(stats);
           list.appendChild(li);
         }
-        teamInfo.appendChild(list);
+        target.appendChild(list);
+      }
+
+      function renderTeamInfo() {
+        for (const viewport of getActiveViewports()) {
+          renderTeamInfoInViewport(viewport);
+        }
+      }
+      function renderPlayerSections() {
+        ensureTeamColors(state.players);
+        renderMarkers();
+        renderPlayerList();
+        renderSummary();
+        renderTeamInfo();
+        if (isFullscreenOpen()) syncFullscreenMessageFromPrimary();
       }
 
       function renderAll() {
@@ -1290,6 +1736,7 @@
         renderTeamInfo();
         updateUploadSection();
         updateConfigPanel();
+        if (isFullscreenOpen()) syncFullscreenMessageFromPrimary();
       }
 
       function broadcastPlayers() {
@@ -1302,7 +1749,7 @@
       function clearSelection() {
         state.selectedTeam = null;
         state.selectedSolo = null;
-        renderAll();
+        renderPlayerSections();
         ctx.emit?.('live-players:highlight', { steamId: null });
         window.dispatchEvent(new CustomEvent('team:clear'));
       }
@@ -1334,7 +1781,7 @@
             broadcastPlayer = player;
           }
         }
-        renderAll();
+        renderPlayerSections();
         ctx.emit?.('live-players:highlight', { steamId: highlightSteam });
         if (broadcastPlayer) {
           window.dispatchEvent(new CustomEvent('player:selected', { detail: { player: broadcastPlayer, teamKey: teamKey(broadcastPlayer) } }));
@@ -1433,7 +1880,11 @@
           updateConfigPanel();
           updateUploadSection();
           updateStatusMessage(hasImage);
-          renderAll();
+          if (reason === 'player-reload') {
+            renderPlayerSections();
+          } else {
+            renderAll();
+          }
           const shouldUpdateWorldDetails = !hasImage;
           if (shouldUpdateWorldDetails) {
             ensureWorldDetails('refresh')
@@ -1561,6 +2012,7 @@
       const offLogout = ctx.on?.('auth:logout', () => {
         stopPolling();
         clearPendingRefresh();
+        closeFullscreenWindow();
         state.serverId = null;
         state.players = [];
         state.mapMeta = null;
@@ -1625,6 +2077,7 @@
       ctx.onCleanup?.(() => offFocus?.());
       ctx.onCleanup?.(() => stopPolling());
       ctx.onCleanup?.(() => clearPendingRefresh());
+      ctx.onCleanup?.(() => closeFullscreenWindow());
       ctx.onCleanup?.(() => {
         cancelMapImageRequest();
         if (mapImageObjectUrl) {
