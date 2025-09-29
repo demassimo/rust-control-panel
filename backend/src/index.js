@@ -947,28 +947,82 @@ function parseVector3(value) {
   if (!value) return null;
 
   const toNumber = (input) => {
+    if (input == null) return null;
     const num = Number(input);
     return Number.isFinite(num) ? num : null;
   };
 
+  const buildResult = ({ x, y, z }) => {
+    const numericX = toNumber(x);
+    const numericY = toNumber(y);
+    const numericZ = toNumber(z);
+    if (numericX == null) return null;
+    if (numericY == null && numericZ == null) return null;
+    const result = { x: numericX };
+    if (numericY != null) result.y = numericY;
+    if (numericZ != null) result.z = numericZ;
+    return result;
+  };
+
+  const tryFromObject = (input) => {
+    if (!input || typeof input !== 'object') return null;
+    if (Array.isArray(input)) {
+      const [x, y, z] = input;
+      return buildResult({ x, y, z });
+    }
+    const candidate = { ...input };
+    const direct = {
+      x: candidate.x ?? candidate.X ?? candidate[0],
+      y: candidate.y ?? candidate.Y ?? candidate[1],
+      z: candidate.z ?? candidate.Z ?? candidate[2]
+    };
+    if (direct.x != null || direct.y != null || direct.z != null) {
+      return buildResult(direct);
+    }
+    const labelled = {};
+    for (const [key, raw] of Object.entries(candidate)) {
+      const match = key.match(/^([xyz])[a-z0-9]*$/i);
+      if (!match) continue;
+      const axis = match[1].toLowerCase();
+      if (!(axis in labelled)) labelled[axis] = raw;
+    }
+    if (Object.keys(labelled).length === 0) return null;
+    return buildResult(labelled);
+  };
+
+  const tryFromString = (text) => {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+
+    const labelledMatches = [...trimmed.matchAll(/([xyz])\s*[:=]\s*(-?\d+(?:\.\d+)?)/gi)];
+    if (labelledMatches.length > 0) {
+      const data = {};
+      for (const [, axis, raw] of labelledMatches) {
+        const key = axis.toLowerCase();
+        if (!(key in data)) data[key] = raw;
+      }
+      return buildResult({ x: data.x, y: data.y, z: data.z });
+    }
+
+    const numbers = trimmed.match(/-?\d+(?:\.\d+)?/g);
+    if (!numbers || numbers.length < 2) return null;
+    const [first, second, third] = numbers;
+    if (numbers.length >= 3) {
+      return buildResult({ x: first, y: second, z: third });
+    }
+    // Heuristic: two values typically represent the horizontal plane (x, z)
+    return buildResult({ x: first, z: second });
+  };
+
   if (typeof value === 'string') {
-    const matches = value.match(/-?\d+(?:\.\d+)?/g);
-    if (!matches || matches.length < 3) return null;
-    const x = toNumber(matches[0]);
-    const y = toNumber(matches[1]);
-    const z = toNumber(matches[2]);
-    if (x == null || y == null || z == null) return null;
-    return { x, y, z };
+    return tryFromString(value);
   }
 
-  if (typeof value === 'object') {
-    const source = value || {};
-    const x = toNumber(source.x ?? source.X);
-    const y = toNumber(source.y ?? source.Y);
-    const z = toNumber(source.z ?? source.Z);
-    if (x == null || y == null || z == null) return null;
-    return { x, y, z };
-  }
+  const objectResult = tryFromObject(value);
+  if (objectResult) return objectResult;
+
+  const stringified = typeof value.toString === 'function' ? String(value) : null;
+  if (stringified) return tryFromString(stringified);
 
   return null;
 }
