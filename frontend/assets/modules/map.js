@@ -771,6 +771,12 @@
         const awaitingUpload = state.status === 'awaiting_upload';
         const awaitingServerInfo = state.status === 'awaiting_server_info';
         const rustmapsMissing = state.status === 'rustmaps_not_found' || meta?.notFound;
+        const ready = hasImage && mapReady();
+
+        if (ready) {
+          clearMessage();
+          return;
+        }
 
         if (awaitingServerInfo) {
           showStatusMessage('Waiting for world details from the server…', {
