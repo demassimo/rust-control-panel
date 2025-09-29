@@ -208,6 +208,7 @@
       let mapImageSource = null;
       let mapImageObjectUrl = null;
       let mapImageAbort = null;
+      let mapImageLocked = false;
       const FULLSCREEN_WINDOW_FEATURES = 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
       const FULLSCREEN_STYLES = `
         :root { color-scheme: dark; }
@@ -1287,6 +1288,7 @@
         }
         mapImageObjectUrl = null;
         mapImageSource = null;
+        mapImageLocked = false;
         mapImage.removeAttribute('src');
         if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
           fullscreenViewport.mapImage.removeAttribute('src');
@@ -1311,7 +1313,7 @@
 
       async function fetchAuthorizedImage(path, controller) {
         if (typeof ctx.authorizedFetch !== 'function') {
-          return { url: resolveImageUrl(path) };
+          return { url: resolveImageUrl(path), status: 200 };
         }
         const res = await ctx.authorizedFetch(path, {
           signal: controller.signal,
@@ -1324,7 +1326,7 @@
           throw error;
         }
         const blob = await res.blob();
-        return { blob };
+        return { blob, status: res.status };
       }
 
       function applyBlobToImage(blob) {
@@ -1352,6 +1354,7 @@
           clearMapImage();
           return;
         }
+        if (mapImageLocked) return;
         const next = meta.imageUrl;
         if (!next) {
           cancelMapImageRequest();
@@ -1371,6 +1374,9 @@
           if (mapImageAbort !== controller) return;
           if (result.blob) {
             applyBlobToImage(result.blob);
+            if (result.status === 200) {
+              mapImageLocked = true;
+            }
           } else if (result.url) {
             clearMapImage();
             mapImage.src = result.url;
@@ -1378,6 +1384,9 @@
               fullscreenViewport.mapImage.src = result.url;
             }
             mapImageSource = next;
+            if (result.status === 200) {
+              mapImageLocked = true;
+            }
           }
         } catch (err) {
           if (mapImageAbort !== controller) return;
@@ -1812,7 +1821,7 @@
           const previousRemote = previousMeta?.remoteImage ?? null;
           const previousCustom = previousMeta?.custom ?? null;
           let mapChanged = false;
-          const allowMapRefresh = reason !== 'player-reload';
+          const allowMapRefresh = reason !== 'player-reload' && reason !== 'poll';
           const hasMapField = data && Object.prototype.hasOwnProperty.call(data, 'map');
           if (hasMapField) {
             const nextMeta = data?.map || null;
@@ -1880,7 +1889,7 @@
           updateConfigPanel();
           updateUploadSection();
           updateStatusMessage(hasImage);
-          if (reason === 'player-reload') {
+          if (reason === 'player-reload' || reason === 'poll') {
             renderPlayerSections();
           } else {
             renderAll();
