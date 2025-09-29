@@ -632,6 +632,7 @@ label.inline input[type="checkbox"]:focus-visible,
 }
 
 .team-select-label {
+  display: inline-block;
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.01em;
