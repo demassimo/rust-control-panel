@@ -44,6 +44,7 @@ const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
 
 const FACEPUNCH_LEVEL_HOST_PATTERN = /^https?:\/\/files\.facepunch\.com/i;
 const LEVEL_URL_PATTERN = /^https?:\/\/\S+/i;
+const LEVEL_URL_INLINE_PATTERN = /https?:\/\/\S+/i;
 
 const mapImageUpload = multer({
   storage: multer.memoryStorage(),
@@ -879,15 +880,28 @@ function parseLevelUrlMessage(message) {
     if (isLikelyLevelUrl(candidate)) return candidate;
   }
 
-  const urlMatch = text.match(LEVEL_URL_PATTERN);
+  const urlMatch = text.match(LEVEL_URL_INLINE_PATTERN);
   if (urlMatch && urlMatch[0]) {
     const candidate = urlMatch[0].replace(/["'\s>;\]]+$/, '').trim();
     if (isLikelyLevelUrl(candidate)) return candidate;
   }
 
-  const colonIndex = text.indexOf(':');
+  const colonIndex = text.toLowerCase().indexOf('levelurl');
   if (colonIndex >= 0) {
-    const candidate = text.slice(colonIndex + 1).trim()
+    const afterKey = text.slice(colonIndex + 'levelurl'.length);
+    const separatorIndex = afterKey.indexOf(':');
+    if (separatorIndex >= 0) {
+      const candidate = afterKey.slice(separatorIndex + 1).trim()
+        .replace(/^["']+/, '')
+        .replace(/["',;>\]]+$/, '')
+        .trim();
+      if (candidate && isLikelyLevelUrl(candidate)) return candidate;
+    }
+  }
+
+  const genericColonIndex = text.indexOf(':');
+  if (genericColonIndex >= 0) {
+    const candidate = text.slice(genericColonIndex + 1).trim()
       .replace(/^["']+/, '')
       .replace(/["',;>\]]+$/, '')
       .trim();
