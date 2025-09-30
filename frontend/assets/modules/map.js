@@ -959,6 +959,7 @@
       }
 
       const FACEPUNCH_LEVEL_HOST_PATTERN = /^https?:\/\/files\.facepunch\.com/i;
+      const LEVEL_URL_PATTERN = /^https?:\/\/\S+/i;
 
       const META_WORLD_SIZE_PATHS = [
         ['worldSize'],
@@ -1115,11 +1116,20 @@
         return null;
       }
 
-      function isFacepunchLevelUrl(url) {
+      function isLikelyLevelUrl(url) {
         if (typeof url !== 'string') return false;
         const trimmed = url.trim();
         if (!trimmed) return false;
-        return FACEPUNCH_LEVEL_HOST_PATTERN.test(trimmed);
+        return LEVEL_URL_PATTERN.test(trimmed);
+      }
+
+      function isFacepunchLevelUrl(url) {
+        if (!isLikelyLevelUrl(url)) return false;
+        return FACEPUNCH_LEVEL_HOST_PATTERN.test(url.trim());
+      }
+
+      function isCustomLevelUrl(url) {
+        return isLikelyLevelUrl(url) && !isFacepunchLevelUrl(url);
       }
 
       function resolveLevelUrl(metaOverride, infoOverride) {
@@ -1131,7 +1141,7 @@
         for (const candidate of candidates) {
           if (typeof candidate === 'string') {
             const trimmed = candidate.trim();
-            if (trimmed) return trimmed;
+            if (trimmed && isLikelyLevelUrl(trimmed)) return trimmed;
           }
         }
         return null;
@@ -1141,10 +1151,13 @@
         const meta = metaOverride ?? getActiveMapMeta();
         const info = infoOverride ?? state.serverInfo ?? {};
         if (!meta && !info) return false;
+        const metaCustomFlag = meta?.custom ?? meta?.isCustomMap;
+        if (metaCustomFlag === true) return true;
         const levelUrl = resolveLevelUrl(meta, info);
+        if (!levelUrl) return metaCustomFlag === true;
         if (isFacepunchLevelUrl(levelUrl)) return false;
-        if (meta?.custom) return true;
-        if (levelUrl) return true;
+        if (metaCustomFlag === false) return false;
+        if (isCustomLevelUrl(levelUrl)) return true;
         return false;
       }
 

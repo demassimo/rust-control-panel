@@ -42,6 +42,9 @@ const MAP_GLOBAL_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'global');
 const MAP_METADATA_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'metadata');
 const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
 
+const FACEPUNCH_LEVEL_HOST_PATTERN = /^https?:\/\/files\.facepunch\.com/i;
+const LEVEL_URL_PATTERN = /^https?:\/\/\S+/i;
+
 const mapImageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_MAP_IMAGE_BYTES }
@@ -833,6 +836,22 @@ function extractFloat(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function isLikelyLevelUrl(value) {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return LEVEL_URL_PATTERN.test(trimmed);
+}
+
+function isFacepunchLevelUrl(value) {
+  if (!isLikelyLevelUrl(value)) return false;
+  return FACEPUNCH_LEVEL_HOST_PATTERN.test(value.trim());
+}
+
+function isCustomLevelUrl(value) {
+  return isLikelyLevelUrl(value) && !isFacepunchLevelUrl(value);
+}
+
 function parseLevelUrlMessage(message) {
   if (message == null) return null;
   const text = String(message).trim();
@@ -842,7 +861,7 @@ function parseLevelUrlMessage(message) {
     const json = JSON.parse(text);
     if (typeof json === 'string') {
       const parsed = json.trim();
-      if (parsed) return parsed;
+      if (parsed && isLikelyLevelUrl(parsed)) return parsed;
     }
     if (json && typeof json === 'object') {
       for (const value of Object.values(json)) {
@@ -856,12 +875,14 @@ function parseLevelUrlMessage(message) {
 
   const quotedMatch = text.match(/["']\s*(https?:\/\/[^"']+?)\s*["']/i);
   if (quotedMatch && quotedMatch[1]) {
-    return quotedMatch[1].trim();
+    const candidate = quotedMatch[1].trim();
+    if (isLikelyLevelUrl(candidate)) return candidate;
   }
 
-  const urlMatch = text.match(/https?:\/\/\S+/i);
+  const urlMatch = text.match(LEVEL_URL_PATTERN);
   if (urlMatch && urlMatch[0]) {
-    return urlMatch[0].replace(/["'\s>;\]]+$/, '').trim();
+    const candidate = urlMatch[0].replace(/["'\s>;\]]+$/, '').trim();
+    if (isLikelyLevelUrl(candidate)) return candidate;
   }
 
   const colonIndex = text.indexOf(':');
@@ -870,7 +891,7 @@ function parseLevelUrlMessage(message) {
       .replace(/^["']+/, '')
       .replace(/["',;>\]]+$/, '')
       .trim();
-    if (candidate) return candidate;
+    if (candidate && isLikelyLevelUrl(candidate)) return candidate;
   }
 
   return null;
@@ -908,13 +929,7 @@ function parseServerInfoMessage(message) {
     if (lower.includes('level') && lower.includes('url')) {
       if (!result.levelUrl) {
         const parsed = parseLevelUrlMessage(trimmedValue);
-        if (parsed) {
-          result.levelUrl = parsed;
-        } else if (typeof trimmedValue === 'string' && trimmedValue.trim()) {
-          result.levelUrl = trimmedValue.trim();
-        } else if (trimmedValue != null && trimmedValue !== '') {
-          result.levelUrl = String(trimmedValue).trim();
-        }
+        if (parsed) result.levelUrl = parsed;
       }
     }
     if (lower.includes('fps') || lower.includes('framerate')) {
@@ -2788,6 +2803,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       }
     }
     let levelUrl = typeof info?.levelUrl === 'string' ? info.levelUrl.trim() : '';
+    if (!isLikelyLevelUrl(levelUrl)) levelUrl = '';
     if (!levelUrl) {
       try {
         const reply = await sendRconCommand(server, 'levelurl', { silent: true });
@@ -2803,7 +2819,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         logger.warn('Failed to fetch level URL via RCON', err);
       }
     }
-    const hasLevelUrl = levelUrl.length > 0;
+    const hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
 
     if (!info?.size || !info?.seed) {
       try {
@@ -2827,7 +2843,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       await db.deleteServerMap(id);
       mapRecord = null;
     }
-    if (mapRecord && !mapRecord.custom && hasLevelUrl) {
+    if (mapRecord && !mapRecord.custom && hasCustomLevelUrl) {
       logger.info('Server reports custom level URL, clearing procedural map cache');
       await removeMapImage(mapRecord);
       if (mapRecord.map_key) await removeGlobalMapMetadata(mapRecord.map_key);
@@ -2876,7 +2892,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
 
     let map = mapRecordToPayload(id, mapRecord, mapMetadata);
-    if (!map && hasLevelUrl) {
+    if (!map && hasCustomLevelUrl) {
       const baseKey = infoMapKey || null;
       const customKey = baseKey ? `${baseKey}-server-${id}` : `server-${id}-custom`;
       map = {
@@ -2894,7 +2910,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
-      if (!hasLevelUrl && info?.size && info?.seed) {
+      if (!hasCustomLevelUrl && info?.size && info?.seed) {
         const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
         const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
         try {
