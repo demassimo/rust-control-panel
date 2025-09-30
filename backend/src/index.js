@@ -45,6 +45,7 @@ const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
 const FACEPUNCH_LEVEL_HOST_PATTERN = /^https?:\/\/files\.facepunch\.com/i;
 const LEVEL_URL_PATTERN = /^https?:\/\/\S+/i;
 const LEVEL_URL_INLINE_PATTERN = /https?:\/\/\S+/i;
+const ANSI_ESCAPE_SEQUENCE_PATTERN = /\u001b\[[0-?]*[ -\/]*[@-~]/g;
 
 const mapImageUpload = multer({
   storage: multer.memoryStorage(),
@@ -109,6 +110,46 @@ function resolveIpCountry(ip) {
     code,
     name: countryNameFromCode(code)
   };
+}
+
+function stripAnsiSequences(value) {
+  if (typeof value !== 'string' || !value) return value;
+  return value.replace(ANSI_ESCAPE_SEQUENCE_PATTERN, '');
+}
+
+function stripRconTimestampPrefix(value) {
+  if (typeof value !== 'string' || !value) return value;
+  let result = value;
+  let attempts = 0;
+  const MAX_ATTEMPTS = 4;
+  while (attempts < MAX_ATTEMPTS) {
+    attempts += 1;
+    let modified = false;
+    const bracketMatch = result.match(/^\s*\[[^\]]*\]\s*/);
+    if (bracketMatch) {
+      const inner = bracketMatch[0].replace(/^\s*\[|\]\s*$/g, '');
+      if (/\d{1,4}[-/:]\d{1,2}[-/:]\d{1,4}/.test(inner) || /\d{1,2}:\d{2}/.test(inner)) {
+        result = result.slice(bracketMatch[0].length);
+        modified = true;
+      }
+    }
+    if (!modified) {
+      const trailingMatch = result.match(/^\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?]\s*/i);
+      if (trailingMatch) {
+        result = result.slice(trailingMatch[0].length);
+        modified = true;
+      }
+    }
+    if (!modified) break;
+  }
+  return result;
+}
+
+function normaliseRconLine(line) {
+  if (typeof line !== 'string') return '';
+  const withoutAnsi = stripAnsiSequences(line);
+  const withoutTimestamp = stripRconTimestampPrefix(withoutAnsi);
+  return withoutTimestamp.replace(/^\s*>+\s*/, '');
 }
 
 const app = express();
@@ -855,11 +896,13 @@ function isCustomLevelUrl(value) {
 
 function parseLevelUrlMessage(message) {
   if (message == null) return null;
-  const text = String(message).trim();
-  if (!text) return null;
+  const text = stripAnsiSequences(String(message));
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const normalized = stripRconTimestampPrefix(trimmed).trim() || trimmed;
 
   try {
-    const json = JSON.parse(text);
+    const json = JSON.parse(normalized);
     if (typeof json === 'string') {
       const parsed = json.trim();
       if (parsed && isLikelyLevelUrl(parsed)) return parsed;
@@ -874,21 +917,21 @@ function parseLevelUrlMessage(message) {
     // not JSON, continue with pattern-based parsing
   }
 
-  const quotedMatch = text.match(/["']\s*(https?:\/\/[^"']+?)\s*["']/i);
+  const quotedMatch = normalized.match(/["']\s*(https?:\/\/[^"']+?)\s*["']/i);
   if (quotedMatch && quotedMatch[1]) {
     const candidate = quotedMatch[1].trim();
     if (isLikelyLevelUrl(candidate)) return candidate;
   }
 
-  const urlMatch = text.match(LEVEL_URL_INLINE_PATTERN);
+  const urlMatch = normalized.match(LEVEL_URL_INLINE_PATTERN);
   if (urlMatch && urlMatch[0]) {
     const candidate = urlMatch[0].replace(/["'\s>;\]]+$/, '').trim();
     if (isLikelyLevelUrl(candidate)) return candidate;
   }
 
-  const colonIndex = text.toLowerCase().indexOf('levelurl');
+  const colonIndex = normalized.toLowerCase().indexOf('levelurl');
   if (colonIndex >= 0) {
-    const afterKey = text.slice(colonIndex + 'levelurl'.length);
+    const afterKey = normalized.slice(colonIndex + 'levelurl'.length);
     const separatorIndex = afterKey.indexOf(':');
     if (separatorIndex >= 0) {
       const candidate = afterKey.slice(separatorIndex + 1).trim()
@@ -899,9 +942,9 @@ function parseLevelUrlMessage(message) {
     }
   }
 
-  const genericColonIndex = text.indexOf(':');
+  const genericColonIndex = normalized.indexOf(':');
   if (genericColonIndex >= 0) {
-    const candidate = text.slice(genericColonIndex + 1).trim()
+    const candidate = normalized.slice(genericColonIndex + 1).trim()
       .replace(/^["']+/, '')
       .replace(/["',;>\]]+$/, '')
       .trim();
@@ -946,6 +989,16 @@ function parseServerInfoMessage(message) {
         if (parsed) result.levelUrl = parsed;
       }
     }
+    if (!result.levelUrl && typeof trimmedValue === 'string') {
+      const candidateText = trimmedValue.trim();
+      if (candidateText) {
+        const lowerValue = candidateText.toLowerCase();
+        if (lowerValue.includes('levelurl') || LEVEL_URL_PATTERN.test(candidateText)) {
+          const parsed = parseLevelUrlMessage(candidateText);
+          if (parsed) result.levelUrl = parsed;
+        }
+      }
+    }
     if (lower.includes('fps') || lower.includes('framerate')) {
       const fpsValue = extractFloat(trimmedValue);
       if (fpsValue != null) result.fps = fpsValue;
@@ -967,7 +1020,9 @@ function parseServerInfoMessage(message) {
 
   if (!parsedJson) {
     const lines = trimmed.split(/\r?\n/);
-    for (const line of lines) {
+    for (const rawLine of lines) {
+      const line = normaliseRconLine(rawLine);
+      if (!line.trim()) continue;
       const match = line.match(/^\s*([^:=\t]+?)\s*(?:[:=]\s*|\s{2,}|\t+)(.+)$/);
       if (match) {
         assign(match[1], match[2]);
