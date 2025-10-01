@@ -3432,6 +3432,8 @@ app.get('/api/servers/:id/map-image', auth, async (req, res) => {
       }
     }
 
+    const metaIsCustom = isCustomFlag(meta?.isCustomMap) || isCustomFlag(record?.custom);
+
     const serveLocalImage = async () => {
       if (!record?.image_path) return false;
       if (!isWithinDir(record.image_path, MAP_STORAGE_DIR)) return false;
@@ -3459,6 +3461,11 @@ app.get('/api/servers/:id/map-image', auth, async (req, res) => {
 
     if (!meta) {
       logger.warn('No map metadata available for proxy fetch');
+      return res.status(404).json({ error: 'not_found' });
+    }
+
+    if (metaIsCustom) {
+      logger.info('Map record flagged as custom, skipping remote imagery fetch');
       return res.status(404).json({ error: 'not_found' });
     }
 
