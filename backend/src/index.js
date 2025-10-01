@@ -2895,6 +2895,8 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       }
     }
     const hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
+    const derivedMapKey = deriveMapKey(info) || null;
+    const infoMapKey = hasCustomLevelUrl ? null : derivedMapKey;
 
     if (!info?.size || !info?.seed) {
       try {
@@ -2909,7 +2911,6 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     const now = new Date();
     const resetPoint = firstThursdayResetTime(now);
-    const infoMapKey = deriveMapKey(info) || null;
     let mapRecord = await db.getServerMap(id);
     if (mapRecord && shouldResetMapRecord(mapRecord, now, resetPoint)) {
       logger.info('Existing map record expired, removing cached image');
@@ -2968,7 +2969,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
 
     let map = mapRecordToPayload(id, mapRecord, mapMetadata);
     if (!map && hasCustomLevelUrl) {
-      const baseKey = infoMapKey || null;
+      const baseKey = derivedMapKey;
       const customKey = baseKey ? `${baseKey}-server-${id}` : `server-${id}-custom`;
       map = {
         mapKey: customKey,
