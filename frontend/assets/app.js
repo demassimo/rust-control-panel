@@ -1325,12 +1325,10 @@
   }
 
   function detectDefaultApiBase() {
-    const stored = normalizeApiBase(localStorage.getItem('apiBase'));
-    if (stored) return stored;
-
     const hasWindow = typeof window !== 'undefined' && window?.location;
-    const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
+    const stored = normalizeApiBase(localStorage.getItem('apiBase'));
 
+    const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
     if (metaContent) {
       if (hasWindow) {
         try {
@@ -1346,6 +1344,8 @@
         if (normalizedMeta) return normalizedMeta;
       }
     }
+
+    if (stored) return stored;
 
     if (hasWindow && window.location?.origin) {
       const normalizedOrigin = normalizeApiBase(window.location.origin);
