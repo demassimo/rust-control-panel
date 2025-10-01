@@ -2894,9 +2894,9 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         logger.warn('Failed to fetch level URL via RCON', err);
       }
     }
-    const hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
+    let hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
     const derivedMapKey = deriveMapKey(info) || null;
-    const infoMapKey = hasCustomLevelUrl ? null : derivedMapKey;
+    let infoMapKey = hasCustomLevelUrl ? null : derivedMapKey;
 
     if (!info?.size || !info?.seed) {
       try {
@@ -2912,6 +2912,17 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     const now = new Date();
     const resetPoint = firstThursdayResetTime(now);
     let mapRecord = await db.getServerMap(id);
+    if (mapRecord?.custom && levelUrl && !isCustomLevelUrl(levelUrl)) {
+      logger.info('Server reports procedural level URL, clearing custom map cache');
+      await removeMapImage(mapRecord);
+      if (mapRecord.map_key) await removeGlobalMapMetadata(mapRecord.map_key);
+      await db.deleteServerMap(id);
+      mapRecord = null;
+    }
+    if (mapRecord?.custom && !hasCustomLevelUrl && !levelUrl) {
+      hasCustomLevelUrl = true;
+      infoMapKey = null;
+    }
     if (mapRecord && shouldResetMapRecord(mapRecord, now, resetPoint)) {
       logger.info('Existing map record expired, removing cached image');
       await removeMapImage(mapRecord);
@@ -2971,18 +2982,39 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (!map && hasCustomLevelUrl) {
       const baseKey = derivedMapKey;
       const customKey = baseKey ? `${baseKey}-server-${id}` : `server-${id}-custom`;
-      map = {
-        mapKey: customKey,
-        custom: true,
-        cached: false,
-        cachedAt: null,
-        imageUrl: null,
-        needsUpload: true,
-        levelUrl
-      };
-      if (Number.isFinite(info?.size)) map.size = info.size;
-      if (Number.isFinite(info?.seed)) map.seed = info.seed;
-      if (info?.mapName) map.mapName = info.mapName;
+      const storedMeta = { mapKey: customKey };
+      if (Number.isFinite(info?.size)) storedMeta.size = info.size;
+      if (Number.isFinite(info?.seed)) storedMeta.seed = info.seed;
+      if (info?.mapName) storedMeta.mapName = info.mapName;
+      if (levelUrl) storedMeta.levelUrl = levelUrl;
+      storedMeta.cachedAt = new Date().toISOString();
+      try {
+        await db.saveServerMap(id, {
+          map_key: customKey,
+          data: JSON.stringify(storedMeta),
+          image_path: null,
+          custom: 1
+        });
+        mapRecord = await db.getServerMap(id);
+        const persisted = mapRecordToPayload(id, mapRecord, storedMeta);
+        if (persisted) map = persisted;
+      } catch (err) {
+        logger.warn('Failed to persist custom map placeholder', err);
+      }
+      if (!map) {
+        map = {
+          mapKey: customKey,
+          custom: true,
+          cached: false,
+          cachedAt: storedMeta.cachedAt,
+          imageUrl: null,
+          needsUpload: true,
+          levelUrl
+        };
+        if (Number.isFinite(info?.size)) map.size = info.size;
+        if (Number.isFinite(info?.seed)) map.seed = info.seed;
+        if (info?.mapName) map.mapName = info.mapName;
+      }
     }
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
