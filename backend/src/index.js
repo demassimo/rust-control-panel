@@ -42,9 +42,9 @@ const MAP_GLOBAL_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'global');
 const MAP_METADATA_CACHE_DIR = path.join(MAP_STORAGE_DIR, 'metadata');
 const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
 
-const FACEPUNCH_LEVEL_HOST_PATTERN = /^https?:\/\/files\.facepunch\.com/i;
-const LEVEL_URL_PATTERN = /^https?:\/\/\S+/i;
-const LEVEL_URL_INLINE_PATTERN = /https?:\/\/\S+/i;
+const FACEPUNCH_LEVEL_HOST_PATTERN = /^(?:blob:)?https?:\/\/files\.facepunch\.com/i;
+const LEVEL_URL_PATTERN = /^(?:blob:)?https?:\/\/\S+/i;
+const LEVEL_URL_INLINE_PATTERN = /(?:blob:)?https?:\/\/\S+/i;
 const ANSI_ESCAPE_SEQUENCE_PATTERN = /\u001b\[[0-?]*[ -\/]*[@-~]/g;
 
 const mapImageUpload = multer({
