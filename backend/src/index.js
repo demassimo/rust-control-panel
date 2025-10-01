@@ -1675,6 +1675,7 @@ function firstThursdayResetTime(now = new Date()) {
 
 function shouldResetMapRecord(record, now = new Date(), resetPoint = firstThursdayResetTime(now)) {
   if (!record) return false;
+  if (isCustomMapRecord(record)) return false;
   const updated = parseDateLike(
     record.updated_at || record.updatedAt || record.created_at || record.createdAt
   );

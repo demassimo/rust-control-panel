@@ -87,6 +87,8 @@
     return `hsl(${hue}, 70%, 55%)`;
   }
 
+  const customMapFreezeCache = new Set();
+
   window.registerModule({
     id: 'live-map',
     title: 'Player Map',
@@ -2107,8 +2109,12 @@
           broadcastPlayers();
           const activeMeta = getActiveMapMeta();
           const hasImage = hasMapImage(activeMeta);
-          if (mapIsCustom(activeMeta, state.serverInfo)) {
-            if (!state.customMapChecksFrozen) state.customMapChecksFrozen = true;
+          const isCustomMap = mapIsCustom(activeMeta, state.serverInfo);
+          if (isCustomMap && state.serverId) {
+            customMapFreezeCache.add(state.serverId);
+          }
+          if (!state.customMapChecksFrozen && state.serverId && customMapFreezeCache.has(state.serverId)) {
+            state.customMapChecksFrozen = true;
           }
           const skipMapChecks = state.customMapChecksFrozen;
           const awaitingImagery = !skipMapChecks && state.status === 'awaiting_imagery' && !hasImage;
@@ -2194,7 +2200,7 @@
         state.lastUpdated = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
-        state.customMapChecksFrozen = false;
+        state.customMapChecksFrozen = customMapFreezeCache.has(serverId);
         if (state.worldDetails) {
           state.worldDetails.seed = null;
           state.worldDetails.size = null;
