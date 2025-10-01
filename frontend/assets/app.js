@@ -2446,7 +2446,7 @@
   async function api(path, body = null, method = 'GET') {
     if (!state.TOKEN) throw new Error('unauthorized');
     const headers = { 'Authorization': 'Bearer ' + state.TOKEN };
-    const opts = { method, headers };
+    const opts = { method, headers, cache: 'no-store' };
     if (body !== null) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -2471,7 +2471,7 @@
   }
 
   async function publicJson(path, { method = 'GET', body = null } = {}) {
-    const opts = { method };
+    const opts = { method, cache: 'no-store' };
     if (body !== null) {
       opts.headers = { 'Content-Type': 'application/json' };
       opts.body = JSON.stringify(body);

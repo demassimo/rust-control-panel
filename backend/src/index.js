@@ -924,6 +924,7 @@ function parseLevelUrlMessage(message) {
   }
 
   const urlMatch = normalized.match(LEVEL_URL_INLINE_PATTERN);
+
   if (urlMatch && urlMatch[0]) {
     const candidate = urlMatch[0].replace(/["'\s>;\]]+$/, '').trim();
     if (isLikelyLevelUrl(candidate)) return candidate;
@@ -2840,6 +2841,11 @@ app.delete('/api/servers/:id', auth, async (req, res) => {
 app.get('/api/servers/:id/live-map', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'liveMap');
   if (id == null) return;
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+    Pragma: 'no-cache',
+    Expires: '0'
+  });
   const logger = createLogger(`live-map:${id}`);
   logger.info('Live map request received');
   try {
