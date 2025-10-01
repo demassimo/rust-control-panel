@@ -180,6 +180,7 @@
         pendingRefresh: null,
         projectionMode: null,
         horizontalAxis: null,
+        customMapChecksFrozen: false,
         worldDetails: {
           seed: null,
           size: null,
@@ -597,7 +598,7 @@
       function updateUploadSection() {
         if (!uploadWrap) return;
         const meta = getActiveMapMeta();
-        const needsUpload = !!(meta && meta.custom && !hasMapImage(meta));
+        const needsUpload = !!(meta && mapIsCustom(meta) && !hasMapImage(meta));
         if (needsUpload) {
           uploadWrap.classList.remove('hidden');
         } else {
@@ -631,6 +632,7 @@
       function schedulePendingRefresh(delay = 7000) {
         clearPendingRefresh();
         if (!state.serverId) return;
+        if (state.customMapChecksFrozen) return;
         state.pendingRefresh = setTimeout(() => {
           state.pendingRefresh = null;
           refreshData('map-pending').catch((err) => ctx.log?.('Map refresh failed: ' + (err?.message || err)));
@@ -771,16 +773,20 @@
         const awaitingUpload = state.status === 'awaiting_upload';
         const awaitingServerInfo = state.status === 'awaiting_server_info';
         const rustmapsMissing = state.status === 'rustmaps_not_found' || meta?.notFound;
-        const levelUrl = resolveLevelUrl();
-        const customMapNote = levelUrl
-          ? 'This server is using a custom map. Use RustMaps, RustEdit, or run the render commands on the server to generate a map image.'
-          : null;
+        const isCustom = mapIsCustom(meta);
+        const customNotes = [];
+        if (isCustom) {
+          customNotes.push('This server is using a custom map. Use RustMaps, RustEdit, or run the render commands on the server to generate a map image.');
+          if (state.customMapChecksFrozen) {
+            customNotes.push('Automatic RustMaps checks are paused for custom maps until you reload the page.');
+          }
+        }
 
         const noteWithCustomMap = (note) => {
-          if (!customMapNote) return note;
-          if (!note) return customMapNote;
-          if (Array.isArray(note)) return [...note, customMapNote];
-          return [note, customMapNote];
+          if (customNotes.length === 0) return note;
+          if (!note) return customNotes.length === 1 ? customNotes[0] : [...customNotes];
+          if (Array.isArray(note)) return [...note, ...customNotes];
+          return [note, ...customNotes];
         };
         const ready = hasImage && mapReady();
 
@@ -815,7 +821,7 @@
             note: noteWithCustomMap(generating ? 'We’ll refresh automatically.' : 'We’ll check back periodically.'),
             statusCodes: combineStatusCodes(state.status, generating ? 'pending' : null)
           });
-        } else if (meta?.custom && !hasImage) {
+        } else if (isCustom && !hasImage) {
           showStatusMessage('Upload your rendered map image to enable the live map.', {
             details,
             note: noteWithCustomMap(null),
@@ -952,18 +958,143 @@
         return `${seed}_${size}`;
       }
 
-      function resolveWorldSize() {
-        const meta = getActiveMapMeta();
-        const candidates = [
-          meta?.worldSize,
-          meta?.size,
-          meta?.mapSize,
-          meta?.dimensions?.worldSize,
-          state.serverInfo?.worldSize,
-          state.serverInfo?.size,
-          state.serverInfo?.mapSize,
-          state.worldDetails?.size
-        ];
+      const FACEPUNCH_LEVEL_HOST_PATTERN = /^https?:\/\/files\.facepunch\.com/i;
+      const LEVEL_URL_PATTERN = /^https?:\/\/\S+/i;
+
+      const META_WORLD_SIZE_PATHS = [
+        ['worldSize'],
+        ['WorldSize'],
+        ['world_size'],
+        ['size'],
+        ['Size'],
+        ['mapSize'],
+        ['MapSize'],
+        ['dimensions', 'worldSize'],
+        ['dimensions', 'WorldSize'],
+        ['Dimensions', 'worldSize'],
+        ['Dimensions', 'WorldSize'],
+        ['world', 'size'],
+        ['World', 'Size']
+      ];
+
+      const INFO_WORLD_SIZE_PATHS = [
+        ['worldSize'],
+        ['WorldSize'],
+        ['world_size'],
+        ['World_Size'],
+        ['worldsize'],
+        ['Worldsize'],
+        ['size'],
+        ['Size'],
+        ['mapSize'],
+        ['MapSize'],
+        ['map_size'],
+        ['mapsize'],
+        ['World', 'Size'],
+        ['world', 'size'],
+        ['Map', 'Size'],
+        ['map', 'size'],
+        ['Level', 'WorldSize'],
+        ['level', 'worldSize'],
+        ['Level', 'Worldsize'],
+        ['level', 'worldsize'],
+        ['World Size'],
+        ['world size'],
+        ['Map Size'],
+        ['map size']
+      ];
+
+      const META_WORLD_SEED_PATHS = [
+        ['seed'],
+        ['Seed'],
+        ['worldSeed'],
+        ['WorldSeed'],
+        ['world_seed'],
+        ['world', 'seed'],
+        ['World', 'Seed']
+      ];
+
+      const INFO_WORLD_SEED_PATHS = [
+        ['seed'],
+        ['Seed'],
+        ['worldSeed'],
+        ['WorldSeed'],
+        ['world_seed'],
+        ['World_Seed'],
+        ['worldseed'],
+        ['Worldseed'],
+        ['world', 'seed'],
+        ['World', 'Seed'],
+        ['Map', 'Seed'],
+        ['map', 'seed'],
+        ['World Seed'],
+        ['world seed'],
+        ['Map Seed'],
+        ['map seed']
+      ];
+
+      const META_LEVEL_URL_PATHS = [
+        ['levelUrl'],
+        ['levelURL'],
+        ['LevelUrl'],
+        ['LevelURL'],
+        ['level', 'url'],
+        ['Level', 'Url']
+      ];
+
+      const INFO_LEVEL_URL_PATHS = [
+        ['levelUrl'],
+        ['levelURL'],
+        ['LevelUrl'],
+        ['LevelURL'],
+        ['Levelurl'],
+        ['levelurl'],
+        ['level', 'url'],
+        ['Level', 'Url'],
+        ['Level Url'],
+        ['Level URL'],
+        ['level url']
+      ];
+
+      function readValue(source, path) {
+        if (!source || typeof source !== 'object') return undefined;
+        if (Array.isArray(path)) {
+          let current = source;
+          for (const segment of path) {
+            if (current == null || typeof current !== 'object') return undefined;
+            current = readValue(current, segment);
+            if (current === undefined) return undefined;
+          }
+          return current;
+        }
+        if (typeof path !== 'string') return undefined;
+        if (Object.prototype.hasOwnProperty.call(source, path)) return source[path];
+        const normalized = path.toLowerCase();
+        for (const key of Object.keys(source)) {
+          if (typeof key === 'string' && key.toLowerCase() === normalized) {
+            return source[key];
+          }
+        }
+        return undefined;
+      }
+
+      function collectValues(source, paths) {
+        if (!source || typeof source !== 'object') return [];
+        const values = [];
+        for (const path of paths) {
+          const value = readValue(source, path);
+          if (value !== undefined) values.push(value);
+        }
+        return values;
+      }
+
+      function resolveWorldSize(metaOverride, infoOverride) {
+        const meta = metaOverride ?? getActiveMapMeta();
+        const info = infoOverride ?? state.serverInfo ?? {};
+        const candidates = [];
+        if (meta) candidates.push(...collectValues(meta, META_WORLD_SIZE_PATHS));
+        if (info) candidates.push(...collectValues(info, INFO_WORLD_SIZE_PATHS));
+        if (state.worldDetails) candidates.push(state.worldDetails.size);
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
           if (numeric != null && numeric > 0) return numeric;
@@ -971,13 +1102,13 @@
         return null;
       }
 
-      function resolveWorldSeed() {
-        const meta = getActiveMapMeta();
-        const candidates = [
-          meta?.seed,
-          state.serverInfo?.seed,
-          state.worldDetails?.seed
-        ];
+      function resolveWorldSeed(metaOverride, infoOverride) {
+        const meta = metaOverride ?? getActiveMapMeta();
+        const info = infoOverride ?? state.serverInfo ?? {};
+        const candidates = [];
+        if (meta) candidates.push(...collectValues(meta, META_WORLD_SEED_PATHS));
+        if (info) candidates.push(...collectValues(info, INFO_WORLD_SEED_PATHS));
+        if (state.worldDetails) candidates.push(state.worldDetails.seed);
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
           if (numeric != null && numeric !== 0) return numeric;
@@ -985,32 +1116,49 @@
         return null;
       }
 
-      function resolveLevelUrl() {
-        const meta = getActiveMapMeta();
-        const info = state.serverInfo || {};
-        const candidates = [
-          meta?.levelUrl,
-          meta?.levelURL,
-          meta?.LevelUrl,
-          meta?.LevelURL,
-          meta?.level?.url,
-          info?.levelUrl,
-          info?.levelURL,
-          info?.LevelUrl,
-          info?.LevelURL,
-          info?.Levelurl,
-          info?.levelurl,
-          info?.['Level Url'],
-          info?.['Level URL'],
-          info?.['level url']
-        ];
+      function isLikelyLevelUrl(url) {
+        if (typeof url !== 'string') return false;
+        const trimmed = url.trim();
+        if (!trimmed) return false;
+        return LEVEL_URL_PATTERN.test(trimmed);
+      }
+
+      function isFacepunchLevelUrl(url) {
+        if (!isLikelyLevelUrl(url)) return false;
+        return FACEPUNCH_LEVEL_HOST_PATTERN.test(url.trim());
+      }
+
+      function isCustomLevelUrl(url) {
+        return isLikelyLevelUrl(url) && !isFacepunchLevelUrl(url);
+      }
+
+      function resolveLevelUrl(metaOverride, infoOverride) {
+        const meta = metaOverride ?? getActiveMapMeta();
+        const info = infoOverride ?? state.serverInfo ?? {};
+        const candidates = [];
+        if (meta) candidates.push(...collectValues(meta, META_LEVEL_URL_PATHS));
+        if (info) candidates.push(...collectValues(info, INFO_LEVEL_URL_PATHS));
         for (const candidate of candidates) {
           if (typeof candidate === 'string') {
             const trimmed = candidate.trim();
-            if (trimmed) return trimmed;
+            if (trimmed && isLikelyLevelUrl(trimmed)) return trimmed;
           }
         }
         return null;
+      }
+
+      function mapIsCustom(metaOverride, infoOverride) {
+        const meta = metaOverride ?? getActiveMapMeta();
+        const info = infoOverride ?? state.serverInfo ?? {};
+        if (!meta && !info) return false;
+        const metaCustomFlag = meta?.custom ?? meta?.isCustomMap;
+        if (metaCustomFlag === true) return true;
+        const levelUrl = resolveLevelUrl(meta, info);
+        if (!levelUrl) return metaCustomFlag === true;
+        if (isFacepunchLevelUrl(levelUrl)) return false;
+        if (metaCustomFlag === false) return false;
+        if (isCustomLevelUrl(levelUrl)) return true;
+        return false;
       }
 
       async function syncWorldDetailsWithServer({ size, seed, key, reason }) {
@@ -1065,6 +1213,7 @@
 
       async function maybeSubmitWorldDetails(reason = 'auto') {
         if (!state.serverId || typeof ctx.api !== 'function') return;
+        if (state.customMapChecksFrozen) return;
         const infoState = state.worldDetails;
         if (!infoState) return;
         const activeMeta = getActiveMapMeta();
@@ -1132,6 +1281,7 @@
       async function ensureWorldDetails(reason = 'unknown') {
         if (!state.serverId) return;
         if (typeof ctx.runCommand !== 'function') return;
+        if (state.customMapChecksFrozen) return;
         const activeMeta = getActiveMapMeta();
         if (hasMapImage(activeMeta)) return;
         const needsSize = resolveWorldSize() == null;
@@ -1703,7 +1853,7 @@
           metaLines.push({ label: 'Cached', value: cachedTs.toLocaleString() });
         }
         if (hasMapImage(meta)) {
-          const source = meta.custom ? 'Uploaded image' : meta.localImage ? 'Cached copy' : 'RustMaps';
+          const source = mapIsCustom(meta) ? 'Uploaded image' : meta.localImage ? 'Cached copy' : 'RustMaps';
           metaLines.push({ label: 'Source', value: source });
         }
         if (state.lastUpdated) {
@@ -1957,9 +2107,16 @@
           broadcastPlayers();
           const activeMeta = getActiveMapMeta();
           const hasImage = hasMapImage(activeMeta);
-          const awaitingImagery = state.status === 'awaiting_imagery' && !hasImage;
+          if (mapIsCustom(activeMeta, state.serverInfo)) {
+            if (!state.customMapChecksFrozen) state.customMapChecksFrozen = true;
+          }
+          const skipMapChecks = state.customMapChecksFrozen;
+          const awaitingImagery = !skipMapChecks && state.status === 'awaiting_imagery' && !hasImage;
 
-          if (state.status === 'awaiting_server_info') {
+          if (skipMapChecks) {
+            if (state.pendingGeneration) state.pendingGeneration = false;
+            clearPendingRefresh();
+          } else if (state.status === 'awaiting_server_info') {
             // Need size/seed from user; don't poll for imagery yet
             state.pendingGeneration = false;
             clearPendingRefresh();
@@ -1981,7 +2138,7 @@
           } else {
             renderAll();
           }
-          const shouldUpdateWorldDetails = !hasImage;
+          const shouldUpdateWorldDetails = !hasImage && !skipMapChecks;
           if (shouldUpdateWorldDetails) {
             ensureWorldDetails('refresh')
               .catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
@@ -2037,6 +2194,7 @@
         state.lastUpdated = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
+        state.customMapChecksFrozen = false;
         if (state.worldDetails) {
           state.worldDetails.seed = null;
           state.worldDetails.size = null;
@@ -2078,6 +2236,7 @@
           state.status = null;
           state.projectionMode = null;
           state.horizontalAxis = null;
+          state.customMapChecksFrozen = false;
           if (state.worldDetails) {
             state.worldDetails.seed = null;
             state.worldDetails.size = null;
@@ -2120,6 +2279,7 @@
         state.status = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
+        state.customMapChecksFrozen = false;
         if (state.worldDetails) {
           state.worldDetails.seed = null;
           state.worldDetails.size = null;
