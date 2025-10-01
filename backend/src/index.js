@@ -1886,12 +1886,23 @@ async function purgeExpiredMapCaches(now = new Date()) {
   await purgeGlobalCacheIfDue(resetPoint, now, activeImages, activeMapKeys);
 }
 
+function parseMapRecordData(record) {
+  if (!record) return null;
+  const raw = record.data;
+  if (!raw) return null;
+  try {
+    if (typeof raw === 'string') return JSON.parse(raw);
+    if (typeof raw === 'object') return { ...raw };
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function mapRecordToPayload(serverId, record, metadataOverride = null) {
   if (!record) return null;
   let meta = {};
-  if (record.data) {
-    try { meta = JSON.parse(record.data); } catch { /* ignore parse errors */ }
-  }
+  meta = parseMapRecordData(record) || meta;
   if (metadataOverride && typeof metadataOverride === 'object') {
     meta = { ...meta, ...metadataOverride };
   }
@@ -2975,6 +2986,23 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
         mapMetadata = cachedMeta;
       } else if (cachedMeta) {
         await removeGlobalMapMetadata(infoMapKey);
+      }
+    }
+
+    if (mapRecord?.custom && !levelUrl) {
+      const storedMeta = mapMetadata || parseMapRecordData(mapRecord) || {};
+      const storedLevelUrl = typeof storedMeta.levelUrl === 'string' ? storedMeta.levelUrl.trim() : '';
+      if (isCustomLevelUrl(storedLevelUrl)) {
+        levelUrl = storedLevelUrl;
+        hasCustomLevelUrl = true;
+        infoMapKey = null;
+        if (info) {
+          const cachedLevelUrl = typeof info.levelUrl === 'string' ? info.levelUrl.trim() : '';
+          if (cachedLevelUrl !== storedLevelUrl) {
+            info.levelUrl = storedLevelUrl;
+            cacheServerInfo(id, info);
+          }
+        }
       }
     }
 
