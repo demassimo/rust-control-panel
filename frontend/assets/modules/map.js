@@ -8,6 +8,7 @@
   const PLAYER_REFRESH_INTERVAL = 60000;
   const WORLD_SYNC_THROTTLE = 15000;
   const REFRESH_STORAGE_KEY = 'live-map:poll-interval';
+  const STATUS_MESSAGE_STORAGE_KEY = 'live-map:last-status-message';
   const REFRESH_OPTIONS = [
     { value: 5000, label: 'Every 5 seconds' },
     { value: 10000, label: 'Every 10 seconds' },
@@ -66,6 +67,72 @@
     } catch (err) {
       // Ignore storage errors
     }
+  }
+
+  let cachedStatusMessage = null;
+
+  function loadPersistentStatusMessage() {
+    if (cachedStatusMessage) return cachedStatusMessage;
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage?.getItem?.(STATUS_MESSAGE_STORAGE_KEY);
+      if (!raw) {
+        cachedStatusMessage = null;
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        cachedStatusMessage = null;
+        return null;
+      }
+      const message = typeof parsed.message === 'string' ? parsed.message : null;
+      if (!message) {
+        cachedStatusMessage = null;
+        return null;
+      }
+      const serverId = parsed.serverId == null ? null : String(parsed.serverId);
+      cachedStatusMessage = { message, serverId };
+      return cachedStatusMessage;
+    } catch (err) {
+      cachedStatusMessage = null;
+      return null;
+    }
+  }
+
+  function savePersistentStatusMessage(message, serverId) {
+    if (typeof window === 'undefined') return;
+    if (!message) {
+      clearPersistentStatusMessage();
+      return;
+    }
+    const payload = { message: String(message) };
+    if (serverId != null) payload.serverId = String(serverId);
+    try {
+      window.localStorage?.setItem?.(STATUS_MESSAGE_STORAGE_KEY, JSON.stringify(payload));
+    } catch (err) {
+      // Ignore storage errors
+    }
+    cachedStatusMessage = {
+      message: String(message),
+      serverId: payload.serverId == null ? null : String(payload.serverId)
+    };
+  }
+
+  function clearPersistentStatusMessage() {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage?.removeItem?.(STATUS_MESSAGE_STORAGE_KEY);
+    } catch (err) {
+      // Ignore storage errors
+    }
+    cachedStatusMessage = null;
+  }
+
+  function hasPersistentStatusForServer(serverId) {
+    const stored = loadPersistentStatusMessage();
+    if (!stored || !stored.message) return false;
+    if (stored.serverId == null || !serverId) return true;
+    return String(stored.serverId) === String(serverId);
   }
 
   function describeRefreshInterval(interval) {
@@ -478,7 +545,9 @@
         viewport.mapView.classList.add('map-view-has-message');
       }
 
-      function setMessage(content) {
+      function setMessage(content, options = {}) {
+        const { persist = false } = options;
+        if (!persist) clearPersistentStatusMessage();
         const viewports = getActiveViewports();
         viewports.forEach((viewport, index) => {
           const payload = cloneMessageContent(content, viewport, index === 0);
@@ -487,6 +556,7 @@
       }
 
       function clearMessage() {
+        clearPersistentStatusMessage();
         for (const viewport of getActiveViewports()) {
           if (!viewport.message || !viewport.mapView) continue;
           viewport.message.innerHTML = '';
@@ -618,7 +688,7 @@
           return;
         }
         if (state.status === 'pending') {
-          configIntro.textContent = 'RustMaps is generating this map. We’ll refresh automatically.';
+          configIntro.textContent = 'RustMaps is generating this map. High demand (like wipe day) can slow this down, but we’ll refresh automatically when it is ready.';
         } else {
           configIntro.textContent = 'Waiting for RustMaps imagery. We will refresh when it becomes available.';
         }
@@ -706,7 +776,7 @@
 
       function showStatusMessage(primary, options = {}) {
         if (!primary) return;
-        const { spinner = false, details = null, note = null, statusCodes = null } = options;
+        const { spinner = false, details = null, note = null, statusCodes = null, persist = false } = options;
         const container = document.createElement('div');
         container.className = 'map-status';
         if (spinner) {
@@ -764,7 +834,10 @@
           }
         }
         container.appendChild(body);
-        setMessage(container);
+        setMessage(container, { persist });
+        if (persist) {
+          savePersistentStatusMessage(primary, state.serverId);
+        }
       }
 
       function updateStatusMessage(hasImageOverride) {
@@ -797,11 +870,12 @@
           return;
         }
         if (awaitingServerInfo) {
-          showStatusMessage('Waiting for world details from the server…', {
+          showStatusMessage('Waiting for RustMaps to generate the map…', {
             spinner: true,
             details,
             note: noteWithCustomMap('We’ll try again automatically.'),
-            statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null)
+            statusCodes: combineStatusCodes(state.status, state.pendingGeneration ? 'pending' : null),
+            persist: true
           });
         } else if (awaitingUpload && !hasImage) {
           showStatusMessage('Upload your rendered map image to enable the live map.', {
@@ -820,7 +894,9 @@
           showStatusMessage(generating ? 'RustMaps is generating this map…' : 'Waiting for RustMaps imagery…', {
             spinner: true,
             details,
-            note: noteWithCustomMap(generating ? 'We’ll refresh automatically.' : 'We’ll check back periodically.'),
+            note: noteWithCustomMap(generating
+              ? 'Generation can take several minutes during busy periods (like wipe day), but we’ll refresh automatically when it is ready.'
+              : 'We’ll check back periodically.'),
             statusCodes: combineStatusCodes(state.status, generating ? 'pending' : null)
           });
         } else if (isCustom && !hasImage) {
@@ -2043,7 +2119,8 @@
       async function refreshData(reason) {
         if (!state.serverId) return;
         hideUploadNotice();
-        if (reason !== 'poll' && reason !== 'map-pending' && reason !== 'player-reload') {
+        const skipLoadingMessage = hasPersistentStatusForServer(state.serverId);
+        if (!skipLoadingMessage && reason !== 'poll' && reason !== 'map-pending' && reason !== 'player-reload') {
           showStatusMessage('Loading live map data…', {
             spinner: true,
             details: mapStatusDetails(),
@@ -2218,6 +2295,10 @@
         clearMapImage();
         updateConfigPanel();
         clearSelection();
+        const persistedStatus = loadPersistentStatusMessage();
+        if (persistedStatus?.message && hasPersistentStatusForServer(serverId)) {
+          setMessage(persistedStatus.message, { persist: true });
+        }
         refreshData('server-connected');
         schedulePolling();
         ensureWorldDetails('server-connected')
@@ -2349,7 +2430,12 @@
         }
       });
 
-      setMessage('Connect to a server to load the live map.');
+      const initialStatus = loadPersistentStatusMessage();
+      if (initialStatus?.message) {
+        setMessage(initialStatus.message, { persist: true });
+      } else {
+        setMessage('Connect to a server to load the live map.');
+      }
     }
   });
 })();
