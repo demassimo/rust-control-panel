@@ -145,6 +145,25 @@ update_nginx() {
   fi
 }
 
+confirm_nginx_update() {
+  if [ ! -t 0 ]; then
+    warn "Non-interactive shell detected; skipping nginx configuration update"
+    return 1
+  fi
+
+  local response=""
+  read -r -p "Do you want to update the nginx configuration? [y/N]: " response || response=""
+
+  case "$response" in
+    [yY]|[yY][eE][sS])
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 restart_services() {
   log "Restarting services"
   systemctl restart "$SERVICE_NAME"
@@ -171,7 +190,11 @@ main() {
   update_backend
   update_backend_service
   install_or_update_discord_service
-  update_nginx
+  if confirm_nginx_update; then
+    update_nginx
+  else
+    log "Skipping nginx configuration update"
+  fi
   restart_services
   log "Update complete"
 }
