@@ -2257,6 +2257,10 @@
             setMessage('RustMaps rejected your API key. Update it in Settings.');
             return;
           }
+          if (code === 'custom_level_url') {
+            setMessage('This server is using a custom map. Upload a rendered image or configure a Facepunch level URL to enable the live map.');
+            return;
+          }
           const detail = ctx.describeError?.(err) || err?.message || 'Unable to fetch live map data.';
           setMessage(detail);
           ctx.log?.('Live map error: ' + (err?.message || err));
