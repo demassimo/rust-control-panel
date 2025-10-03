@@ -2205,7 +2205,7 @@
             clearPendingRefresh();
           } else if (state.status === 'pending' || awaitingImagery) {
             // RustMaps is generating or we're waiting for imagery
-            if (!state.pendingGeneration) schedulePendingRefresh();
+            if (!state.pendingRefresh) schedulePendingRefresh();
             state.pendingGeneration = true;
           } else {
             // Have imagery or no generation required
