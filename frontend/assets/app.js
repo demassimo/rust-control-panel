@@ -1194,6 +1194,7 @@
     rustmaps_not_found: 'RustMaps has not published a generated map for this seed yet.',
     rustmaps_error: 'RustMaps responded with an unexpected error.',
     rustmaps_image_error: 'RustMaps returned an invalid map image.',
+    custom_level_url: 'This server is using a custom map. Configure a Facepunch level URL to enable the live map.',
     live_map_failed: 'Unable to load the live map right now.',
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',

@@ -1,6 +1,7 @@
 // rcon.js â€” WebRCON client with central management (ESM, Node 18+)
 import WebSocket from 'ws';
 import EventEmitter from 'events';
+import { parseServerInfoMessage, parseLevelUrlMessage, extractInteger } from './rcon-parsers.js';
 
 // ---------- endpoint normalize ----------
 function normalizeEndpoint({ host, port, tls }) {
@@ -514,6 +515,75 @@ export function connectRcon(row) {
 export function sendRconCommand(row, command, options) {
   const client = ensureClient(row);
   return client.command(command, options);
+}
+
+function parseWorldSizeMessage(message) {
+  const text = typeof message === 'string' ? message : String(message ?? '');
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const explicit = trimmed.match(/world\s*size\s*[:=]\s*([\d,_'\s]+)/i)
+    || trimmed.match(/worldsize\s*[:=]\s*([\d,_'\s]+)/i);
+  const parsed = explicit ? extractInteger(explicit[1]) : extractInteger(trimmed);
+  if (parsed == null || Number.isNaN(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function parseWorldSeedMessage(message) {
+  const text = typeof message === 'string' ? message : String(message ?? '');
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const explicit = trimmed.match(/seed\s*[:=]\s*([-\d,_'\s]+)/i)
+    || trimmed.match(/world\s*seed\s*[:=]\s*([-\d,_'\s]+)/i);
+  const parsed = explicit ? extractInteger(explicit[1]) : extractInteger(trimmed);
+  if (parsed == null || Number.isNaN(parsed)) return null;
+  return parsed;
+}
+
+export async function fetchWorldSize(row, options = {}) {
+  const commandOptions = { ...options };
+  if (typeof commandOptions.silent === 'undefined') commandOptions.silent = true;
+  const reply = await sendRconCommand(row, 'server.worldsize', commandOptions);
+  const message = reply?.Message ?? reply?.message ?? '';
+  const size = parseWorldSizeMessage(message);
+  return Number.isFinite(size) ? size : null;
+}
+
+export async function fetchWorldSeed(row, options = {}) {
+  const commandOptions = { ...options };
+  if (typeof commandOptions.silent === 'undefined') commandOptions.silent = true;
+  const reply = await sendRconCommand(row, 'server.seed', commandOptions);
+  const message = reply?.Message ?? reply?.message ?? '';
+  const seed = parseWorldSeedMessage(message);
+  return Number.isFinite(seed) ? seed : null;
+}
+
+export async function fetchWorldSettings(row, options = {}) {
+  const result = { size: null, seed: null };
+  try {
+    const size = await fetchWorldSize(row, options);
+    if (Number.isFinite(size) && size > 0) result.size = size;
+  } catch {}
+  try {
+    const seed = await fetchWorldSeed(row, options);
+    if (Number.isFinite(seed)) result.seed = seed;
+  } catch {}
+  return result;
+}
+
+export async function fetchServerInfo(row, options = {}) {
+  const commandOptions = { ...options };
+  if (typeof commandOptions.silent === 'undefined') commandOptions.silent = true;
+  const reply = await sendRconCommand(row, 'serverinfo', commandOptions);
+  const message = reply?.Message ?? reply?.message ?? '';
+  return parseServerInfoMessage(message);
+}
+
+export async function fetchLevelUrl(row, options = {}) {
+  const commandOptions = { ...options };
+  if (typeof commandOptions.silent === 'undefined') commandOptions.silent = true;
+  const reply = await sendRconCommand(row, 'levelurl', commandOptions);
+  const message = reply?.Message ?? reply?.message ?? '';
+  return parseLevelUrlMessage(message);
 }
 
 export function closeRcon(id) {
