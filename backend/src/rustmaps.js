@@ -1,12 +1,82 @@
+import fs from 'fs/promises';
+import path from 'path';
+
 const API_BASE_URL = 'https://api.rustmaps.com/v4';
 const DEFAULT_STAGING = false;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const MAP_CACHE_TZ_OFFSET_MINUTES = 120; // UTC+2
+const MAP_CACHE_RESET_HOUR = 20;
+const MAP_CACHE_RESET_MINUTE = 0;
+const KNOWN_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
+
+let rustMapsGlobalCacheDir = path.resolve(process.cwd(), 'data/maps/global');
+let rustMapsMetadataCacheDir = path.resolve(process.cwd(), 'data/maps/metadata');
+let lastGlobalMapCacheReset = null;
 
 function createError(code, message = code) {
   const err = new Error(message);
   err.code = code;
   return err;
+}
+
+function parseDateLike(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return null;
+  return new Date(ts);
+}
+
+function sanitizeCacheKeySegment(value) {
+  return (
+    (String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') || 'map')
+      .slice(0, 80)
+  );
+}
+
+export function configureRustMapsCache({
+  globalCacheDir,
+  metadataCacheDir
+} = {}) {
+  if (globalCacheDir) {
+    rustMapsGlobalCacheDir = path.resolve(globalCacheDir);
+  }
+  if (metadataCacheDir) {
+    rustMapsMetadataCacheDir = path.resolve(metadataCacheDir);
+  }
+  if (!rustMapsGlobalCacheDir) {
+    rustMapsGlobalCacheDir = path.resolve(process.cwd(), 'data/maps/global');
+  }
+  if (!rustMapsMetadataCacheDir) {
+    rustMapsMetadataCacheDir = path.resolve(process.cwd(), 'data/maps/metadata');
+  }
+}
+
+export function getRustMapsCachePaths() {
+  return {
+    globalCacheDir: rustMapsGlobalCacheDir,
+    metadataCacheDir: rustMapsMetadataCacheDir
+  };
+}
+
+export async function ensureRustMapsCacheDirs() {
+  await fs.mkdir(rustMapsGlobalCacheDir, { recursive: true });
+  await fs.mkdir(rustMapsMetadataCacheDir, { recursive: true });
+}
+
+export function resolveRustMapImageCachePath(mapKey, extension = 'png') {
+  const safeKey = sanitizeCacheKeySegment(mapKey || 'map');
+  return path.join(rustMapsGlobalCacheDir, `${safeKey}.${extension}`);
+}
+
+export function resolveRustMapMetadataCachePath(mapKey) {
+  const safeKey = sanitizeCacheKeySegment(mapKey || 'map');
+  return path.join(rustMapsMetadataCacheDir, `${safeKey}.json`);
 }
 
 function ensureApiKey(apiKey) {
@@ -52,6 +122,140 @@ async function rustMapsFetch(pathOrUrl, { method = 'GET', apiKey, body, signal, 
   }
   const res = await fetch(url, { method, headers, body: payload, signal });
   return res;
+}
+
+export async function loadCachedRustMapMetadata(mapKey) {
+  if (!mapKey) return null;
+  const filePath = resolveRustMapMetadataCachePath(mapKey);
+  try {
+    const text = await fs.readFile(filePath, 'utf8');
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.mapKey) parsed.mapKey = mapKey;
+    return parsed;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.warn('Failed to read cached map metadata', err);
+    return null;
+  }
+}
+
+export async function saveCachedRustMapMetadata(mapKey, metadata) {
+  if (!mapKey || !metadata || typeof metadata !== 'object') return;
+  const cachedAt = parseDateLike(metadata.cachedAt) || new Date();
+  const payload = { ...metadata, mapKey, cachedAt: cachedAt.toISOString() };
+  const filePath = resolveRustMapMetadataCachePath(mapKey);
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('Failed to persist cached map metadata', err);
+  }
+}
+
+export async function removeCachedRustMapMetadata(mapKey) {
+  if (!mapKey) return;
+  const filePath = resolveRustMapMetadataCachePath(mapKey);
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.warn('Failed to remove cached map metadata', err);
+  }
+}
+
+export async function clearRustMapMetadataCache(activeMapKeys = new Set()) {
+  let entries;
+  try {
+    entries = await fs.readdir(rustMapsMetadataCacheDir, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === 'ENOENT') return;
+    console.warn('global map metadata read failed', err);
+    return;
+  }
+  const keep = new Set();
+  for (const key of activeMapKeys || []) {
+    keep.add(sanitizeCacheKeySegment(key));
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const name = entry.name;
+    if (!name.endsWith('.json')) continue;
+    const base = name.slice(0, -5);
+    if (keep.has(base)) continue;
+    const target = path.join(rustMapsMetadataCacheDir, name);
+    try {
+      await fs.unlink(target);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') console.warn('Failed to remove cached map metadata file', err);
+    }
+  }
+}
+
+export function firstThursdayResetTime(now = new Date()) {
+  const tzAdjusted = new Date(now.getTime() + MAP_CACHE_TZ_OFFSET_MINUTES * 60000);
+  const year = tzAdjusted.getUTCFullYear();
+  const month = tzAdjusted.getUTCMonth();
+  const firstDayDow = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  const daysUntilThursday = (4 - firstDayDow + 7) % 7;
+  const day = 1 + daysUntilThursday;
+  const hourUtc = MAP_CACHE_RESET_HOUR - Math.trunc(MAP_CACHE_TZ_OFFSET_MINUTES / 60);
+  const minuteUtc = MAP_CACHE_RESET_MINUTE - (MAP_CACHE_TZ_OFFSET_MINUTES % 60);
+  return new Date(Date.UTC(year, month, day, hourUtc, minuteUtc, 0, 0));
+}
+
+export function isRustMapMetadataStale(meta, now = new Date(), resetPoint = firstThursdayResetTime(now)) {
+  if (!meta) return false;
+  const cachedAt = parseDateLike(meta.cachedAt);
+  if (!cachedAt) return false;
+  return now >= resetPoint && cachedAt < resetPoint;
+}
+
+export async function findCachedRustMapImage(mapKey) {
+  if (!mapKey) return null;
+  for (const ext of KNOWN_IMAGE_EXTENSIONS) {
+    const filePath = resolveRustMapImageCachePath(mapKey, ext);
+    try {
+      await fs.access(filePath);
+      return { path: filePath, extension: ext };
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+export async function clearRustMapImageCache(activeImages = new Set()) {
+  let entries;
+  try {
+    entries = await fs.readdir(rustMapsGlobalCacheDir, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === 'ENOENT') return;
+    console.warn('global map cache read failed', err);
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const target = path.join(rustMapsGlobalCacheDir, entry.name);
+    if (activeImages.has(target)) continue;
+    try {
+      await fs.unlink(target);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') console.warn('Failed to remove cached global map image', err);
+    }
+  }
+}
+
+export async function purgeRustMapCacheIfDue(
+  resetPoint,
+  now = new Date(),
+  activeImages = new Set(),
+  activeMapKeys = new Set()
+) {
+  if (!resetPoint) return;
+  if (now < resetPoint) return;
+  if (lastGlobalMapCacheReset && lastGlobalMapCacheReset >= resetPoint) return;
+  await clearRustMapImageCache(activeImages);
+  await clearRustMapMetadataCache(activeMapKeys);
+  lastGlobalMapCacheReset = now;
 }
 
 function normalizeMapData(data = {}) {
