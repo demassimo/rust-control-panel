@@ -2233,6 +2233,10 @@ button.menu-tab.active {
   transition: background 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
+.map-view.map-view-has-message {
+  aspect-ratio: auto;
+}
+
 .map-view::before {
   content: '';
   position: absolute;
@@ -2289,6 +2293,7 @@ button.menu-tab.active {
   font-size: 0.96rem;
   line-height: 1.5;
   z-index: 2;
+  overflow: auto;
 }
 
 .map-placeholder .map-status {
