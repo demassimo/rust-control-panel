@@ -2218,8 +2218,14 @@
         }
 
         const title = viewport.doc.createElement('div');
-        title.innerHTML = `<strong>${mapName}</strong>`;
+        title.className = 'map-summary-title';
+        const titleText = viewport.doc.createElement('strong');
+        titleText.textContent = mapName;
+        title.appendChild(titleText);
         target.appendChild(title);
+
+        const controls = viewport.doc.createElement('div');
+        controls.className = 'map-summary-controls';
 
         const refreshLabel = viewport.doc.createElement('label');
         refreshLabel.className = 'map-refresh-control';
@@ -2246,7 +2252,7 @@
         }
         bindRefreshSelect(refreshSelect);
         refreshLabel.appendChild(refreshSelect);
-        target.appendChild(refreshLabel);
+        controls.appendChild(refreshLabel);
 
         const zoomControl = viewport.doc.createElement('div');
         zoomControl.className = 'map-zoom-control';
@@ -2301,7 +2307,8 @@
         zoomInputWrap.appendChild(zoomUnit);
 
         zoomControl.appendChild(zoomInputWrap);
-        target.appendChild(zoomControl);
+        controls.appendChild(zoomControl);
+        target.appendChild(controls);
         viewport.zoomSlider = zoomSlider;
         viewport.zoomInput = zoomInput;
         const zoomReady = mapReady();
@@ -2310,15 +2317,28 @@
         zoomControl.classList.toggle('disabled', !zoomReady);
 
         const note = viewport.doc.createElement('p');
-        note.className = 'map-filter-note muted small';
+        note.className = 'map-filter-note map-summary-note muted small';
         target.appendChild(note);
         viewport.refreshDisplay = note;
 
-        for (const item of metaLines) {
+        const metrics = viewport.doc.createElement('div');
+        metrics.className = 'map-summary-grid';
+        target.appendChild(metrics);
+
+        metaLines.forEach((item, index) => {
           const row = viewport.doc.createElement('div');
-          row.innerHTML = `<strong>${item.value ?? '—'}</strong> ${item.label}`;
-          target.appendChild(row);
-        }
+          row.className = 'map-summary-item';
+          if (index === 0) row.classList.add('map-summary-item-primary');
+          const valueEl = viewport.doc.createElement('span');
+          valueEl.className = 'map-summary-item-value';
+          valueEl.textContent = `${item.value ?? '—'}`;
+          const labelEl = viewport.doc.createElement('span');
+          labelEl.className = 'map-summary-item-label';
+          labelEl.textContent = item.label;
+          row.appendChild(valueEl);
+          row.appendChild(labelEl);
+          metrics.appendChild(row);
+        });
       }
 
       function renderSummary() {
