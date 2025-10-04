@@ -66,3 +66,10 @@ Set `RUSTMAPS_API_KEY=...` to provide a fallback RustMaps key (optional). Each p
 - The backend keeps a persistent WebSocket connection for every configured server and polls `status` on an interval.
 - Adjust the cadence with `MONITOR_INTERVAL_MS` (default `60000` ms) to balance responsiveness and RCON load.
 - Real-time health information and player counts are surfaced in the dashboard and streamed over Socket.IO to connected clients.
+
+## Raising map upload limits
+
+- The panel accepts custom map images up to **40 MB** by default (see `MAX_MAP_IMAGE_BYTES` in `backend/src/index.js`).
+- If you host the panel behind **nginx**, set `client_max_body_size 40M;` (or higher) in your site config and reload nginx.
+- For **Caddy**, configure `request_body { max_size 40MB }` (or higher) on the site handling the panel.
+- When reverse proxies enforce a lower cap you will see HTTP 413 errors during upload — raise the proxy limit first, then adjust `MAX_MAP_IMAGE_BYTES` if you need to allow even larger files.
