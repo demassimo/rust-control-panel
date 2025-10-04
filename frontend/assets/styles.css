@@ -2209,10 +2209,22 @@ button.menu-tab.active {
 .map-view {
   position: relative;
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(9, 1, 4, 0.9);
   min-height: 420px;
+}
+
+.map-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  border-radius: inherit;
+  overflow: hidden;
+  background: inherit;
+  transition: transform 0.08s ease-out;
+  will-change: transform;
 }
 
 .live-map-card .map-view {
@@ -2250,9 +2262,10 @@ button.menu-tab.active {
   display: flex;
 }
 
-.map-view.map-view-has-message > img,
-.map-view.map-view-has-message > .map-overlay {
-  display: none;
+.map-view.map-view-has-message > .map-canvas {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .map-view img {
@@ -2413,6 +2426,16 @@ button.menu-tab.active {
   top: -8px;
 }
 
+.map-view-zoomed .map-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.map-view-panning .map-canvas {
+  cursor: grabbing;
+  transition: none;
+}
+
 .map-sidebar {
   display: flex;
   flex-direction: column;
@@ -2422,21 +2445,6 @@ button.menu-tab.active {
 .live-map-card .map-player-list {
   max-height: clamp(240px, 48vh, 520px);
   overflow-y: auto;
-}
-
-.map-fullscreen-button {
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.map-fullscreen-button::after {
-  content: '\1F5D6';
-  font-size: 1rem;
 }
 
 .settings-card .card-header p {

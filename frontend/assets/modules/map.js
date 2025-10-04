@@ -250,6 +250,11 @@
 
       const mapView = document.createElement('div');
       mapView.className = 'map-view';
+
+      const mapCanvas = document.createElement('div');
+      mapCanvas.className = 'map-canvas';
+      mapCanvas.style.transformOrigin = 'center center';
+
       const mapImage = document.createElement('img');
       mapImage.alt = 'Rust world map';
       mapImage.loading = 'lazy';
@@ -257,8 +262,9 @@
       overlay.className = 'map-overlay';
       const message = document.createElement('div');
       message.className = 'map-placeholder';
-      mapView.appendChild(mapImage);
-      mapView.appendChild(overlay);
+      mapCanvas.appendChild(mapImage);
+      mapCanvas.appendChild(overlay);
+      mapView.appendChild(mapCanvas);
       mapView.appendChild(message);
 
       const markerPopup = document.createElement('div');
@@ -352,76 +358,18 @@
 
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
-        const fullscreenBtn = document.createElement('button');
-        fullscreenBtn.type = 'button';
-        fullscreenBtn.className = 'ghost map-fullscreen-button';
-        fullscreenBtn.textContent = 'Open fullscreen';
-        fullscreenBtn.setAttribute('aria-label', 'Open the live map in a new window');
-        fullscreenBtn.addEventListener('click', () => openFullscreenMap());
-        ctx.actions.appendChild(fullscreenBtn);
       }
 
       let mapImageSource = null;
       let mapImageObjectUrl = null;
       let mapImageAbort = null;
       let mapImageLocked = false;
-      const FULLSCREEN_WINDOW_FEATURES = 'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
-      const FULLSCREEN_STYLES = `
-        :root { color-scheme: dark; }
-        * { box-sizing: border-box; }
-        body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, rgba(30, 41, 59, 0.45), rgba(2, 6, 23, 0.95)); color: #e2e8f0; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.45; }
-        .map-popup { display: flex; flex-direction: column; min-height: 100vh; padding: 20px 24px 28px; gap: 18px; }
-        .map-popup-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-        .map-popup-header h1 { margin: 0; font-size: 1.35rem; font-weight: 600; letter-spacing: -0.01em; }
-        .map-popup-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 320px); gap: 20px; flex: 1; align-items: start; }
-        @media (max-width: 1200px) { .map-popup-layout { grid-template-columns: 1fr; } }
-        .map-view { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.28); background: rgba(8, 11, 19, 0.95); min-height: min(70vh, 720px); }
-        .map-view img { display: block; width: 100%; height: auto; }
-        .map-overlay { position: absolute; inset: 0; pointer-events: none; }
-        .map-overlay .map-marker { position: absolute; width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(0, 0, 0, 0.45); box-shadow: 0 0 14px rgba(0, 0, 0, 0.45); transform: translate(-50%, -50%); pointer-events: auto; }
-        .map-overlay .map-marker.active { box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.45); }
-        .map-overlay .map-marker.dimmed { opacity: 0.38; }
-        .map-placeholder { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center; align-items: center; gap: 18px; padding: 32px 28px; text-align: center; background: rgba(4, 7, 15, 0.9); color: #cbd5f5; font-size: 1rem; }
-        .map-placeholder .map-status { width: min(100%, 540px); }
-        .map-view.map-view-has-message > .map-placeholder { display: flex; }
-        .map-view.map-view-has-message > img,
-        .map-view.map-view-has-message > .map-overlay { display: none; }
-        .map-sidebar { display: flex; flex-direction: column; gap: 18px; }
-        .map-summary, .map-team-info { background: rgba(10, 14, 24, 0.88); border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-        .map-summary strong { font-weight: 600; }
-        .map-team-info .map-team-members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-        .map-team-info .map-team-members li { display: flex; justify-content: space-between; gap: 14px; font-size: 0.95rem; }
-        .map-player-list { background: rgba(10, 14, 24, 0.88); border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 16px; overflow: hidden; max-height: min(52vh, 620px); display: flex; flex-direction: column; }
-        .map-player-table { width: 100%; border-collapse: collapse; min-width: 420px; color: inherit; font-size: 0.92rem; }
-        .map-player-table thead th { text-align: left; padding: 12px 18px; font-weight: 600; background: rgba(15, 23, 42, 0.65); position: sticky; top: 0; z-index: 1; }
-        .map-player-table tbody td { padding: 12px 18px; border-bottom: 1px solid rgba(30, 41, 59, 0.65); }
-        .map-player-table tbody tr { cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
-        .map-player-table tbody tr:hover { background: rgba(30, 41, 59, 0.7); }
-        .map-player-table tbody tr.active { background: rgba(225, 29, 72, 0.24); color: #fbcfe8; }
-        .map-player-table tbody tr.dimmed { opacity: 0.45; }
-        .map-player-name { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-        .map-player-name-cell { display: flex; flex-direction: column; gap: 6px; }
-        .map-player-color { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.7); }
-        .map-player-sub { font-size: 0.75rem; color: #94a3b8; }
-        .map-player-team, .map-player-stat { font-variant-numeric: tabular-nums; text-align: right; color: #cbd5f5; }
-        .map-filter-note { margin: 0 18px 18px; color: #94a3b8; }
-        .map-color-chip { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(15, 23, 42, 0.7); }
-        .map-status { display: flex; gap: 16px; align-items: flex-start; background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 14px; padding: 18px; text-align: left; }
-        .map-status-spinner { width: 18px; height: 18px; border-radius: 50%; border: 3px solid rgba(148, 163, 184, 0.35); border-top-color: #f472b6; animation: map-status-spin 1s linear infinite; margin-top: 4px; }
-        .map-status-body { display: flex; flex-direction: column; gap: 10px; }
-        .map-status-heading { font-weight: 600; font-size: 1rem; }
-        .map-status-note { font-size: 0.88rem; color: #a5b4fc; }
-        .map-status-details { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 0.86rem; }
-        .map-status-details li strong { color: #f8fafc; margin-right: 6px; }
-        button.map-popup-close { background: rgba(15, 23, 42, 0.7); color: #e2e8f0; border: 1px solid rgba(148, 163, 184, 0.5); border-radius: 999px; padding: 8px 16px; font-size: 0.92rem; font-weight: 500; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
-        button.map-popup-close:hover { background: rgba(30, 41, 59, 0.85); border-color: rgba(148, 163, 184, 0.8); }
-        @keyframes map-status-spin { to { transform: rotate(360deg); } }
-      `;
 
       const mainViewport = {
         win: window,
         doc: document,
         mapView,
+        mapCanvas,
         mapImage,
         overlay,
         message,
@@ -436,33 +384,176 @@
         }
       };
 
-      mapImage.addEventListener('load', () => updateMarkerPopups());
+      const mapInteractions = {
+        minScale: 1,
+        maxScale: 4,
+        scale: 1,
+        offsetX: 0,
+        offsetY: 0
+      };
 
-      let fullscreenViewport = null;
+      const panState = {
+        active: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        startOffsetX: 0,
+        startOffsetY: 0,
+        moved: false
+      };
+
+      let preventNextMapClick = false;
+
+      mapImage.addEventListener('load', () => {
+        resetMapTransform();
+        updateMarkerPopups();
+      });
 
       const handleResize = () => {
-        if (!state.activePopupSteamId) return;
-        updateMarkerPopups();
+        applyMapTransform();
       };
 
       window.addEventListener('resize', handleResize);
 
-      function isFullscreenOpen() {
-        return !!(fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed);
-      }
-
-      function cleanupFullscreenViewport() {
-        if (fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed) {
+      mapView.addEventListener('click', (event) => {
+        if (preventNextMapClick) {
+          preventNextMapClick = false;
           return;
         }
-        fullscreenViewport = null;
-      }
+        if (event.defaultPrevented) return;
+        clearSelection();
+      });
+
+      mapView.addEventListener('wheel', handleWheel, { passive: false });
+
+      mapCanvas.addEventListener('pointerdown', handleMapPointerDown);
+      mapCanvas.addEventListener('pointermove', handleMapPointerMove);
+      mapCanvas.addEventListener('pointerup', handleMapPointerUp);
+      mapCanvas.addEventListener('pointercancel', handleMapPointerUp);
 
       function getActiveViewports() {
-        cleanupFullscreenViewport();
-        const viewports = [mainViewport];
-        if (fullscreenViewport) viewports.push(fullscreenViewport);
-        return viewports;
+        return [mainViewport];
+      }
+
+      function clampMapOffsets() {
+        if (!mapView) return;
+        const { scale, minScale } = mapInteractions;
+        if (scale <= minScale + 0.001) {
+          mapInteractions.offsetX = 0;
+          mapInteractions.offsetY = 0;
+          return;
+        }
+        const rect = mapView.getBoundingClientRect();
+        const maxX = Math.max(0, (rect.width * (scale - 1)) / 2);
+        const maxY = Math.max(0, (rect.height * (scale - 1)) / 2);
+        mapInteractions.offsetX = clamp(mapInteractions.offsetX, -maxX, maxX);
+        mapInteractions.offsetY = clamp(mapInteractions.offsetY, -maxY, maxY);
+      }
+
+      function applyMapTransform({ clamp = true } = {}) {
+        if (!mapCanvas) return;
+        if (clamp) clampMapOffsets();
+        const { scale, offsetX, offsetY, minScale } = mapInteractions;
+        mapCanvas.style.transform = `scale(${scale}) translate(${offsetX}px, ${offsetY}px)`;
+        const zoomed = scale > minScale + 0.001;
+        mapView.classList.toggle('map-view-zoomed', zoomed);
+        updateMarkerPopups();
+      }
+
+      function resetMapTransform() {
+        mapInteractions.scale = mapInteractions.minScale;
+        mapInteractions.offsetX = 0;
+        mapInteractions.offsetY = 0;
+        panState.active = false;
+        panState.pointerId = null;
+        panState.moved = false;
+        mapView.classList.remove('map-view-panning');
+        preventNextMapClick = false;
+        applyMapTransform({ clamp: false });
+      }
+
+      function setMapScale(nextScale, options = {}) {
+        if (!mapView) return;
+        const { focusX, focusY } = options;
+        const previous = mapInteractions.scale;
+        const scale = clamp(nextScale, mapInteractions.minScale, mapInteractions.maxScale);
+        if (Math.abs(scale - previous) < 0.001) {
+          if (scale <= mapInteractions.minScale + 0.001) resetMapTransform();
+          return;
+        }
+        if (typeof focusX === 'number' && typeof focusY === 'number') {
+          const rect = mapView.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2;
+          const centerY = rect.top + rect.height / 2;
+          const screenX = focusX - centerX;
+          const screenY = focusY - centerY;
+          const normX = (screenX - mapInteractions.offsetX) / previous;
+          const normY = (screenY - mapInteractions.offsetY) / previous;
+          mapInteractions.offsetX = screenX - normX * scale;
+          mapInteractions.offsetY = screenY - normY * scale;
+        }
+        mapInteractions.scale = scale;
+        if (scale <= mapInteractions.minScale + 0.001) {
+          resetMapTransform();
+        } else {
+          applyMapTransform();
+        }
+      }
+
+      function handleWheel(event) {
+        if (!mapReady()) return;
+        if (event.deltaY === 0) return;
+        event.preventDefault();
+        const zoomFactor = Math.exp(-event.deltaY * 0.0015);
+        setMapScale(mapInteractions.scale * zoomFactor, { focusX: event.clientX, focusY: event.clientY });
+      }
+
+      function handleMapPointerDown(event) {
+        if (event.button !== 0) return;
+        if (!mapReady()) return;
+        if (event.target.closest('.map-marker') || event.target.closest('.map-marker-popup')) return;
+        if (mapInteractions.scale <= mapInteractions.minScale + 0.001) {
+          preventNextMapClick = false;
+          return;
+        }
+        if (panState.active) return;
+        preventNextMapClick = false;
+        panState.active = true;
+        panState.pointerId = event.pointerId;
+        panState.startX = event.clientX;
+        panState.startY = event.clientY;
+        panState.startOffsetX = mapInteractions.offsetX;
+        panState.startOffsetY = mapInteractions.offsetY;
+        panState.moved = false;
+        try { mapCanvas.setPointerCapture(event.pointerId); }
+        catch { /* ignore */ }
+        mapView.classList.add('map-view-panning');
+        event.preventDefault();
+      }
+
+      function handleMapPointerMove(event) {
+        if (!panState.active || event.pointerId !== panState.pointerId) return;
+        const dx = event.clientX - panState.startX;
+        const dy = event.clientY - panState.startY;
+        if (!panState.moved && Math.hypot(dx, dy) > 3) panState.moved = true;
+        mapInteractions.offsetX = panState.startOffsetX + dx;
+        mapInteractions.offsetY = panState.startOffsetY + dy;
+        applyMapTransform();
+      }
+
+      function handleMapPointerUp(event) {
+        if (!panState.active || event.pointerId !== panState.pointerId) return;
+        try { mapCanvas.releasePointerCapture(event.pointerId); }
+        catch { /* ignore */ }
+        panState.active = false;
+        panState.pointerId = null;
+        const didPan = panState.moved;
+        panState.moved = false;
+        mapView.classList.remove('map-view-panning');
+        if (didPan) {
+          preventNextMapClick = true;
+        }
+        applyMapTransform();
       }
 
       function showUploadNotice(msg, variant = 'error') {
@@ -477,163 +568,8 @@
         uploadStatus.textContent = '';
       }
 
-      function closeFullscreenWindow() {
-        if (fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed) {
-          try { fullscreenViewport.win.close(); }
-          catch { /* ignore */ }
-        }
-        fullscreenViewport = null;
-      }
-
-      function syncFullscreenMessageFromPrimary() {
-        if (!isFullscreenOpen() || !fullscreenViewport) return;
-        if (mainViewport.mapView.classList.contains('map-view-has-message')) {
-          const source = mainViewport.message.cloneNode(true);
-          const clone = cloneMessageContent(source, fullscreenViewport, false);
-          applyMessageToViewport(fullscreenViewport, clone);
-        } else {
-          fullscreenViewport.message.innerHTML = '';
-          fullscreenViewport.mapView.classList.remove('map-view-has-message');
-        }
-      }
-
-      function openFullscreenMap() {
-        if (isFullscreenOpen()) {
-          try { fullscreenViewport.win.focus(); }
-          catch { /* ignore */ }
-          return;
-        }
-        const popup = window.open('', 'live-map-fullscreen', FULLSCREEN_WINDOW_FEATURES);
-        if (!popup) {
-          ctx.log?.('Unable to open fullscreen map window. Check popup blockers.');
-          return;
-        }
-        try {
-          popup.document.write('<!DOCTYPE html><html lang="en"><head><title>Live Map</title></head><body></body></html>');
-          popup.document.close();
-        } catch (err) {
-          ctx.log?.('Failed to initialise fullscreen map window: ' + (err?.message || err));
-          try { popup.close(); }
-          catch { /* ignore */ }
-          return;
-        }
-        const doc = popup.document;
-        const style = doc.createElement('style');
-        style.textContent = FULLSCREEN_STYLES;
-        doc.head.appendChild(style);
-
-        const root = doc.createElement('div');
-        root.className = 'map-popup';
-        doc.body.appendChild(root);
-
-        const header = doc.createElement('div');
-        header.className = 'map-popup-header';
-        root.appendChild(header);
-
-        const title = doc.createElement('h1');
-        title.textContent = 'Live Map';
-        header.appendChild(title);
-
-        const closeBtn = doc.createElement('button');
-        closeBtn.type = 'button';
-        closeBtn.className = 'map-popup-close';
-        closeBtn.textContent = 'Close';
-        closeBtn.addEventListener('click', () => closeFullscreenWindow());
-        header.appendChild(closeBtn);
-
-        const layout = doc.createElement('div');
-        layout.className = 'map-popup-layout';
-        root.appendChild(layout);
-
-        const mapContainer = doc.createElement('div');
-        mapContainer.className = 'map-view';
-        const popupImage = doc.createElement('img');
-        popupImage.alt = 'Rust world map';
-        const popupOverlay = doc.createElement('div');
-        popupOverlay.className = 'map-overlay';
-        const popupMessage = doc.createElement('div');
-        popupMessage.className = 'map-placeholder';
-        mapContainer.appendChild(popupImage);
-        mapContainer.appendChild(popupOverlay);
-        mapContainer.appendChild(popupMessage);
-        const popupMarkerWrap = doc.createElement('div');
-        popupMarkerWrap.className = 'map-marker-popup hidden';
-        const popupMarkerCard = doc.createElement('div');
-        popupMarkerCard.className = 'map-marker-popup-card';
-        const popupMarkerArrow = doc.createElement('div');
-        popupMarkerArrow.className = 'map-marker-popup-arrow';
-        popupMarkerWrap.appendChild(popupMarkerCard);
-        popupMarkerWrap.appendChild(popupMarkerArrow);
-        mapContainer.appendChild(popupMarkerWrap);
-        popupMarkerCard.addEventListener('click', (event) => event.stopPropagation());
-        mapContainer.addEventListener('click', () => clearSelection());
-        layout.appendChild(mapContainer);
-
-        const sidebar = doc.createElement('div');
-        sidebar.className = 'map-sidebar';
-        layout.appendChild(sidebar);
-
-        const summary = doc.createElement('div');
-        summary.className = 'map-summary';
-        sidebar.appendChild(summary);
-
-        const list = doc.createElement('div');
-        list.className = 'map-player-list';
-        sidebar.appendChild(list);
-
-        const teamInfo = doc.createElement('div');
-        teamInfo.className = 'map-team-info';
-        sidebar.appendChild(teamInfo);
-
-        fullscreenViewport = {
-          win: popup,
-          doc,
-          mapView: mapContainer,
-          mapImage: popupImage,
-          overlay: popupOverlay,
-          message: popupMessage,
-          summary,
-          listWrap: list,
-          teamInfo,
-          refreshDisplay: null,
-          popup: {
-            wrap: popupMarkerWrap,
-            card: popupMarkerCard,
-            arrow: popupMarkerArrow
-          }
-        };
-
-        popupImage.addEventListener('load', () => updateMarkerPopups());
-
-        const handlePopupResize = () => {
-          if (!state.activePopupSteamId) return;
-          updateMarkerPopups();
-        };
-
-        popup.addEventListener('resize', handlePopupResize);
-
-        popup.addEventListener('beforeunload', () => {
-          popup.removeEventListener('resize', handlePopupResize);
-          fullscreenViewport = null;
-        });
-
-        renderAll();
-        syncFullscreenMessageFromPrimary();
-        updateRefreshDisplays();
-        if (isFullscreenOpen()) {
-          const activeSrc = mainViewport.mapImage?.currentSrc || mainViewport.mapImage?.src || '';
-          if (activeSrc) {
-            try { fullscreenViewport.mapImage.src = activeSrc; }
-            catch { /* ignore */ }
-          }
-          try { fullscreenViewport.win.focus(); }
-          catch { /* ignore */ }
-        }
-      }
-
       window.addEventListener('beforeunload', () => {
         window.removeEventListener('resize', handleResize);
-        closeFullscreenWindow();
       });
 
       function readFileAsDataURL(file) {
@@ -1736,9 +1672,7 @@
         mapImageSource = null;
         mapImageLocked = false;
         mapImage.removeAttribute('src');
-        if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
-          fullscreenViewport.mapImage.removeAttribute('src');
-        }
+        resetMapTransform();
       }
 
       function cancelMapImageRequest() {
@@ -1784,9 +1718,6 @@
         }
         mapImageObjectUrl = objectUrl;
         mapImage.src = objectUrl;
-        if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
-          fullscreenViewport.mapImage.src = objectUrl;
-        }
       }
 
       async function updateMapImage(meta) {
@@ -1826,9 +1757,6 @@
           } else if (result.url) {
             clearMapImage();
             mapImage.src = result.url;
-            if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
-              fullscreenViewport.mapImage.src = result.url;
-            }
             mapImageSource = next;
             if (result.status === 200) {
               mapImageLocked = true;
@@ -1846,9 +1774,6 @@
             clearMapImage();
             const resolved = resolveImageUrl(next);
             mapImage.src = resolved;
-            if (isFullscreenOpen() && fullscreenViewport?.mapImage) {
-              fullscreenViewport.mapImage.src = resolved;
-            }
             mapImageSource = next;
           } else {
             mapImageSource = previousSource;
@@ -2308,17 +2233,21 @@
         const target = viewport.teamInfo;
         target.innerHTML = '';
         if (!state.players.length) {
+          target.classList.remove('hidden');
           target.innerHTML = '<strong>No live data</strong><p class="muted">Connect to a server to see team breakdowns.</p>';
           return;
         }
         if (!selectionActive()) {
-          target.innerHTML = '<strong>Select a team or player</strong><p class="muted">Choose from the table to inspect team members.</p>';
+          target.innerHTML = '';
+          target.classList.add('hidden');
           return;
         }
+        target.classList.remove('hidden');
         const collection = state.selectedSolo
           ? state.players.filter((p) => resolveSteamId(p) === state.selectedSolo)
           : state.players.filter((p) => Number(p.teamId) === state.selectedTeam);
         if (!collection.length) {
+          target.classList.remove('hidden');
           target.innerHTML = '<strong>No matching players</strong><p class="muted">They might have disconnected.</p>';
           return;
         }
@@ -2366,7 +2295,6 @@
         renderSummary();
         renderTeamInfo();
         updateMarkerPopups();
-        if (isFullscreenOpen()) syncFullscreenMessageFromPrimary();
       }
 
       function renderAll() {
@@ -2383,7 +2311,6 @@
         updateUploadSection();
         updateConfigPanel();
         updateMarkerPopups();
-        if (isFullscreenOpen()) syncFullscreenMessageFromPrimary();
       }
 
       function broadcastPlayers() {
@@ -2443,8 +2370,6 @@
           window.dispatchEvent(new CustomEvent('team:clear'));
         }
       }
-
-      mapView.addEventListener('click', () => clearSelection());
 
       async function refreshData(reason) {
         if (!state.serverId) return;
