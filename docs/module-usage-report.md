@@ -1,0 +1,40 @@
+# Module usage report
+
+This document summarises how the major backend and frontend modules are referenced so we can spot redundant code paths.
+
+## Backend modules
+
+| Module | Purpose | Referenced from | Notes |
+| --- | --- | --- | --- |
+| `backend/src/index.js` | Main Express application wiring HTTP, WebSocket, and module integrations. | Entry point configured as the package main script. | Serves as the central orchestrator and imports every other backend module reviewed below.【F:backend/package.json†L1-L21】【F:backend/src/index.js†L1-L120】 |
+| `backend/src/auth.js` | JWT helpers (`signToken`) and auth middleware/guard used by API routes. | Imported by the API entry point to secure routes and admin-only endpoints.【F:backend/src/auth.js†L1-L41】【F:backend/src/index.js†L13-L50】 | Active middleware — not redundant. |
+| `backend/src/db/index.js` | Chooses SQLite or MySQL client, initialises schema, seeds default roles/users, and exposes the `db` API. | Required by both the HTTP server and Discord worker to persist data.【F:backend/src/db/index.js†L1-L110】【F:backend/src/index.js†L13-L40】【F:backend/src/discord-bot-service.js†L16-L28】 | Central DB abstraction; keeps dialect-specific files necessary. |
+| `backend/src/db/sqlite.js` | Implements the SQLite dialect by opening a file database and creating tables/columns used throughout the app. | Loaded through `db/index.js` when `DB_CLIENT` defaults to SQLite.【F:backend/src/db/sqlite.js†L1-L200】【F:backend/src/db/index.js†L3-L24】 | Required for the default deployment path. |
+| `backend/src/db/mysql.js` | Provides the MySQL dialect with equivalent schema management and query helpers. | Loaded through `db/index.js` when `DB_CLIENT=mysql` is set.【F:backend/src/db/mysql.js†L1-L200】【F:backend/src/db/index.js†L3-L17】 | Optional runtime dependency but still in active use for MySQL deployments. |
+| `backend/src/permissions.js` | Normalises/serialises role capabilities and performs permission checks per server/global scope. | Consumed by the HTTP API to filter resources and by the DB bootstrap to seed default roles.【F:backend/src/permissions.js†L1-L158】【F:backend/src/index.js†L42-L50】【F:backend/src/db/index.js†L38-L110】 | Required for RBAC; not redundant. |
+| `backend/src/rcon-parsers.js` | Shared helpers for parsing WebRCON output (ANSI stripping, server info parsing, etc.). | Imported by the RCON client and API to interpret console responses.【F:backend/src/rcon-parsers.js†L1-L200】【F:backend/src/index.js†L59-L66】【F:backend/src/rcon.js†L1-L58】 | Supports live console/map features. |
+| `backend/src/rcon.js` | WebRCON client manager powering console streaming, command dispatch and monitoring. | Used by the API server to broker socket connections and status polling.【F:backend/src/rcon.js†L1-L142】【F:backend/src/index.js†L16-L40】 | Required for core functionality. |
+| `backend/src/rustmaps.js` | Handles RustMaps API calls, caching, and map metadata/image management. | Imported by API routes handling map rendering and uploads.【F:backend/src/rustmaps.js†L1-L200】【F:backend/src/index.js†L28-L40】 | Needed for live map; not redundant. |
+| `backend/src/discord-config.js` | Normalises Discord integration config, colour handling, and template helpers. | Shared by both API (parsing configs) and Discord bot service.【F:backend/src/discord-config.js†L1-L160】【F:backend/src/index.js†L41-L50】【F:backend/src/discord-bot-service.js†L17-L107】 | Supports Discord integration UI/service. |
+| `backend/src/discord-bot-service.js` | Standalone worker that syncs server status to Discord using the shared DB/config helpers. | Executed via the provided systemd unit and install scripts, not by the HTTP server.【F:backend/src/discord-bot-service.js†L1-L200】【F:deploy/systemd/rustadmin-discord-bot.service†L10-L16】 | Optional but referenced deployment entry point. |
+
+## Frontend modules
+
+### Scripts loaded by the dashboard shell
+
+| Asset | Purpose | Loaded via | Notes |
+| --- | --- | --- | --- |
+| `frontend/assets/modules/module-loader.js` | Provides `window.ModuleLoader` registry that initialises dashboard cards. | Explicitly loaded in `index.html` before feature modules.【F:frontend/assets/modules/module-loader.js†L1-L76】【F:frontend/index.html†L598-L605】 | Required bootstrap script. |
+| `frontend/assets/modules/players-graph.js` | Registers the "Player history" card with fetching, chart controls, and legend toggles. | Loaded by `index.html` and initialised through `ModuleLoader.init` in `app.js`.【F:frontend/assets/modules/players-graph.js†L124-L220】【F:frontend/index.html†L598-L605】【F:frontend/assets/app.js†L2373-L2404】 | Active dashboard module. |
+| `frontend/assets/modules/live-players.js` | Renders live player list with search synchronisation across modules. | Loaded by `index.html` and subscribes to the shared module bus.【F:frontend/assets/modules/live-players.js†L98-L160】【F:frontend/index.html†L598-L605】【F:frontend/assets/app.js†L906-L925】【F:frontend/assets/app.js†L2373-L2404】 | Active dashboard module. |
+| `frontend/assets/modules/players.js` | Builds the historical player directory with search and count updates. | Loaded by `index.html` and wired into the same bus and card host.【F:frontend/assets/modules/players.js†L1-L120】【F:frontend/index.html†L598-L605】【F:frontend/assets/app.js†L906-L925】 | Active dashboard module. |
+| `frontend/assets/modules/map.js` | Implements live map, RustMaps integration, and upload workflows. | Loaded by `index.html` and relies on module host APIs from `app.js`.【F:frontend/assets/modules/map.js†L220-L340】【F:frontend/index.html†L598-L605】【F:frontend/assets/app.js†L2373-L2404】 | Active dashboard module. |
+| `frontend/assets/js/server-settings.js` | Enhances the Discord settings panel (status badge, polling, form state). | Loaded globally on the dashboard shell.【F:frontend/assets/js/server-settings.js†L1-L160】【F:frontend/index.html†L603-L605】 | Supports Discord integration UI. |
+| `frontend/assets/app.js` | Main SPA script that manages auth, state, socket events, and module host context. | Loaded last in `index.html` as the core client. | Provides `ModuleLoader` host context and event bus for modules.【F:frontend/assets/app.js†L906-L925】【F:frontend/assets/app.js†L2373-L2440】【F:frontend/index.html†L598-L605】 |
+
+### Recently retired modules
+
+* `frontend/assets/modules/live-console.js` previously registered a live console card but was never loaded by the dashboard shell. The script has been removed because no runtime entry point referenced it and the live console feature is not exposed in the UI.
+* `frontend/assets/js/panel-shell.js` provided shared event bus wiring for player info panels, yet it was not imported by any bundle or HTML script tag. The module has been removed to avoid shipping unused JavaScript.
+
+If either capability needs to return, reintroduce a dedicated module that is explicitly imported by `frontend/index.html` or bundled into `assets/app.js` so it participates in the module lifecycle documented above.
