@@ -1442,7 +1442,8 @@
         const infoState = state.worldDetails;
         if (!infoState) return;
         const activeMeta = getActiveMapMeta();
-        if (hasMapImage(activeMeta)) return;
+        const isCustomMap = mapIsCustom(activeMeta, state.serverInfo);
+        if (hasMapImage(activeMeta) && !isCustomMap) return;
         const size = toNumber(infoState.size);
         const seed = toNumber(infoState.seed);
         if (!Number.isFinite(size) || size <= 0) return;
@@ -1508,9 +1509,8 @@
         if (typeof ctx.runCommand !== 'function') return;
         if (state.customMapChecksFrozen) return;
         const activeMeta = getActiveMapMeta();
-        if (hasMapImage(activeMeta)) return;
-        const needsSize = resolveWorldSize() == null;
-        const needsSeed = resolveWorldSeed() == null;
+        const needsSize = resolveWorldSize(activeMeta, state.serverInfo) == null;
+        const needsSeed = resolveWorldSeed(activeMeta, state.serverInfo) == null;
         if (!needsSize && !needsSeed) return;
         const infoState = state.worldDetails;
         if (!infoState) return;
@@ -2726,7 +2726,9 @@
           } else {
             renderAll();
           }
-          const shouldUpdateWorldDetails = !hasImage && !skipMapChecks;
+          const needsWorldSize = resolveWorldSize(activeMeta, state.serverInfo) == null;
+          const needsWorldSeed = resolveWorldSeed(activeMeta, state.serverInfo) == null;
+          const shouldUpdateWorldDetails = !skipMapChecks && (needsWorldSize || needsWorldSeed);
           if (shouldUpdateWorldDetails) {
             ensureWorldDetails('refresh')
               .catch((err) => ctx.log?.('World detail refresh failed: ' + (err?.message || err)));
