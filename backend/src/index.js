@@ -705,7 +705,15 @@ function ensureRconBinding(row) {
     recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: message });
   };
 
+  const handleConnected = () => {
+    syncServerMapLevelUrl(row).catch((err) => {
+      console.warn('Failed to sync level URL on connect', err);
+    });
+  };
+
   const unsubscribe = subscribeToRcon(key, {
+    open: handleConnected,
+    reconnect: handleConnected,
     message: (msg) => {
       io.to(`srv:${key}`).emit('console', msg);
       console.log(`[RCON:${host}:${port}]`, msg);
@@ -1372,6 +1380,33 @@ function mapMetadataHasRemote(meta) {
   return sources.some((value) => typeof value === 'string' && value.length > 0);
 }
 
+async function clearServerMapRecord(serverId, record = null) {
+  const id = Number(serverId);
+  if (!Number.isFinite(id)) return;
+  let existing = record;
+  if (!existing) {
+    try { existing = await db.getServerMap(id); }
+    catch (err) {
+      console.warn('failed to load server map for clearing', err);
+      return;
+    }
+  }
+  if (!existing) return;
+  await removeMapImage(existing);
+  if (existing.map_key) {
+    try {
+      await removeCachedRustMapMetadata(existing.map_key);
+    } catch (err) {
+      console.warn('failed to clear cached map metadata', err);
+    }
+  }
+  try {
+    await db.deleteServerMap(id);
+  } catch (err) {
+    console.warn('failed to delete server map record', err);
+  }
+}
+
 async function removeMapImage(record) {
   if (!record?.image_path) return;
   if (!isWithinDir(record.image_path, MAP_STORAGE_DIR)) return;
@@ -1599,6 +1634,76 @@ async function persistServerMapImageUpload(serverId, { buffer, extension, mapKey
   const updatedRecord = await db.getServerMap(serverId);
   const map = mapRecordToPayload(serverId, updatedRecord, stored);
   return { map, updatedAt: new Date().toISOString() };
+}
+
+async function syncServerMapLevelUrl(serverRow, { logger: providedLogger } = {}) {
+  const serverId = Number(serverRow?.id ?? serverRow?.server_id ?? serverRow?.serverId);
+  if (!Number.isFinite(serverId)) return;
+  const logger = providedLogger || createLogger(`map-sync:${serverId}`);
+  let levelUrl;
+  try {
+    levelUrl = await fetchLevelUrl(serverRow, { silent: true });
+  } catch (err) {
+    logger.warn('Failed to query level URL during connect', err);
+    return;
+  }
+  const normalized = typeof levelUrl === 'string' ? levelUrl.trim() : '';
+  if (!isLikelyLevelUrl(normalized)) return;
+
+  const customUrl = isCustomLevelUrl(normalized);
+  let record = await db.getServerMap(serverId);
+  let data = parseMapRecordData(record) || {};
+  const storedLevelUrl = typeof data.levelUrl === 'string' ? data.levelUrl.trim() : '';
+
+  if (record && storedLevelUrl && storedLevelUrl !== normalized) {
+    logger.info('Level URL changed, clearing cached map state', {
+      previousLevelUrl: storedLevelUrl,
+      nextLevelUrl: normalized
+    });
+    await clearServerMapRecord(serverId, record);
+    record = null;
+    data = {};
+  } else if (record && isCustomMapRecord(record) && !customUrl) {
+    logger.info('Server switched to procedural map, clearing custom map cache');
+    await clearServerMapRecord(serverId, record);
+    record = null;
+    data = {};
+  }
+
+  if (!customUrl && !record) {
+    return;
+  }
+
+  if (!record && customUrl) {
+    data = {};
+  }
+
+  const existingCustomFlag = record ? (isCustomFlag(record.custom) ? 1 : 0) : 0;
+  const nextCustomFlag = customUrl ? 1 : existingCustomFlag;
+  const nextData = { ...data };
+  nextData.levelUrl = normalized;
+  if (customUrl) nextData.customLevelUrl = true;
+  else delete nextData.customLevelUrl;
+
+  const needsInsert = !record;
+  const needsUpdate =
+    needsInsert
+    || existingCustomFlag !== nextCustomFlag
+    || storedLevelUrl !== normalized
+    || (!!data.customLevelUrl) !== customUrl;
+
+  if (!needsUpdate) return;
+
+  if (needsInsert && customUrl && !nextData.cachedAt) {
+    nextData.cachedAt = new Date().toISOString();
+  }
+
+  await db.saveServerMap(serverId, {
+    map_key: record?.map_key || null,
+    data: JSON.stringify(nextData),
+    image_path: record?.image_path || null,
+    custom: nextCustomFlag
+  });
 }
 
 function respondToMapUploadError(err, res) {
@@ -2233,6 +2338,43 @@ app.get('/api/servers/:id/status', auth, (req, res) => {
   res.json(status);
 });
 
+app.get('/api/servers/:id/map-state', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'liveMap');
+  if (id == null) return;
+  try {
+    const record = await db.getServerMap(id);
+    if (!record) {
+      return res.json({
+        map: null,
+        custom: false,
+        hasImage: false,
+        locked: false,
+        levelUrl: null,
+        updatedAt: null
+      });
+    }
+    const map = mapRecordToPayload(id, record);
+    const meta = parseMapRecordData(record) || {};
+    const levelUrl = typeof map?.levelUrl === 'string'
+      ? map.levelUrl
+      : (typeof meta.levelUrl === 'string' ? meta.levelUrl : null);
+    const hasImage = !!map?.imageUrl;
+    const custom = !!map?.custom;
+    const locked = custom && !hasImage;
+    res.json({
+      map,
+      custom,
+      hasImage,
+      locked,
+      levelUrl,
+      updatedAt: map?.cachedAt || record.updated_at || record.updatedAt || record.created_at || record.createdAt || null
+    });
+  } catch (err) {
+    console.error('map state lookup failed', err);
+    res.status(500).json({ error: 'map_state_error' });
+  }
+});
+
 app.get('/api/servers/:id/discord', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'discord');
   if (id == null) return;
@@ -2423,6 +2565,24 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     if (!server) return res.status(404).json({ error: 'not_found' });
     logger.debug('Loaded server details', { name: server?.name, host: server?.host, port: server?.port });
     ensureRconBinding(server);
+    const skipImagery = (() => {
+      const raw = req.query?.skipImagery;
+      const truthy = (value) => {
+        if (typeof value === 'string') {
+          const normalized = value.trim().toLowerCase();
+          if (!normalized) return false;
+          return ['1', 'true', 'yes', 'on'].includes(normalized);
+        }
+        if (typeof value === 'number') return value !== 0;
+        if (typeof value === 'boolean') return value;
+        return false;
+      };
+      if (Array.isArray(raw)) {
+        return raw.some((entry) => truthy(entry));
+      }
+      if (raw == null) return false;
+      return truthy(raw);
+    })();
     let playerPayload = '';
     try {
       const reply = await sendRconCommand(server, 'playerlist', { silent: true });
@@ -2466,6 +2626,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       logger.warn('Server reported non-Facepunch level URL, treating as custom map', { levelUrl });
     }
     let hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
+    const skipImageryFetch = skipImagery && hasCustomLevelUrl;
     const derivedMapKey = deriveMapKey(info) || null;
     let infoMapKey = hasCustomLevelUrl ? null : derivedMapKey;
 
@@ -2607,7 +2768,12 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     if (map && !map.mapKey && infoMapKey) map.mapKey = infoMapKey;
     if (!map) {
-      if (!hasCustomLevelUrl && info?.size && info?.seed) {
+      if (skipImageryFetch) {
+        logger.info('Skipping RustMaps imagery fetch due to client lock');
+        if (mapRecord) {
+          map = mapRecordToPayload(id, mapRecord, mapMetadata);
+        }
+      } else if (!hasCustomLevelUrl && info?.size && info?.seed) {
         const userKey = await db.getUserSetting(req.user.uid, 'rustmaps_api_key');
         const apiKey = userKey || DEFAULT_RUSTMAPS_API_KEY || '';
         try {
@@ -2707,7 +2873,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
           }
         }
       } else if (mapRecord) {
-        map = mapRecordToPayload(id, mapRecord);
+        map = mapRecordToPayload(id, mapRecord, mapMetadata);
       }
     }
     if (map && map.custom && !map.imageUrl) map.needsUpload = true;
