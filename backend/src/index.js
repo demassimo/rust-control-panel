@@ -54,7 +54,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
-const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_MAP_IMAGE_BYTES = 40 * 1024 * 1024;
 
 import {
   extractInteger,
