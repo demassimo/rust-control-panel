@@ -251,6 +251,9 @@
       const mapView = document.createElement('div');
       mapView.className = 'map-view';
 
+      const mapStage = document.createElement('div');
+      mapStage.className = 'map-stage';
+
       const mapCanvas = document.createElement('div');
       mapCanvas.className = 'map-canvas';
       mapCanvas.style.transformOrigin = 'center center';
@@ -265,8 +268,9 @@
       message.className = 'map-placeholder';
       mapCanvas.appendChild(mapImage);
       mapCanvas.appendChild(overlay);
-      mapView.appendChild(mapCanvas);
-      mapView.appendChild(message);
+      mapStage.appendChild(mapCanvas);
+      mapStage.appendChild(message);
+      mapView.appendChild(mapStage);
 
       const markerPopup = document.createElement('div');
       markerPopup.className = 'map-marker-popup hidden';

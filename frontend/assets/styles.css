@@ -2220,6 +2220,15 @@ button.menu-tab.active {
   transition: background 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
+.map-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
 .map-canvas {
   position: relative;
   width: 100%;
@@ -2266,11 +2275,11 @@ button.menu-tab.active {
   margin: 0 auto;
 }
 
-.map-view.map-view-has-message > .map-placeholder {
+.map-view.map-view-has-message .map-placeholder {
   display: flex;
 }
 
-.map-view.map-view-has-message > .map-canvas {
+.map-view.map-view-has-message .map-canvas {
   opacity: 0;
   pointer-events: none;
   visibility: hidden;
