@@ -1095,9 +1095,11 @@
             showUploadNotice('Map image uploaded successfully.', 'success');
             clearMessage();
             updateUploadSection();
+            await checkMapState('upload-success');
             renderAll();
           } else {
             showUploadNotice('Map image uploaded.', 'success');
+            await checkMapState('upload-success');
           }
         } catch (err) {
           if (ctx.errorCode?.(err) === 'unauthorized') {
@@ -2432,6 +2434,48 @@
         }
       }
 
+      async function checkMapState(reason) {
+        if (!state.serverId || typeof ctx.api !== 'function') {
+          return { locked: false, custom: false, hasImage: false, map: null };
+        }
+        try {
+          const payload = await ctx.api(`/servers/${state.serverId}/map-state`);
+          const mapMeta = payload?.map || null;
+          if (mapMeta) {
+            state.mapMeta = mapMeta;
+            state.mapMetaServerId = state.serverId;
+          } else if (reason === 'server-connected') {
+            state.mapMeta = null;
+            state.mapMetaServerId = state.serverId;
+          }
+          const custom = !!(payload?.custom || mapMeta?.custom);
+          const hasImage = !!(payload?.hasImage || hasMapImage(mapMeta));
+          const locked = !!(payload?.locked || (custom && !hasImage));
+          if (locked) {
+            customMapFreezeCache.add(state.serverId);
+            state.customMapChecksFrozen = true;
+            state.status = 'awaiting_upload';
+          } else {
+            customMapFreezeCache.delete(state.serverId);
+            if (state.customMapChecksFrozen && (hasImage || !custom)) {
+              state.customMapChecksFrozen = false;
+            }
+          }
+          updateUploadSection();
+          updateStatusMessage(hasImage);
+          return {
+            locked,
+            custom,
+            hasImage,
+            map: mapMeta,
+            levelUrl: payload?.levelUrl || mapMeta?.levelUrl || null
+          };
+        } catch (err) {
+          ctx.log?.('Map state check failed: ' + (err?.message || err));
+          return { locked: false, custom: false, hasImage: false, map: null, error: err };
+        }
+      }
+
       async function refreshData(reason) {
         if (!state.serverId) return;
         hideUploadNotice();
@@ -2444,7 +2488,12 @@
           });
         }
         try {
-          const data = await ctx.api(`/servers/${state.serverId}/live-map`);
+          let liveMapUrl = `/servers/${state.serverId}/live-map`;
+          const lockedForImagery = state.customMapChecksFrozen && !hasMapImage(getActiveMapMeta());
+          if (lockedForImagery) {
+            liveMapUrl += liveMapUrl.includes('?') ? '&skipImagery=1' : '?skipImagery=1';
+          }
+          const data = await ctx.api(liveMapUrl);
           state.players = Array.isArray(data?.players) ? data.players : [];
           const previousMeta = getActiveMapMeta();
           const previousKey = previousMeta?.mapKey ?? null;
@@ -2505,11 +2554,17 @@
           const activeMeta = getActiveMapMeta();
           const hasImage = hasMapImage(activeMeta);
           const isCustomMap = mapIsCustom(activeMeta, state.serverInfo);
-          if (isCustomMap && state.serverId) {
-            customMapFreezeCache.add(state.serverId);
+          if (state.serverId) {
+            if (isCustomMap && !hasImage) {
+              customMapFreezeCache.add(state.serverId);
+            } else {
+              customMapFreezeCache.delete(state.serverId);
+            }
           }
-          if (!state.customMapChecksFrozen && state.serverId && customMapFreezeCache.has(state.serverId)) {
+          if (!hasImage && state.serverId && customMapFreezeCache.has(state.serverId)) {
             state.customMapChecksFrozen = true;
+          } else if (hasImage && state.customMapChecksFrozen) {
+            state.customMapChecksFrozen = false;
           }
           const skipMapChecks = state.customMapChecksFrozen;
           const awaitingImagery = !skipMapChecks && state.status === 'awaiting_imagery' && !hasImage;
@@ -2623,12 +2678,16 @@
         if (persistedStatus?.message && hasPersistentStatusForServer(serverId)) {
           setMessage(persistedStatus.message, { persist: true });
         }
-        refreshData('server-connected');
-        schedulePolling();
-        ensureWorldDetails('server-connected')
-          .catch((err) => ctx.log?.('World detail query failed: ' + (err?.message || err)))
+        checkMapState('server-connected')
+          .catch((err) => ctx.log?.('Map state check failed: ' + (err?.message || err)))
           .finally(() => {
-            maybeSubmitWorldDetails('server-connected').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
+            refreshData('server-connected');
+            schedulePolling();
+            ensureWorldDetails('server-connected')
+              .catch((err) => ctx.log?.('World detail query failed: ' + (err?.message || err)))
+              .finally(() => {
+                maybeSubmitWorldDetails('server-connected').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
+              });
           });
       });
 
@@ -2636,6 +2695,7 @@
         if (state.serverId && serverId === state.serverId) {
           stopPolling();
           clearPendingRefresh();
+          customMapFreezeCache.delete(serverId);
           state.serverId = null;
           state.players = [];
           state.mapMeta = null;
@@ -2679,6 +2739,7 @@
         stopPolling();
         clearPendingRefresh();
         closeFullscreenWindow();
+        customMapFreezeCache.clear();
         state.serverId = null;
         state.players = [];
         state.mapMeta = null;
