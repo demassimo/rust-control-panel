@@ -2208,24 +2208,16 @@ button.menu-tab.active {
 .map-layout {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(260px, 32vw, 360px);
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
   gap: clamp(20px, 3vw, 32px);
   align-items: stretch;
   width: 100%;
-}
-
-.live-map-card .map-layout {
-  max-width: min(1120px, 100%);
-  margin: 0 auto;
+  max-width: none;
 }
 
 @media (max-width: 1200px) {
   .map-layout {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .live-map-card .map-layout {
-    max-width: none;
   }
 }
 
@@ -2236,7 +2228,8 @@ button.menu-tab.active {
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.86) 100%);
   box-shadow: 0 32px 68px rgba(8, 13, 30, 0.55);
-  min-height: clamp(320px, 50vh, 520px);
+  min-height: clamp(320px, 44vh, 520px);
+  aspect-ratio: 1 / 1;
   transition: background 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
@@ -2257,7 +2250,7 @@ button.menu-tab.active {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: inherit;
+  min-height: 0;
   border-radius: inherit;
   overflow: hidden;
 }
@@ -2266,7 +2259,7 @@ button.menu-tab.active {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: inherit;
+  min-height: 0;
   border-radius: inherit;
   overflow: hidden;
   background:
@@ -2278,7 +2271,7 @@ button.menu-tab.active {
 }
 
 .live-map-card .map-view {
-  min-height: clamp(320px, 48vh, 540px);
+  min-height: clamp(320px, 44vh, 520px);
 }
 
 .map-placeholder {
@@ -2525,6 +2518,9 @@ button.menu-tab.active {
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(15, 23, 42, 0.55);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .settings-card .card-header p {
@@ -2848,6 +2844,10 @@ button.menu-tab.active {
 
 .map-player-list {
   overflow-x: auto;
+}
+
+.map-player-list > * {
+  flex: 1 1 auto;
 }
 
 .map-player-table {
