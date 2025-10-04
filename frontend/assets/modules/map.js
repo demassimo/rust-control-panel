@@ -1050,9 +1050,12 @@
           catch { payload = null; }
         }
         if (!res.ok) {
-          const err = new Error(payload?.error || 'map_upload_failed');
+          const fallbackCode = res.status === 413 ? 'image_too_large' : 'map_upload_failed';
+          const code = payload?.error || fallbackCode;
+          const err = new Error(code);
           err.status = res.status;
           if (payload?.error) err.code = payload.error;
+          else if (code !== 'map_upload_failed') err.code = code;
           throw err;
         }
         return payload;
@@ -1067,7 +1070,11 @@
           } catch (err) {
             if (!err) throw err;
             const status = typeof err.status === 'number' ? err.status : null;
-            const shouldFallback = !err.code && (status === 404 || status === 405 || status === 413);
+            if (status === 413 && !err.code) {
+              err.code = 'image_too_large';
+              throw err;
+            }
+            const shouldFallback = !err.code && (status === 404 || status === 405);
             if (!shouldFallback) throw err;
           }
         }

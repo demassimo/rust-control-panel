@@ -2464,8 +2464,12 @@
     if (contentType.includes('application/json')) data = await res.json();
     if (res.status === 401) throw new Error('unauthorized');
     if (!res.ok) {
-      const err = new Error(data?.error || 'api_error');
+      const fallbackCode = res.status === 413 ? 'image_too_large' : 'api_error';
+      const code = data?.error || fallbackCode;
+      const err = new Error(code);
       err.status = res.status;
+      if (data?.error) err.code = data.error;
+      else if (code !== 'api_error') err.code = code;
       throw err;
     }
     return data;
