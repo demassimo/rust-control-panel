@@ -2593,8 +2593,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       }
     }
     if (levelUrl && !isFacepunchLevelUrl(levelUrl)) {
-      logger.warn('Live map aborted: server reported non-Facepunch level URL', { levelUrl });
-      return res.status(400).json({ error: 'custom_level_url' });
+      logger.warn('Server reported non-Facepunch level URL, treating as custom map', { levelUrl });
     }
     let hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
     const derivedMapKey = deriveMapKey(info) || null;
