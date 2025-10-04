@@ -212,13 +212,23 @@ main.grid{
 .map-view{position:relative; border-radius:12px; overflow:hidden; border:1px solid rgba(148,163,184,.12); background:rgba(8,10,16,.7)}
 .live-map-card .map-view{min-height:clamp(260px,45vh,420px)}
 .map-view img{display:block; width:100%; height:auto}
-.map-overlay{position:absolute; inset:0; pointer-events:none}
-.map-overlay .map-marker{position:absolute; width:12px; height:12px; border-radius:999px; transform:translate(-50%,-50%); box-shadow:0 0 12px rgba(0,0,0,.4); border:2px solid rgba(0,0,0,.45)}
+.map-overlay{position:absolute; inset:0; pointer-events:none; --marker-scale:1}
+.map-overlay .map-marker{position:absolute; width:clamp(4px, calc(12px * var(--marker-scale)), 12px); height:clamp(4px, calc(12px * var(--marker-scale)), 12px); border-radius:999px; transform:translate(-50%,-50%); box-shadow:0 0 clamp(6px, calc(12px * var(--marker-scale)), 12px) rgba(0,0,0,.4); border:clamp(1px, calc(2px * var(--marker-scale)), 2px) solid rgba(0,0,0,.45)}
 .map-overlay .map-marker.active{box-shadow:0 0 0 3px rgba(225,29,72,.35)}
 .map-overlay .map-marker.dimmed{opacity:.4}
 .map-sidebar{display:flex; flex-direction:column; gap:14px}
 .map-summary{display:grid; gap:6px; background:rgba(15,18,28,.85); border-radius:12px; padding:16px; border:1px solid rgba(148,163,184,.1)}
 .map-summary strong{font-weight:700}
+.map-zoom-control{display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px; padding:6px 0}
+.map-zoom-label{font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.map-zoom-slider{width:100%}
+.map-zoom-input-wrap{display:inline-flex; align-items:center; gap:4px; padding:4px 10px; border-radius:999px; border:1px solid rgba(148,163,184,.2); background:rgba(15,23,42,.6)}
+.map-zoom-input{width:3.5rem; border:none; background:transparent; color:inherit; text-align:right; font:inherit; appearance:textfield}
+.map-zoom-input:focus{outline:none}
+.map-zoom-input::-webkit-outer-spin-button,.map-zoom-input::-webkit-inner-spin-button{margin:0; appearance:none}
+.map-zoom-unit{font-size:.85rem; color:var(--muted)}
+.map-zoom-control.disabled{opacity:.6}
+.map-zoom-control.disabled .map-zoom-input,.map-zoom-control.disabled .map-zoom-slider{cursor:not-allowed}
 .map-sidebar .row{display:flex; justify-content:flex-end}
 .map-sidebar .row button{border-radius:999px}
 .map-player-list{overflow-x:auto}

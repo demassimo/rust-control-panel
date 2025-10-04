@@ -2274,22 +2274,23 @@ button.menu-tab.active {
   display: block;
 }
 
-.map-overlay { 
-  position: absolute; 
-  inset: 0; 
-  pointer-events: none; 
+.map-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --marker-scale: 1;
 }
 
-.map-overlay .map-marker { 
-  position: absolute; 
-  width: 14px; 
-  height: 14px; 
-  border-radius: 50%; 
-  background: var(--accent); 
-  border: 2px solid rgba(0, 0, 0, 0.45); 
-  box-shadow: 0 0 12px rgba(0, 0, 0, 0.45); 
-  transform: translate(-50%, -50%); 
-  pointer-events: auto; 
+.map-overlay .map-marker {
+  position: absolute;
+  width: clamp(4px, calc(12px * var(--marker-scale)), 12px);
+  height: clamp(4px, calc(12px * var(--marker-scale)), 12px);
+  border-radius: 50%;
+  background: var(--accent);
+  border: clamp(1px, calc(2px * var(--marker-scale)), 2px) solid rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 clamp(6px, calc(12px * var(--marker-scale)), 12px) rgba(0, 0, 0, 0.45);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
 }
 
 .map-overlay .map-marker.active { box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.4); }
@@ -2580,6 +2581,69 @@ button.menu-tab.active {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 0.9rem;
+}
+
+.map-zoom-control {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.map-zoom-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.map-zoom-slider {
+  width: 100%;
+}
+
+.map-zoom-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.map-zoom-input {
+  width: 3.5rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: right;
+  font: inherit;
+  appearance: textfield;
+}
+
+.map-zoom-input:focus {
+  outline: none;
+}
+
+.map-zoom-input::-webkit-outer-spin-button,
+.map-zoom-input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.map-zoom-unit {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.map-zoom-control.disabled {
+  opacity: 0.6;
+}
+
+.map-zoom-control.disabled .map-zoom-input,
+.map-zoom-control.disabled .map-zoom-slider {
+  cursor: not-allowed;
 }
 
 .map-sidebar .row { justify-content: flex-end; }

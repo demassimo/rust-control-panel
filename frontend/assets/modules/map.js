@@ -260,6 +260,7 @@
       mapImage.loading = 'lazy';
       const overlay = document.createElement('div');
       overlay.className = 'map-overlay';
+      overlay.style.setProperty('--marker-scale', '1');
       const message = document.createElement('div');
       message.className = 'map-placeholder';
       mapCanvas.appendChild(mapImage);
@@ -288,10 +289,6 @@
       const listWrap = document.createElement('div');
       listWrap.className = 'map-player-list';
       sidebar.appendChild(listWrap);
-
-      const teamInfo = document.createElement('div');
-      teamInfo.className = 'map-team-info';
-      sidebar.appendChild(teamInfo);
 
       const uploadWrap = document.createElement('div');
       uploadWrap.className = 'map-upload hidden';
@@ -375,8 +372,9 @@
         message,
         summary,
         listWrap,
-        teamInfo,
         refreshDisplay: null,
+        zoomSlider: null,
+        zoomInput: null,
         popup: {
           wrap: markerPopup,
           card: markerPopupCard,
@@ -457,6 +455,8 @@
         mapCanvas.style.transform = `scale(${scale}) translate(${offsetX}px, ${offsetY}px)`;
         const zoomed = scale > minScale + 0.001;
         mapView.classList.toggle('map-view-zoomed', zoomed);
+        updateMarkerScale();
+        updateZoomControls();
         updateMarkerPopups();
       }
 
@@ -506,6 +506,29 @@
         event.preventDefault();
         const zoomFactor = Math.exp(-event.deltaY * 0.0015);
         setMapScale(mapInteractions.scale * zoomFactor, { focusX: event.clientX, focusY: event.clientY });
+      }
+
+      function updateMarkerScale() {
+        const scale = mapInteractions.scale;
+        const markerScale = scale > 0 ? 1 / scale : 1;
+        for (const viewport of getActiveViewports()) {
+          if (viewport?.overlay) {
+            viewport.overlay.style.setProperty('--marker-scale', markerScale.toFixed(3));
+          }
+        }
+      }
+
+      function updateZoomControls() {
+        const scale = mapInteractions.scale;
+        const formatted = scale.toFixed(2);
+        for (const viewport of getActiveViewports()) {
+          if (viewport?.zoomSlider && viewport.zoomSlider.value !== formatted) {
+            viewport.zoomSlider.value = formatted;
+          }
+          if (viewport?.zoomInput && viewport.zoomInput.value !== formatted) {
+            viewport.zoomInput.value = formatted;
+          }
+        }
       }
 
       function handleMapPointerDown(event) {
@@ -2144,6 +2167,8 @@
         const target = viewport.summary;
         target.innerHTML = '';
         viewport.refreshDisplay = null;
+        viewport.zoomSlider = null;
+        viewport.zoomInput = null;
 
         const pollInterval = getPollInterval();
         const total = state.players.length;
@@ -2209,6 +2234,67 @@
         refreshLabel.appendChild(refreshSelect);
         target.appendChild(refreshLabel);
 
+        const zoomControl = viewport.doc.createElement('div');
+        zoomControl.className = 'map-zoom-control';
+
+        const zoomLabel = viewport.doc.createElement('span');
+        zoomLabel.className = 'map-zoom-label';
+        zoomLabel.textContent = 'Zoom';
+        zoomControl.appendChild(zoomLabel);
+
+        const zoomSlider = viewport.doc.createElement('input');
+        zoomSlider.type = 'range';
+        zoomSlider.min = String(mapInteractions.minScale);
+        zoomSlider.max = String(mapInteractions.maxScale);
+        zoomSlider.step = '0.01';
+        zoomSlider.value = mapInteractions.scale.toFixed(2);
+        zoomSlider.className = 'map-zoom-slider';
+        zoomSlider.addEventListener('input', (event) => {
+          const next = Number(event.target.value);
+          if (!Number.isFinite(next)) return;
+          setMapScale(next);
+        });
+        zoomControl.appendChild(zoomSlider);
+
+        const zoomInputWrap = viewport.doc.createElement('div');
+        zoomInputWrap.className = 'map-zoom-input-wrap';
+
+        const zoomInput = viewport.doc.createElement('input');
+        zoomInput.type = 'number';
+        zoomInput.min = String(mapInteractions.minScale);
+        zoomInput.max = String(mapInteractions.maxScale);
+        zoomInput.step = '0.1';
+        zoomInput.value = mapInteractions.scale.toFixed(2);
+        zoomInput.className = 'map-zoom-input';
+        const commitZoomInput = () => {
+          const next = Number(zoomInput.value);
+          if (!Number.isFinite(next)) {
+            updateZoomControls();
+            return;
+          }
+          setMapScale(next);
+        };
+        zoomInput.addEventListener('change', commitZoomInput);
+        zoomInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') commitZoomInput();
+        });
+        zoomInput.addEventListener('blur', () => updateZoomControls());
+        zoomInputWrap.appendChild(zoomInput);
+
+        const zoomUnit = viewport.doc.createElement('span');
+        zoomUnit.className = 'map-zoom-unit';
+        zoomUnit.textContent = '×';
+        zoomInputWrap.appendChild(zoomUnit);
+
+        zoomControl.appendChild(zoomInputWrap);
+        target.appendChild(zoomControl);
+        viewport.zoomSlider = zoomSlider;
+        viewport.zoomInput = zoomInput;
+        const zoomReady = mapReady();
+        zoomSlider.disabled = !zoomReady;
+        zoomInput.disabled = !zoomReady;
+        zoomControl.classList.toggle('disabled', !zoomReady);
+
         const note = viewport.doc.createElement('p');
         note.className = 'map-filter-note muted small';
         target.appendChild(note);
@@ -2228,63 +2314,6 @@
         updateRefreshDisplays();
       }
 
-      function renderTeamInfoInViewport(viewport) {
-        if (!viewport || !viewport.teamInfo) return;
-        const target = viewport.teamInfo;
-        target.innerHTML = '';
-        if (!state.players.length) {
-          target.classList.remove('hidden');
-          target.innerHTML = '<strong>No live data</strong><p class="muted">Connect to a server to see team breakdowns.</p>';
-          return;
-        }
-        if (!selectionActive()) {
-          target.innerHTML = '';
-          target.classList.add('hidden');
-          return;
-        }
-        target.classList.remove('hidden');
-        const collection = state.selectedSolo
-          ? state.players.filter((p) => resolveSteamId(p) === state.selectedSolo)
-          : state.players.filter((p) => Number(p.teamId) === state.selectedTeam);
-        if (!collection.length) {
-          target.classList.remove('hidden');
-          target.innerHTML = '<strong>No matching players</strong><p class="muted">They might have disconnected.</p>';
-          return;
-        }
-        const color = colorForPlayer(collection[0]);
-        const heading = viewport.doc.createElement('div');
-        heading.innerHTML = `<strong>${state.selectedSolo ? 'Solo player' : 'Team ' + state.selectedTeam}</strong>`;
-        const colorChip = viewport.doc.createElement('span');
-        colorChip.className = 'map-color-chip';
-        colorChip.style.background = color;
-        heading.appendChild(viewport.doc.createTextNode(' '));
-        heading.appendChild(colorChip);
-        target.appendChild(heading);
-        const detail = viewport.doc.createElement('p');
-        detail.className = 'muted';
-        detail.textContent = state.selectedSolo ? 'Individual survivor stats' : `${collection.length} member(s)`;
-        target.appendChild(detail);
-        const list = viewport.doc.createElement('ul');
-        list.className = 'map-team-members';
-        for (const player of collection) {
-          const li = viewport.doc.createElement('li');
-          const name = viewport.doc.createElement('span');
-          name.textContent = playerDisplayName(player);
-          const stats = viewport.doc.createElement('span');
-          const hpValue = formatHealth(player.health ?? player.Health);
-          stats.textContent = `${hpValue === '—' ? '—' : hpValue + ' hp'} · ${formatDuration(player.connectedSeconds)}`;
-          li.appendChild(name);
-          li.appendChild(stats);
-          list.appendChild(li);
-        }
-        target.appendChild(list);
-      }
-
-      function renderTeamInfo() {
-        for (const viewport of getActiveViewports()) {
-          renderTeamInfoInViewport(viewport);
-        }
-      }
       function renderPlayerSections() {
         if (state.activePopupSteamId && !state.players.some((p) => resolveSteamId(p) === state.activePopupSteamId)) {
           state.activePopupSteamId = null;
@@ -2293,7 +2322,6 @@
         renderMarkers();
         renderPlayerList();
         renderSummary();
-        renderTeamInfo();
         updateMarkerPopups();
       }
 
@@ -2307,7 +2335,6 @@
         renderMarkers();
         renderPlayerList();
         renderSummary();
-        renderTeamInfo();
         updateUploadSection();
         updateConfigPanel();
         updateMarkerPopups();
