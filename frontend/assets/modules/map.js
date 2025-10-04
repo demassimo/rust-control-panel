@@ -290,6 +290,10 @@
       summary.className = 'map-summary';
       sidebar.appendChild(summary);
 
+      const teamInfo = document.createElement('div');
+      teamInfo.className = 'map-team-info hidden';
+      sidebar.appendChild(teamInfo);
+
       const listWrap = document.createElement('div');
       listWrap.className = 'map-player-list';
       sidebar.appendChild(listWrap);
@@ -375,6 +379,7 @@
         overlay,
         message,
         summary,
+        teamInfo,
         listWrap,
         refreshDisplay: null,
         zoomSlider: null,
@@ -2357,6 +2362,90 @@
         updateRefreshDisplays();
       }
 
+      function createTeamInfoRow(viewport, options) {
+        if (!viewport?.doc) return null;
+        const { label, detail, color, active = false } = options || {};
+        const row = viewport.doc.createElement('div');
+        row.className = 'team-row';
+        if (active) row.classList.add('active');
+
+        const left = viewport.doc.createElement('span');
+        left.className = 'team-label';
+        if (color) {
+          const swatch = viewport.doc.createElement('span');
+          swatch.className = 'map-color-chip';
+          swatch.style.backgroundColor = color;
+          left.appendChild(swatch);
+        }
+        const labelEl = viewport.doc.createElement('span');
+        labelEl.textContent = label ?? '';
+        left.appendChild(labelEl);
+
+        const right = viewport.doc.createElement('span');
+        right.className = 'team-detail';
+        right.textContent = detail ?? '';
+
+        row.appendChild(left);
+        row.appendChild(right);
+        return row;
+      }
+
+      function renderTeamInfoInViewport(viewport) {
+        const container = viewport?.teamInfo;
+        if (!container) return;
+        container.innerHTML = '';
+        container.classList.add('hidden');
+
+        const players = Array.isArray(state.players) ? state.players : [];
+        if (players.length === 0) return;
+
+        if (state.selectedSolo) {
+          const target = players.find((p) => resolveSteamId(p) === state.selectedSolo);
+          if (!target) return;
+          const row = createTeamInfoRow(viewport, {
+            label: playerDisplayName(target),
+            detail: 'Solo player',
+            color: colorForPlayer(target),
+            active: true
+          });
+          if (row) container.appendChild(row);
+          container.classList.remove('hidden');
+          return;
+        }
+
+        const teams = new Map();
+        for (const player of players) {
+          const key = teamKey(player);
+          if (key <= 0) continue;
+          if (!teams.has(key)) teams.set(key, []);
+          teams.get(key).push(player);
+        }
+
+        if (teams.size === 0) return;
+
+        const entries = [...teams.entries()].sort(([a], [b]) => a - b);
+        for (const [teamId, members] of entries) {
+          const color = state.teamColors.get(teamId) || colorForPlayer(members[0]);
+          const row = createTeamInfoRow(viewport, {
+            label: `Team ${teamId}`,
+            detail: `${members.length} player${members.length === 1 ? '' : 's'}`,
+            color,
+            active: state.selectedTeam === teamId
+          });
+          if (row) container.appendChild(row);
+        }
+
+        if (container.childElementCount > 0) {
+          container.classList.remove('hidden');
+        }
+      }
+
+      function renderTeamInfo() {
+        for (const viewport of getActiveViewports()) {
+          renderTeamInfoInViewport(viewport);
+        }
+      }
+
       function renderPlayerSections() {
         if (state.activePopupSteamId && !state.players.some((p) => resolveSteamId(p) === state.activePopupSteamId)) {
           state.activePopupSteamId = null;
@@ -2365,6 +2454,7 @@
         renderMarkers();
         renderPlayerList();
         renderSummary();
+        renderTeamInfo();
         updateMarkerPopups();
       }
 
@@ -2378,6 +2468,7 @@
         renderMarkers();
         renderPlayerList();
         renderSummary();
+        renderTeamInfo();
         updateUploadSection();
         updateConfigPanel();
         updateMarkerPopups();

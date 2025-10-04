@@ -261,7 +261,10 @@ main.grid{
 .map-player-stat{text-align:right; font-variant-numeric:tabular-nums}
 .map-filter-note{margin-top:8px}
 .map-team-info{display:flex; flex-direction:column; gap:10px; background:rgba(15,19,28,.78); border-radius:12px; padding:14px; border:1px solid rgba(148,163,184,.1)}
-.map-team-info .team-row{display:flex; align-items:center; justify-content:space-between; gap:12px}
+.map-team-info .team-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 0}
+.map-team-info .team-label{display:inline-flex; align-items:center; gap:8px; font-weight:600; color:#e2e8f0}
+.map-team-info .team-detail{color:#cbd5f5; font-variant-numeric:tabular-nums}
+.map-team-info .team-row.active .team-detail{color:#f8fafc}
 .map-team-info .team-color{width:14px; height:14px; border-radius:50%; border:2px solid rgba(15,23,42,.6)}
 .map-color-chip{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid rgba(15,23,42,.6);vertical-align:middle}
 .map-upload{border:1px dashed rgba(148,163,184,.25); border-radius:12px; padding:16px; background:rgba(17,20,30,.6); display:flex; flex-direction:column; gap:12px}
