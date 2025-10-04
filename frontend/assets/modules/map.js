@@ -403,8 +403,13 @@
       let preventNextMapClick = false;
 
       mapImage.addEventListener('load', () => {
+        mapView.classList.add('map-view-has-image');
         resetMapTransform();
         updateMarkerPopups();
+      });
+
+      mapImage.addEventListener('error', () => {
+        mapView.classList.remove('map-view-has-image');
       });
 
       const handleResize = () => {
@@ -1695,6 +1700,7 @@
         mapImageSource = null;
         mapImageLocked = false;
         mapImage.removeAttribute('src');
+        mapView.classList.remove('map-view-has-image');
         resetMapTransform();
       }
 
@@ -1773,12 +1779,14 @@
           const result = await fetchAuthorizedImage(next, controller);
           if (mapImageAbort !== controller) return;
           if (result.blob) {
+            mapView.classList.remove('map-view-has-image');
             applyBlobToImage(result.blob);
             if (result.status === 200) {
               mapImageLocked = true;
             }
           } else if (result.url) {
             clearMapImage();
+            mapView.classList.remove('map-view-has-image');
             mapImage.src = result.url;
             mapImageSource = next;
             if (result.status === 200) {
@@ -2123,14 +2131,16 @@
         table.appendChild(body);
         target.appendChild(table);
 
-        if (hasSelection) {
-          const note = viewport.doc.createElement('p');
-          note.className = 'map-filter-note muted small';
-          note.textContent = matches.length > 0
-            ? 'Players outside your selection are dimmed.'
-            : 'No players match the current selection.';
-          target.appendChild(note);
+        const note = viewport.doc.createElement('p');
+        note.className = 'map-filter-note muted small';
+        if (!hasSelection) {
+          note.textContent = 'Players outside your selection are dimmed.';
+        } else if (matches.length === 0) {
+          note.textContent = 'No players match the current selection. Players outside your selection are dimmed.';
+        } else {
+          note.textContent = 'Players outside your selection are dimmed.';
         }
+        target.appendChild(note);
       }
 
       function renderPlayerList() {
