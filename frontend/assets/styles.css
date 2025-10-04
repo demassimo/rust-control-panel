@@ -2210,9 +2210,14 @@ button.menu-tab.active {
   position: relative;
   border-radius: var(--radius-sm);
   overflow: visible;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(9, 1, 4, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background:
+    radial-gradient(480px 280px at 20% 20%, rgba(59, 130, 246, 0.28), transparent 72%),
+    radial-gradient(420px 260px at 80% 8%, rgba(45, 212, 191, 0.2), transparent 75%),
+    linear-gradient(180deg, rgba(226, 232, 240, 0.88) 0%, rgba(203, 213, 225, 0.96) 100%);
+  box-shadow: 0 24px 52px rgba(15, 23, 42, 0.32);
   min-height: 420px;
+  transition: background 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
 .map-canvas {
@@ -2222,8 +2227,11 @@ button.menu-tab.active {
   min-height: inherit;
   border-radius: inherit;
   overflow: hidden;
-  background: inherit;
-  transition: transform 0.08s ease-out;
+  background:
+    linear-gradient(0deg, rgba(241, 245, 249, 0.92), rgba(241, 245, 249, 0.92)),
+    repeating-linear-gradient(0deg, rgba(148, 163, 184, 0.15), rgba(148, 163, 184, 0.15) 1px, transparent 1px, transparent 28px),
+    repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.12), rgba(148, 163, 184, 0.12) 1px, transparent 1px, transparent 28px);
+  transition: transform 0.08s ease-out, background 0.28s ease;
   will-change: transform;
 }
 
@@ -2241,7 +2249,7 @@ button.menu-tab.active {
   gap: 18px;
   padding: 32px 24px;
   text-align: center;
-  background: rgba(9, 1, 4, 0.94);
+  background: rgba(15, 23, 42, 0.86);
   color: var(--muted);
   font-size: 0.96rem;
   line-height: 1.5;
@@ -2272,6 +2280,23 @@ button.menu-tab.active {
   width: 100%;
   height: auto;
   display: block;
+  background: rgba(226, 232, 240, 0.9);
+  transition: filter 0.24s ease;
+}
+
+.map-view.map-view-has-image {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.28);
+  box-shadow: 0 26px 60px rgba(15, 23, 42, 0.38);
+}
+
+.map-view.map-view-has-image .map-canvas {
+  background: transparent;
+}
+
+.map-view.map-view-has-image img {
+  background: transparent;
+  filter: saturate(1.05) contrast(1.05);
 }
 
 .map-overlay {
@@ -2287,8 +2312,8 @@ button.menu-tab.active {
   height: clamp(4px, calc(12px * var(--marker-scale)), 12px);
   border-radius: 50%;
   background: var(--accent);
-  border: clamp(1px, calc(2px * var(--marker-scale)), 2px) solid rgba(0, 0, 0, 0.45);
-  box-shadow: 0 0 clamp(6px, calc(12px * var(--marker-scale)), 12px) rgba(0, 0, 0, 0.45);
+  border: clamp(1px, calc(2px * var(--marker-scale)), 2px) solid rgba(248, 250, 252, 0.75);
+  box-shadow: 0 6px clamp(10px, calc(18px * var(--marker-scale)), 18px) rgba(15, 23, 42, 0.22);
   transform: translate(-50%, -50%);
   pointer-events: auto;
 }
