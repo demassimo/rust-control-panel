@@ -42,6 +42,80 @@
     return `${Math.round(value)}ms`;
   }
 
+  function resolveSteamId(player) {
+    if (!player || typeof player !== 'object') return '';
+    const candidates = [
+      player.steamId,
+      player.SteamID,
+      player.userid,
+      player.userId,
+      player.UserId,
+      player.id,
+      player.ID,
+      player.entityId,
+      player.EntityId
+    ];
+    for (const candidate of candidates) {
+      if (candidate == null) continue;
+      const value = String(candidate);
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function escapeSelector(value) {
+    const str = String(value ?? '');
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+      return CSS.escape(str);
+    }
+    return str.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
+  }
+
+  function resolvePlayerAvatar(player) {
+    const profile = player?.steamProfile || {};
+    const candidates = [
+      profile.avatarMedium,
+      profile.avatarmedium,
+      profile.avatar,
+      profile.avatarFull,
+      profile.avatarfull,
+      player?.avatar,
+      player?.avatarMedium,
+      player?.avatar_medium,
+      player?.avatarFull,
+      player?.avatarfull,
+      player?.avatarUrl,
+      player?.avatar_url
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const trimmed = candidate.trim();
+      if (trimmed) return trimmed;
+    }
+    return null;
+  }
+
+  function avatarInitial(name = '') {
+    const trimmed = String(name).trim();
+    if (!trimmed) return '?';
+    const codePoint = trimmed.codePointAt(0);
+    return String.fromCodePoint(codePoint).toUpperCase();
+  }
+
+  function playerDisplayName(player) {
+    if (!player || typeof player !== 'object') return 'Player';
+    const profile = player.steamProfile || {};
+    return (
+      player.displayName
+      || profile.persona
+      || profile.personaName
+      || player.persona
+      || player.DisplayName
+      || resolveSteamId(player)
+      || 'Player'
+    );
+  }
+
   function normaliseRefreshInterval(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric <= 0) return DEFAULT_POLL_INTERVAL;
@@ -187,6 +261,17 @@
       mapView.appendChild(overlay);
       mapView.appendChild(message);
 
+      const markerPopup = document.createElement('div');
+      markerPopup.className = 'map-marker-popup hidden';
+      const markerPopupCard = document.createElement('div');
+      markerPopupCard.className = 'map-marker-popup-card';
+      const markerPopupArrow = document.createElement('div');
+      markerPopupArrow.className = 'map-marker-popup-arrow';
+      markerPopup.appendChild(markerPopupCard);
+      markerPopup.appendChild(markerPopupArrow);
+      mapView.appendChild(markerPopup);
+      markerPopupCard.addEventListener('click', (event) => event.stopPropagation());
+
       const sidebar = document.createElement('div');
       sidebar.className = 'map-sidebar';
 
@@ -240,6 +325,7 @@
         teamColors: new Map(),
         selectedTeam: null,
         selectedSolo: null,
+        activePopupSteamId: null,
         lastUpdated: null,
         pollInterval: loadRefreshInterval(),
         pollTimer: null,
@@ -342,10 +428,24 @@
         summary,
         listWrap,
         teamInfo,
-        refreshDisplay: null
+        refreshDisplay: null,
+        popup: {
+          wrap: markerPopup,
+          card: markerPopupCard,
+          arrow: markerPopupArrow
+        }
       };
 
+      mapImage.addEventListener('load', () => updateMarkerPopups());
+
       let fullscreenViewport = null;
+
+      const handleResize = () => {
+        if (!state.activePopupSteamId) return;
+        updateMarkerPopups();
+      };
+
+      window.addEventListener('resize', handleResize);
 
       function isFullscreenOpen() {
         return !!(fullscreenViewport && fullscreenViewport.win && !fullscreenViewport.win.closed);
@@ -456,6 +556,16 @@
         mapContainer.appendChild(popupImage);
         mapContainer.appendChild(popupOverlay);
         mapContainer.appendChild(popupMessage);
+        const popupMarkerWrap = doc.createElement('div');
+        popupMarkerWrap.className = 'map-marker-popup hidden';
+        const popupMarkerCard = doc.createElement('div');
+        popupMarkerCard.className = 'map-marker-popup-card';
+        const popupMarkerArrow = doc.createElement('div');
+        popupMarkerArrow.className = 'map-marker-popup-arrow';
+        popupMarkerWrap.appendChild(popupMarkerCard);
+        popupMarkerWrap.appendChild(popupMarkerArrow);
+        mapContainer.appendChild(popupMarkerWrap);
+        popupMarkerCard.addEventListener('click', (event) => event.stopPropagation());
         mapContainer.addEventListener('click', () => clearSelection());
         layout.appendChild(mapContainer);
 
@@ -485,10 +595,25 @@
           summary,
           listWrap: list,
           teamInfo,
-          refreshDisplay: null
+          refreshDisplay: null,
+          popup: {
+            wrap: popupMarkerWrap,
+            card: popupMarkerCard,
+            arrow: popupMarkerArrow
+          }
         };
 
+        popupImage.addEventListener('load', () => updateMarkerPopups());
+
+        const handlePopupResize = () => {
+          if (!state.activePopupSteamId) return;
+          updateMarkerPopups();
+        };
+
+        popup.addEventListener('resize', handlePopupResize);
+
         popup.addEventListener('beforeunload', () => {
+          popup.removeEventListener('resize', handlePopupResize);
           fullscreenViewport = null;
         });
 
@@ -506,7 +631,10 @@
         }
       }
 
-      window.addEventListener('beforeunload', () => closeFullscreenWindow());
+      window.addEventListener('beforeunload', () => {
+        window.removeEventListener('resize', handleResize);
+        closeFullscreenWindow();
+      });
 
       function readFileAsDataURL(file) {
         return new Promise((resolve, reject) => {
@@ -617,7 +745,7 @@
 
       function ensureTeamColors(players) {
         const presentTeams = new Set();
-        let index = 0;
+        let index = state.teamColors.size;
         for (const player of players) {
           const key = teamKey(player);
           if (key <= 0) continue;
@@ -651,8 +779,8 @@
         const sid = player?.steamId || '';
         let hash = 0;
         for (let i = 0; i < sid.length; i++) hash = (hash * 31 + sid.charCodeAt(i)) >>> 0;
-        const hue = (hash % 360);
-        return `hsl(${hue}, 12%, 72%)`;
+        const hue = hash % 360;
+        return `hsl(${hue}, 70%, 58%)`;
       }
 
       function hasMapImage(meta) {
@@ -670,8 +798,11 @@
       function updateUploadSection() {
         if (!uploadWrap) return;
         const meta = getActiveMapMeta();
-        const needsUpload = !!(meta && mapIsCustom(meta) && !hasMapImage(meta));
-        if (needsUpload) {
+        const hasImage = hasMapImage(meta);
+        const customMap = mapIsCustom(meta, state.serverInfo);
+        const awaitingUpload = state.status === 'awaiting_upload';
+        const shouldShow = (customMap && !hasImage) || awaitingUpload;
+        if (shouldShow) {
           uploadWrap.classList.remove('hidden');
         } else {
           uploadWrap.classList.add('hidden');
@@ -1732,7 +1863,7 @@
       }
 
       function isPlayerFocused(player) {
-        if (state.selectedSolo) return player.steamId === state.selectedSolo;
+        if (state.selectedSolo) return resolveSteamId(player) === state.selectedSolo;
         if (state.selectedTeam) return Number(player.teamId) === state.selectedTeam;
         return true;
       }
@@ -1750,13 +1881,15 @@
           marker.style.backgroundColor = colorForPlayer(player);
           marker.style.left = position.left + '%';
           marker.style.top = position.top + '%';
-          marker.title = player.displayName || player.persona || player.steamId;
+          const steamId = resolveSteamId(player);
+          marker.title = player.displayName || player.persona || steamId;
+          marker.dataset.steamid = steamId;
           const focused = isPlayerFocused(player);
           if (selectionActive() && !focused) marker.classList.add('dimmed');
           if (focused) marker.classList.add('active');
           marker.addEventListener('click', (e) => {
             e.stopPropagation();
-            selectPlayer(player);
+            selectPlayer(player, { suppressPanel: true, showPopup: true });
           });
           viewport.overlay.appendChild(marker);
         }
@@ -1765,6 +1898,187 @@
       function renderMarkers() {
         for (const viewport of getActiveViewports()) {
           renderMarkersInViewport(viewport);
+        }
+      }
+
+      function createPopupStat(viewport, label, value, options = {}) {
+        if (!viewport?.doc) return null;
+        const stat = viewport.doc.createElement('span');
+        stat.className = 'map-marker-popup-stat';
+        if (options.color) {
+          const swatch = viewport.doc.createElement('span');
+          swatch.className = 'map-marker-popup-color';
+          swatch.style.backgroundColor = options.color;
+          stat.appendChild(swatch);
+        }
+        const strong = viewport.doc.createElement('strong');
+        strong.textContent = label;
+        stat.appendChild(strong);
+        const valueEl = viewport.doc.createElement('span');
+        valueEl.className = 'map-marker-popup-stat-value';
+        valueEl.textContent = value;
+        stat.appendChild(valueEl);
+        return stat;
+      }
+
+      function hideMarkerPopup(viewport) {
+        const popup = viewport?.popup;
+        if (!popup?.wrap) return;
+        popup.wrap.classList.add('hidden');
+        popup.wrap.style.left = '';
+        popup.wrap.style.top = '';
+        popup.wrap.style.transform = '';
+        popup.wrap.removeAttribute('data-position');
+        if (popup.arrow) {
+          popup.arrow.style.left = '';
+          popup.arrow.style.top = '';
+          popup.arrow.style.bottom = '';
+        }
+        if (popup.card) popup.card.innerHTML = '';
+        popup.currentSteamId = null;
+      }
+
+      function hideAllMarkerPopups() {
+        for (const viewport of getActiveViewports()) {
+          hideMarkerPopup(viewport);
+        }
+      }
+
+      function positionMarkerPopup(viewport, marker) {
+        const popup = viewport?.popup;
+        if (!popup?.wrap || !popup.card || !viewport.mapView) return;
+        const { wrap, card, arrow } = popup;
+        const mapRect = viewport.mapView.getBoundingClientRect();
+        const markerRect = marker.getBoundingClientRect();
+        const centerX = markerRect.left + markerRect.width / 2 - mapRect.left;
+        const baseTop = markerRect.top - mapRect.top;
+        const margin = 12;
+        const width = card.offsetWidth || wrap.offsetWidth || 0;
+        const mapWidth = mapRect.width;
+        const minLeft = margin;
+        const maxLeft = Math.max(minLeft, mapWidth - width - margin);
+        const desiredLeft = centerX - width / 2;
+        const clampedLeft = Math.min(Math.max(desiredLeft, minLeft), maxLeft);
+        wrap.style.left = `${clampedLeft}px`;
+        const arrowCenter = centerX - clampedLeft;
+        if (arrow) {
+          const arrowOffset = Math.max(12, Math.min(width - 12, arrowCenter));
+          arrow.style.left = `${arrowOffset}px`;
+        }
+        const popupHeight = card.offsetHeight || wrap.offsetHeight || 0;
+        const aboveSpace = markerRect.top - mapRect.top;
+        const belowSpace = mapRect.bottom - markerRect.bottom;
+        const preferAbove = aboveSpace >= belowSpace;
+        let position = 'above';
+        if (preferAbove) {
+          position = aboveSpace >= popupHeight + 28 ? 'above' : (belowSpace > aboveSpace ? 'below' : 'above');
+        } else {
+          position = belowSpace >= popupHeight + 28 ? 'below' : (aboveSpace > belowSpace ? 'above' : 'below');
+        }
+        wrap.dataset.position = position;
+        wrap.style.top = `${baseTop}px`;
+        if (position === 'above') {
+          wrap.style.transform = 'translateY(calc(-100% - 18px))';
+          if (arrow) {
+            arrow.style.top = '';
+            arrow.style.bottom = '-8px';
+          }
+        } else {
+          wrap.style.transform = 'translateY(18px)';
+          if (arrow) {
+            arrow.style.bottom = '';
+            arrow.style.top = '-8px';
+          }
+        }
+      }
+
+      function renderMarkerPopupForViewport(viewport, player, marker) {
+        const popup = viewport?.popup;
+        if (!popup?.wrap || !popup.card) return;
+        const doc = viewport.doc || document;
+        popup.card.innerHTML = '';
+        popup.currentSteamId = resolveSteamId(player);
+
+        const header = doc.createElement('div');
+        header.className = 'map-marker-popup-header';
+
+        const avatarWrap = doc.createElement('div');
+        avatarWrap.className = 'map-marker-popup-avatar';
+        const avatarUrl = resolvePlayerAvatar(player);
+        const displayName = playerDisplayName(player);
+        if (avatarUrl) {
+          const img = doc.createElement('img');
+          img.src = avatarUrl;
+          img.alt = `${displayName} avatar`;
+          img.loading = 'lazy';
+          avatarWrap.appendChild(img);
+        } else {
+          avatarWrap.classList.add('placeholder');
+          avatarWrap.textContent = avatarInitial(displayName);
+        }
+        header.appendChild(avatarWrap);
+
+        const body = doc.createElement('div');
+        body.className = 'map-marker-popup-body';
+
+        const nameEl = doc.createElement('div');
+        nameEl.className = 'map-marker-popup-name';
+        nameEl.textContent = displayName;
+        body.appendChild(nameEl);
+
+        const stats = doc.createElement('div');
+        stats.className = 'map-marker-popup-stats';
+        const healthValue = formatHealth(player.health ?? player.Health);
+        const healthStat = createPopupStat(viewport, 'HP', healthValue === '—' ? '—' : `${healthValue} hp`);
+        if (healthStat) stats.appendChild(healthStat);
+        const teamId = teamKey(player);
+        const teamLabel = teamId > 0 ? `Team ${teamId}` : 'Solo';
+        const teamStat = createPopupStat(viewport, 'Team', teamLabel, { color: colorForPlayer(player) });
+        if (teamStat) stats.appendChild(teamStat);
+        const pingValue = formatPing(player.ping ?? player.Ping);
+        const pingStat = createPopupStat(viewport, 'Ping', pingValue);
+        if (pingStat) stats.appendChild(pingStat);
+        body.appendChild(stats);
+
+        header.appendChild(body);
+        popup.card.appendChild(header);
+
+        const wasHidden = popup.wrap.classList.contains('hidden');
+        popup.wrap.classList.remove('hidden');
+        popup.wrap.style.visibility = 'hidden';
+        positionMarkerPopup(viewport, marker);
+        if (popup.wrap.style.visibility === 'hidden') {
+          popup.wrap.style.visibility = '';
+        }
+        if (wasHidden) {
+          popup.wrap.getBoundingClientRect();
+        }
+      }
+
+      function updateMarkerPopups() {
+        const activeId = state.activePopupSteamId;
+        if (!activeId || !mapReady()) {
+          hideAllMarkerPopups();
+          return;
+        }
+        const player = state.players.find((p) => resolveSteamId(p) === activeId);
+        if (!player) {
+          state.activePopupSteamId = null;
+          hideAllMarkerPopups();
+          return;
+        }
+        for (const viewport of getActiveViewports()) {
+          if (!viewport?.overlay) {
+            hideMarkerPopup(viewport);
+            continue;
+          }
+          const selector = `[data-steamid="${escapeSelector(activeId)}"]`;
+          const marker = viewport.overlay.querySelector(selector);
+          if (!marker) {
+            hideMarkerPopup(viewport);
+            continue;
+          }
+          renderMarkerPopupForViewport(viewport, player, marker);
         }
       }
 
@@ -1805,7 +2119,7 @@
         const body = viewport.doc.createElement('tbody');
         for (const player of state.players) {
           const row = viewport.doc.createElement('tr');
-          row.dataset.steamid = player.steamId || '';
+          row.dataset.steamid = resolveSteamId(player);
 
           const focused = isPlayerFocused(player);
           if (focused) row.classList.add('active');
@@ -2002,7 +2316,7 @@
           return;
         }
         const collection = state.selectedSolo
-          ? state.players.filter((p) => p.steamId === state.selectedSolo)
+          ? state.players.filter((p) => resolveSteamId(p) === state.selectedSolo)
           : state.players.filter((p) => Number(p.teamId) === state.selectedTeam);
         if (!collection.length) {
           target.innerHTML = '<strong>No matching players</strong><p class="muted">They might have disconnected.</p>';
@@ -2026,9 +2340,10 @@
         for (const player of collection) {
           const li = viewport.doc.createElement('li');
           const name = viewport.doc.createElement('span');
-          name.textContent = player.displayName || player.persona || player.steamId;
+          name.textContent = playerDisplayName(player);
           const stats = viewport.doc.createElement('span');
-          stats.textContent = `${formatHealth(player.health)} hp · ${formatDuration(player.connectedSeconds)}`;
+          const hpValue = formatHealth(player.health ?? player.Health);
+          stats.textContent = `${hpValue === '—' ? '—' : hpValue + ' hp'} · ${formatDuration(player.connectedSeconds)}`;
           li.appendChild(name);
           li.appendChild(stats);
           list.appendChild(li);
@@ -2042,15 +2357,22 @@
         }
       }
       function renderPlayerSections() {
+        if (state.activePopupSteamId && !state.players.some((p) => resolveSteamId(p) === state.activePopupSteamId)) {
+          state.activePopupSteamId = null;
+        }
         ensureTeamColors(state.players);
         renderMarkers();
         renderPlayerList();
         renderSummary();
         renderTeamInfo();
+        updateMarkerPopups();
         if (isFullscreenOpen()) syncFullscreenMessageFromPrimary();
       }
 
       function renderAll() {
+        if (state.activePopupSteamId && !state.players.some((p) => resolveSteamId(p) === state.activePopupSteamId)) {
+          state.activePopupSteamId = null;
+        }
         ensureTeamColors(state.players);
         const activeMeta = getActiveMapMeta();
         updateMapImage(activeMeta);
@@ -2060,6 +2382,7 @@
         renderTeamInfo();
         updateUploadSection();
         updateConfigPanel();
+        updateMarkerPopups();
         if (isFullscreenOpen()) syncFullscreenMessageFromPrimary();
       }
 
@@ -2073,13 +2396,17 @@
       function clearSelection() {
         state.selectedTeam = null;
         state.selectedSolo = null;
+        state.activePopupSteamId = null;
+        hideAllMarkerPopups();
         renderPlayerSections();
         ctx.emit?.('live-players:highlight', { steamId: null });
         window.dispatchEvent(new CustomEvent('team:clear'));
       }
 
-      function selectPlayer(player) {
+      function selectPlayer(player, options = {}) {
+        const { suppressPanel = false, showPopup = false } = options;
         const key = teamKey(player);
+        const steamId = resolveSteamId(player);
         let highlightSteam = null;
         let broadcastPlayer = null;
         if (key > 0) {
@@ -2090,24 +2417,27 @@
           } else {
             state.selectedTeam = key;
             state.selectedSolo = null;
-            highlightSteam = player.steamId;
+            highlightSteam = steamId;
             broadcastPlayer = player;
           }
         } else {
-          const samePlayer = state.selectedSolo === player.steamId;
+          const samePlayer = state.selectedSolo === steamId;
           if (samePlayer) {
             state.selectedSolo = null;
             highlightSteam = null;
           } else {
-            state.selectedSolo = player.steamId;
+            state.selectedSolo = steamId;
             state.selectedTeam = null;
-            highlightSteam = player.steamId;
+            highlightSteam = steamId;
             broadcastPlayer = player;
           }
         }
+        state.activePopupSteamId = showPopup ? (highlightSteam || null) : null;
         renderPlayerSections();
         ctx.emit?.('live-players:highlight', { steamId: highlightSteam });
-        if (broadcastPlayer) {
+        if (suppressPanel) {
+          window.dispatchEvent(new CustomEvent('team:clear'));
+        } else if (broadcastPlayer) {
           window.dispatchEvent(new CustomEvent('player:selected', { detail: { player: broadcastPlayer, teamKey: teamKey(broadcastPlayer) } }));
         } else {
           window.dispatchEvent(new CustomEvent('team:clear'));
@@ -2173,6 +2503,8 @@
             state.horizontalAxis = null;
             cancelMapImageRequest();
             clearMapImage();
+            state.activePopupSteamId = null;
+            hideAllMarkerPopups();
             if (state.worldDetails) {
               state.worldDetails.seed = null;
               state.worldDetails.size = null;
@@ -2258,7 +2590,9 @@
             return;
           }
           if (code === 'custom_level_url') {
-            setMessage('This server is using a custom map. Upload a rendered image or configure a Facepunch level URL to enable the live map.');
+            state.status = 'awaiting_upload';
+            updateUploadSection();
+            setMessage('This server is using a custom map. Upload a rendered image below or configure a Facepunch level URL to enable the live map.');
             return;
           }
           const detail = ctx.describeError?.(err) || err?.message || 'Unable to fetch live map data.';
