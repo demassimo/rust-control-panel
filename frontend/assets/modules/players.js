@@ -8,8 +8,23 @@
     setup(ctx){
       const moduleId = 'players-directory';
       const sharedSearchKey = '__playerSearchQuery';
+      const sharedLimitKey = '__playerDirectoryLimit';
+      const limitStorageKey = 'playersDirectoryLimit';
+      const defaultLimitRaw = 'unlimited';
+      const limitOptions = [
+        { value: '50', label: '50' },
+        { value: '100', label: '100' },
+        { value: '200', label: '200' },
+        { value: '500', label: '500' },
+        { value: '1000', label: '1000' },
+        { value: 'unlimited', label: 'Unlimited' }
+      ];
+      const limitValueSet = new Set(limitOptions.map((option) => option.value));
       if (typeof window !== 'undefined' && typeof window[sharedSearchKey] !== 'string') {
         window[sharedSearchKey] = '';
+      }
+      if (typeof window !== 'undefined' && typeof window[sharedLimitKey] !== 'string') {
+        window[sharedLimitKey] = defaultLimitRaw;
       }
 
       const regionDisplay = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
@@ -50,7 +65,9 @@
       ctx.body?.appendChild(list);
       ctx.body?.appendChild(message);
 
+      const initialLimitRaw = readSharedLimit();
       let searchInput = null;
+      let limitSelect = null;
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
         const searchWrap = document.createElement('div');
@@ -62,6 +79,21 @@
         searchInput.setAttribute('aria-label', 'Search players by name, Steam ID, or IP address');
         searchWrap.appendChild(searchInput);
         ctx.actions.appendChild(searchWrap);
+
+        limitSelect = document.createElement('select');
+        limitSelect.className = 'module-select-control';
+        limitSelect.setAttribute('aria-label', 'Number of players to display');
+        for (const optionDef of limitOptions) {
+          const option = document.createElement('option');
+          option.value = optionDef.value;
+          option.textContent = optionDef.label;
+          limitSelect.appendChild(option);
+        }
+        limitSelect.value = initialLimitRaw;
+        const limitWrap = document.createElement('div');
+        limitWrap.className = 'module-select';
+        limitWrap.appendChild(limitSelect);
+        ctx.actions.appendChild(limitWrap);
       }
 
       function setMessage(text, variant = 'info') {
@@ -108,23 +140,84 @@
         } catch { /* ignore */ }
       }
 
-      function updateCount(filtered, total) {
+      function normalizeLimitRaw(value) {
+        if (typeof value !== 'string') return defaultLimitRaw;
+        const trimmed = value.trim().toLowerCase();
+        if (trimmed === 'unlimited') return 'unlimited';
+        if (limitValueSet.has(trimmed)) return trimmed;
+        const numeric = Number(trimmed);
+        if (Number.isFinite(numeric) && numeric > 0) {
+          const rounded = String(Math.round(numeric));
+          if (limitValueSet.has(rounded)) return rounded;
+        }
+        return defaultLimitRaw;
+      }
+
+      function parseLimit(value) {
+        const normalized = normalizeLimitRaw(value);
+        if (normalized === 'unlimited') return null;
+        const numeric = Number(normalized);
+        return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+      }
+
+      function readSharedLimit() {
+        if (typeof window === 'undefined') return defaultLimitRaw;
+        let raw = defaultLimitRaw;
+        let fromStorage = false;
+        try {
+          const stored = window.localStorage?.getItem(limitStorageKey);
+          if (stored != null) {
+            raw = stored;
+            fromStorage = true;
+          }
+        } catch { /* ignore */ }
+        if (!fromStorage && typeof window[sharedLimitKey] === 'string') {
+          raw = window[sharedLimitKey];
+        }
+        const normalized = normalizeLimitRaw(raw);
+        window[sharedLimitKey] = normalized;
+        return normalized;
+      }
+
+      function writeSharedLimit(value) {
+        if (typeof window === 'undefined') return;
+        const normalized = normalizeLimitRaw(value);
+        window[sharedLimitKey] = normalized;
+        try {
+          const storage = window.localStorage;
+          if (storage && typeof storage.setItem === 'function') {
+            storage.setItem(limitStorageKey, normalized);
+          }
+        } catch { /* ignore */ }
+      }
+
+      function updateCount(displayed, filtered, total) {
         if (!directoryCount) return;
-        if (filtered == null && total == null) {
+        if (displayed == null && filtered == null && total == null) {
           directoryCount.textContent = '(—)';
           return;
         }
-        const filteredNumber = Number(filtered);
-        const totalNumber = Number(total);
-        const safeFiltered = Number.isFinite(filteredNumber) ? Math.max(0, Math.round(filteredNumber)) : 0;
-        if (Number.isFinite(totalNumber) && totalNumber >= 0) {
-          const safeTotal = Math.max(0, Math.round(totalNumber));
-          directoryCount.textContent = safeTotal !== safeFiltered
-            ? `(${safeFiltered}/${safeTotal})`
-            : `(${safeFiltered})`;
-          return;
+        const toSafeNumber = (value) => {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric) || numeric < 0) return null;
+          return Math.round(numeric);
+        };
+        const safeDisplayed = toSafeNumber(displayed);
+        const safeFiltered = toSafeNumber(filtered);
+        const safeTotal = toSafeNumber(total);
+        const parts = [];
+        if (safeDisplayed != null) {
+          parts.push(String(safeDisplayed));
+        } else if (safeFiltered != null) {
+          parts.push(String(safeFiltered));
         }
-        directoryCount.textContent = `(${safeFiltered})`;
+        if (safeFiltered != null && safeFiltered !== safeDisplayed) {
+          parts.push(String(safeFiltered));
+        }
+        if (safeTotal != null && safeTotal !== safeFiltered) {
+          parts.push(String(safeTotal));
+        }
+        directoryCount.textContent = parts.length ? `(${parts.join('/')})` : '(—)';
       }
 
       const modalState = {
@@ -160,7 +253,9 @@
         list.innerHTML = '';
         const total = state.players.length;
         const filtered = getFilteredPlayers();
-        updateCount(filtered.length, total);
+        const limit = state.limit;
+        const visible = limit == null ? filtered : filtered.slice(0, limit);
+        updateCount(visible.length, filtered.length, total);
         if (total === 0) {
           setMessage('No tracked players for this server yet. Import Steam profiles or let players connect to populate this list.');
           return;
@@ -170,7 +265,7 @@
           return;
         }
         clearMessage();
-        for (const p of filtered) {
+        for (const p of visible) {
           const li = document.createElement('li');
           li.dataset.steamid = p.steamid || '';
           li.tabIndex = 0;
@@ -304,6 +399,8 @@
         players: [],
         searchRaw: '',
         search: '',
+        limitRaw: initialLimitRaw,
+        limit: parseLimit(initialLimitRaw),
         mode: 'idle'
       };
 
@@ -323,6 +420,20 @@
       if (searchInput) {
         searchInput.value = state.searchRaw;
         searchInput.addEventListener('input', (ev) => setSearch(ev.target.value));
+      }
+      if (limitSelect) {
+        if (limitSelect.value !== state.limitRaw) {
+          limitSelect.value = state.limitRaw;
+        }
+        limitSelect.addEventListener('change', (ev) => {
+          const raw = ev.target?.value;
+          const normalized = normalizeLimitRaw(raw);
+          if (state.limitRaw === normalized) return;
+          state.limitRaw = normalized;
+          state.limit = parseLimit(normalized);
+          writeSharedLimit(normalized);
+          if (state.mode === 'ready') renderList();
+        });
       }
 
       let searchListener = null;
@@ -374,7 +485,7 @@
           setMessage('Sign in to view player directory.');
           state.players = [];
           state.mode = 'idle';
-          updateCount(null, null);
+          updateCount(null, null, null);
           return;
         }
         const serverId = Number(serverIdOverride ?? state.serverId ?? globalState.currentServerId);
@@ -384,14 +495,14 @@
           setMessage('Select a server to view player directory.');
           state.players = [];
           state.mode = 'idle';
-          updateCount(null, null);
+          updateCount(null, null, null);
           return;
         }
         state.serverId = serverId;
         state.isLoading = true;
         state.mode = 'loading';
         setMessage('Loading players…');
-        updateCount(null, null);
+        updateCount(null, null, null);
         try {
           const players = await ctx.api(`/servers/${serverId}/players?limit=200`);
           render(players);
@@ -403,7 +514,7 @@
             ctx.log?.('Players module error: ' + (err?.message || err));
             if (!state.players.length) {
               state.mode = 'error';
-              updateCount(null, null);
+              updateCount(null, null, null);
             }
           }
         } finally {
@@ -1093,7 +1204,7 @@
           setMessage('Select a server to view player directory.');
           state.players = [];
           state.mode = 'idle';
-          updateCount(null, null);
+          updateCount(null, null, null);
         }
       });
       const offRefresh = ctx.on?.('players:refresh', (payload) => {
@@ -1106,7 +1217,7 @@
         state.serverId = null;
         state.players = [];
         state.mode = 'idle';
-        updateCount(null, null);
+        updateCount(null, null, null);
       });
 
       ctx.onCleanup?.(() => offLogin?.());
@@ -1123,7 +1234,7 @@
       });
 
       // Initial state when module mounts
-      updateCount(null, null);
+      updateCount(null, null, null);
       refresh('init');
     }
   });

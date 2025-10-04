@@ -3193,6 +3193,41 @@ pre {
   padding-left: 38px;
 }
 
+.module-select {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.module-select-control {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  padding: 8px 36px 8px 12px;
+  min-height: 36px;
+  cursor: pointer;
+}
+
+.module-select-control:focus {
+  border-color: rgba(244, 63, 94, 0.55);
+  box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.25);
+}
+
+.module-select::after {
+  content: '▾';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
 @media (max-width: 720px) {
   .module-search { flex-basis: 100%; max-width: none; }
 }
