@@ -1061,7 +1061,8 @@
             return await uploadMapFormData(file, mapKey);
           } catch (err) {
             if (!err) throw err;
-            const shouldFallback = !err.code && (err.status === 404 || err.status === 405);
+            const status = typeof err.status === 'number' ? err.status : null;
+            const shouldFallback = !err.code && (status === 404 || status === 405 || status === 413);
             if (!shouldFallback) throw err;
           }
         }
@@ -1079,9 +1080,9 @@
           showUploadNotice('Choose an image before uploading.');
           return;
         }
-        const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
+        const MAX_MAP_IMAGE_BYTES = 40 * 1024 * 1024;
         if (typeof file.size === 'number' && file.size > MAX_MAP_IMAGE_BYTES) {
-          showUploadNotice('The image is too large. Please upload a file under 20 MB.');
+          showUploadNotice('The image is too large. Please upload a file under 40 MB.');
           return;
         }
 
@@ -1116,7 +1117,7 @@
           if (code === 'missing_image') showUploadNotice('Choose an image before uploading.');
           else if (code === 'invalid_image') showUploadNotice('The selected image could not be processed.');
           else if (code === 'unsupported_image_type') showUploadNotice('Only PNG, JPEG, or WebP images are supported.');
-          else if (code === 'image_too_large') showUploadNotice('The image is too large. Please upload a file under 20 MB.');
+          else if (code === 'image_too_large') showUploadNotice('The image is too large. Please upload a file under 40 MB.');
           else showUploadNotice(ctx.describeError?.(err) || 'Uploading the map image failed.');
         } finally {
           uploadBtn.disabled = false;
