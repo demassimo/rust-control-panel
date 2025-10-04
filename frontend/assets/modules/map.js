@@ -1079,6 +1079,12 @@
           showUploadNotice('Choose an image before uploading.');
           return;
         }
+        const MAX_MAP_IMAGE_BYTES = 20 * 1024 * 1024;
+        if (typeof file.size === 'number' && file.size > MAX_MAP_IMAGE_BYTES) {
+          showUploadNotice('The image is too large. Please upload a file under 20 MB.');
+          return;
+        }
+
         hideUploadNotice();
         uploadBtn.disabled = true;
         const previousLabel = uploadBtn.textContent;
