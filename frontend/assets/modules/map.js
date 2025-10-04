@@ -1082,6 +1082,16 @@
         return ctx.api(`/servers/${state.serverId}/map-image`, { image: dataUrl, mapKey }, 'POST');
       }
 
+      function formatFileSize(bytes) {
+        if (!Number.isFinite(bytes)) return null;
+        if (bytes <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        const value = bytes / Math.pow(1024, index);
+        const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+        return `${rounded} ${units[index]}`;
+      }
+
       async function handleUpload() {
         if (!state.serverId) {
           showUploadNotice('Connect to a server before uploading.');
@@ -1093,8 +1103,15 @@
           return;
         }
         const MAX_MAP_IMAGE_BYTES = 40 * 1024 * 1024;
+        const attemptedBytes = typeof file.size === 'number' ? file.size : null;
         if (typeof file.size === 'number' && file.size > MAX_MAP_IMAGE_BYTES) {
-          showUploadNotice('The image is too large. Please upload a file under 40 MB.');
+          const attemptedLabel = attemptedBytes != null ? formatFileSize(attemptedBytes) : null;
+          const limitLabel = formatFileSize(MAX_MAP_IMAGE_BYTES);
+          showUploadNotice(
+            attemptedLabel
+              ? `The image is too large (${attemptedLabel}). Please upload a file under ${limitLabel}.`
+              : `The image is too large. Please upload a file under ${limitLabel}.`
+          );
           return;
         }
 
@@ -1129,8 +1146,18 @@
           if (code === 'missing_image') showUploadNotice('Choose an image before uploading.');
           else if (code === 'invalid_image') showUploadNotice('The selected image could not be processed.');
           else if (code === 'unsupported_image_type') showUploadNotice('Only PNG, JPEG, or WebP images are supported.');
-          else if (code === 'image_too_large') showUploadNotice('The image is too large. Please upload a file under 40 MB.');
-          else showUploadNotice(ctx.describeError?.(err) || 'Uploading the map image failed.');
+          else if (code === 'image_too_large') {
+            const attemptedLabel = attemptedBytes != null ? formatFileSize(attemptedBytes) : null;
+            const limitLabel = formatFileSize(MAX_MAP_IMAGE_BYTES);
+            const intro = attemptedLabel
+              ? `The server rejected the image as too large (${attemptedLabel}).`
+              : 'The server rejected the image as too large.';
+            showUploadNotice(
+              `${intro} The control panel accepts files up to ${limitLabel}, but your hosting provider may enforce a smaller limit. `
+                + 'Try uploading a smaller image or contact your host to raise the limit.',
+              'error'
+            );
+          } else showUploadNotice(ctx.describeError?.(err) || 'Uploading the map image failed.');
         } finally {
           uploadBtn.disabled = false;
           uploadBtn.textContent = previousLabel;
