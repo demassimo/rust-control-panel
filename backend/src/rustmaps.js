@@ -251,6 +251,7 @@ export async function purgeRustMapCacheIfDue(
   activeMapKeys = new Set()
 ) {
   if (!resetPoint) return;
+  if (now < resetPoint) return;
   if (lastGlobalMapCacheReset && lastGlobalMapCacheReset >= resetPoint) return;
   await clearRustMapImageCache(activeImages);
   await clearRustMapMetadataCache(activeMapKeys);
