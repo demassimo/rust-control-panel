@@ -1210,7 +1210,8 @@
     missing_image: 'Choose an image before uploading.',
     invalid_image: 'The selected image could not be processed.',
     unsupported_image_type: 'Only PNG, JPEG, or WebP images are supported.',
-    image_too_large: 'The image is too large. Please upload a file under 40 MB.',
+    image_too_large:
+      'The server rejected the image as too large. The control panel accepts files up to 40 MB, but your hosting provider may enforce a smaller limit. Try a smaller image or contact your host to raise the cap.',
     map_upload_failed: 'Uploading the map image failed. Please try again.',
     invalid_current_password: 'The current password you entered is incorrect.',
     password_mismatch: 'New password and confirmation do not match.'
@@ -2464,8 +2465,12 @@
     if (contentType.includes('application/json')) data = await res.json();
     if (res.status === 401) throw new Error('unauthorized');
     if (!res.ok) {
-      const err = new Error(data?.error || 'api_error');
+      const fallbackCode = res.status === 413 ? 'image_too_large' : 'api_error';
+      const code = data?.error || fallbackCode;
+      const err = new Error(code);
       err.status = res.status;
+      if (data?.error) err.code = data.error;
+      else if (code !== 'api_error') err.code = code;
       throw err;
     }
     return data;
