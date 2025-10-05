@@ -1195,9 +1195,24 @@
         const text = String(value).trim();
         if (!text) return null;
         const normalised = text.replace(/[_\s,]/g, '');
-        if (!normalised) return null;
-        const num = Number(normalised);
-        return Number.isFinite(num) ? num : null;
+        if (normalised) {
+          const direct = Number(normalised);
+          if (Number.isFinite(direct)) return direct;
+          const dimensionMatch = normalised.match(/^(-?\d+(?:\.\d+)?)[x×](-?\d+(?:\.\d+)?)/i);
+          if (dimensionMatch) {
+            const primary = Number(dimensionMatch[1]);
+            if (Number.isFinite(primary)) return primary;
+          }
+          const magnitudeMatch = normalised.match(/^(-?\d+(?:\.\d+)?)([kK])$/);
+          if (magnitudeMatch) {
+            const base = Number(magnitudeMatch[1]);
+            if (Number.isFinite(base)) return base * 1000;
+          }
+        }
+        const fallbackMatch = text.match(/-?\d+(?:\.\d+)?/);
+        if (!fallbackMatch) return null;
+        const numeric = Number(fallbackMatch[0]);
+        return Number.isFinite(numeric) ? numeric : null;
       }
 
       function worldDetailKey(size, seed) {
