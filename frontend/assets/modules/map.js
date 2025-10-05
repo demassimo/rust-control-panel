@@ -2018,6 +2018,9 @@
       }
 
       function renderMarkers() {
+        if (typeof console !== 'undefined' && typeof console.log === 'function') {
+          console.log('[live-map] Rendering player markers:', state.players.length);
+        }
         for (const viewport of getActiveViewports()) {
           renderMarkersInViewport(viewport);
         }

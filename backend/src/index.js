@@ -919,6 +919,235 @@ function parseVector3(value) {
   return null;
 }
 
+function parseLegacyPlayerList(message) {
+  if (!message || typeof message !== 'string') return [];
+
+  const players = [];
+  const numericPattern = /^-?\d+(?:\.\d+)?$/;
+  const lines = message.split(/\r?\n/);
+
+  const parseKeyValueLine = (text) => {
+    if (!text || typeof text !== 'string') return null;
+    const pairPattern = /([A-Za-z0-9_][A-Za-z0-9_\s]*)\s*[:=]\s*/g;
+    let match;
+    let lastKey = null;
+    let lastIndex = 0;
+    const original = {};
+    const normalized = {};
+
+    while ((match = pairPattern.exec(text)) !== null) {
+      if (lastKey !== null) {
+        const rawValue = text.slice(lastIndex, match.index);
+        const cleaned = rawValue.replace(/^[,;\s]+/, '').replace(/[,;\s]+$/, '');
+        if (cleaned) {
+          const trimmedKey = lastKey.trim();
+          if (trimmedKey) {
+            let value = cleaned.trim();
+            if (value && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+              value = value.slice(1, -1);
+            }
+            const normalizedKey = trimmedKey.replace(/[\s_-]+/g, '').toLowerCase();
+            original[trimmedKey] = value;
+            normalized[normalizedKey] = value;
+          }
+        }
+      }
+      lastKey = match[1];
+      lastIndex = pairPattern.lastIndex;
+    }
+
+    if (lastKey !== null) {
+      const rawValue = text.slice(lastIndex);
+      const cleaned = rawValue.replace(/^[,;\s]+/, '').replace(/[,;\s]+$/, '');
+      if (cleaned) {
+        const trimmedKey = lastKey.trim();
+        if (trimmedKey) {
+          let value = cleaned.trim();
+          if (value && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+            value = value.slice(1, -1);
+          }
+          const normalizedKey = trimmedKey.replace(/[\s_-]+/g, '').toLowerCase();
+          original[trimmedKey] = value;
+          normalized[normalizedKey] = value;
+        }
+      }
+    }
+
+    if (!normalized.steamid || !STEAM_ID_REGEX.test(String(normalized.steamid).trim())) {
+      return null;
+    }
+
+    return { original, normalized };
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\u0000/g, '').trim();
+    if (!line) continue;
+    if (/^id\b/i.test(line)) continue;
+    if (/^players?\b/i.test(line)) continue;
+    if (!/\d{17}/.test(line)) continue;
+
+    const keyValue = parseKeyValueLine(line);
+    if (keyValue) {
+      const data = keyValue.normalized;
+      const original = keyValue.original;
+      const steamId = String(data.steamid || '').trim();
+      if (!STEAM_ID_REGEX.test(steamId)) continue;
+
+      const ownerCandidate = String(data.ownersteamid || data.ownerid || '').trim();
+      const ownerSteamId = STEAM_ID_REGEX.test(ownerCandidate) ? ownerCandidate : null;
+      const displayName = (
+        original.DisplayName
+        ?? original.displayname
+        ?? data.displayname
+        ?? steamId
+      );
+      const ping = Number(data.ping ?? data.networkping ?? 0) || 0;
+      const address = original.Address || data.address || '';
+      const connectedSeconds = Number(
+        data.connectedseconds
+        ?? data.connectedtime
+        ?? data.connectiontime
+        ?? 0
+      ) || 0;
+      const violationLevel = Number(
+        data.violationlevel
+        ?? data.voiationlevel
+        ?? data.violations
+        ?? 0
+      ) || 0;
+      const health = Number(data.health ?? 0) || 0;
+      const teamCandidate = Number(data.teamid ?? data.team ?? 0);
+      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0 ? teamCandidate : 0;
+      const positionSource = (
+        original.Position
+        ?? original.position
+        ?? data.position
+        ?? data.pos
+        ?? null
+      );
+      const position = parseVector3(positionSource);
+
+      players.push({
+        steamId,
+        ownerSteamId,
+        displayName,
+        ping,
+        address,
+        connectedSeconds,
+        violationLevel,
+        health,
+        position,
+        teamId,
+        networkId: null
+      });
+      continue;
+    }
+
+    let remaining = line;
+    let position = null;
+    const positionMatch = remaining.match(/\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)\s*$/);
+    if (positionMatch) {
+      position = parseVector3({
+        x: positionMatch[1],
+        y: positionMatch[2],
+        z: positionMatch[3]
+      });
+      remaining = remaining.slice(0, positionMatch.index).trim();
+    }
+
+    const tokens = remaining.split(/\s+/);
+    if (tokens.length < 2) continue;
+
+    const idToken = tokens.shift();
+    if (!numericPattern.test(idToken)) continue;
+
+    const steamId = tokens.shift();
+    if (!STEAM_ID_REGEX.test(steamId)) continue;
+
+    let ownerSteamId = null;
+    if (tokens.length > 0 && STEAM_ID_REGEX.test(tokens[0])) {
+      ownerSteamId = tokens.shift();
+    }
+
+    if (tokens.length === 0 && !position) continue;
+
+    const numericTail = [];
+    while (tokens.length > 0 && numericPattern.test(tokens[tokens.length - 1])) {
+      numericTail.push(tokens.pop());
+      if (numericTail.length > 8) break;
+    }
+    numericTail.reverse();
+
+    let address = '';
+    if (tokens.length > 0) {
+      const candidateAddress = tokens.pop();
+      if (candidateAddress && !numericPattern.test(candidateAddress)) {
+        address = candidateAddress;
+      } else if (candidateAddress != null) {
+        numericTail.unshift(candidateAddress);
+      }
+    }
+
+    let ping = 0;
+    if (tokens.length > 0 && numericPattern.test(tokens[tokens.length - 1])) {
+      const rawPing = tokens.pop();
+      const parsedPing = Number(rawPing);
+      if (Number.isFinite(parsedPing)) ping = parsedPing;
+    }
+
+    const displayName = tokens.join(' ').trim() || steamId;
+
+    const pickInt = () => {
+      if (!numericTail.length) return null;
+      const raw = numericTail.shift();
+      const num = Number(raw);
+      return Number.isFinite(num) ? Math.trunc(num) : null;
+    };
+
+    const pickFloat = () => {
+      if (!numericTail.length) return null;
+      const raw = numericTail.shift();
+      const num = Number(raw);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    const connectedSeconds = pickInt() ?? 0;
+    if (numericTail.length >= 4) {
+      const maybeSleeping = numericTail[0];
+      if (maybeSleeping === '0' || maybeSleeping === '1') {
+        pickInt();
+      }
+    }
+    const violationLevel = pickInt() ?? 0;
+    const currentLevel = pickInt() ?? 0;
+    const health = pickFloat() ?? 0;
+    let teamId = 0;
+    if (numericTail.length > 0) {
+      const candidateTeam = pickInt();
+      if (Number.isFinite(candidateTeam) && candidateTeam > 0) {
+        teamId = candidateTeam;
+      }
+    }
+
+    players.push({
+      steamId,
+      ownerSteamId,
+      displayName,
+      ping,
+      address,
+      connectedSeconds,
+      violationLevel,
+      health,
+      position,
+      teamId,
+      networkId: null
+    });
+  }
+
+  return players;
+}
+
 function parsePlayerListMessage(message) {
   if (!message) return [];
   let text = message.trim();
@@ -933,7 +1162,9 @@ function parsePlayerListMessage(message) {
     }
   }
   if (payload && Array.isArray(payload.Players)) payload = payload.Players;
-  if (!Array.isArray(payload)) return [];
+  if (!Array.isArray(payload)) {
+    return parseLegacyPlayerList(message);
+  }
 
   const result = [];
   for (const entry of payload) {
