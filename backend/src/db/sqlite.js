@@ -417,9 +417,9 @@ function createApi(dbh, dialect) {
         `;
         params.push(term, likeTerm, likeTerm, likeTerm, likeTerm);
       }
-      sql += '
+      sql += `
         ORDER BY updated_at DESC
-      ';
+      `;
       const limitNum = Number(limit);
       const offsetNum = Number(offset);
       if (Number.isFinite(limitNum) && limitNum > 0) {
@@ -439,11 +439,13 @@ function createApi(dbh, dialect) {
       const term = typeof search === 'string' ? search.trim() : '';
       if (term) {
         const likeTerm = `%${escapeLike(term)}%`;
-        sql += ` WHERE steamid = ?
+        sql += `
+        WHERE steamid = ?
           OR steamid LIKE ? ESCAPE '\\'
           OR persona LIKE ? ESCAPE '\\'
           OR profileurl LIKE ? ESCAPE '\\'
-          OR country LIKE ? ESCAPE '\\'`;
+          OR country LIKE ? ESCAPE '\\'
+        `;
         params.push(term, likeTerm, likeTerm, likeTerm, likeTerm);
       }
       const row = await dbh.get(sql, params);
@@ -625,9 +627,9 @@ function createApi(dbh, dialect) {
       `;
         params.push(term, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm);
       }
-      sql += '
+      sql += `
         ORDER BY sp.last_seen DESC
-      ';
+      `;
       if (Number.isFinite(limitNum) && limitNum > 0) {
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
