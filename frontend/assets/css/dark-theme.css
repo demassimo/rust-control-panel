@@ -214,7 +214,7 @@ main.grid{
 .live-map-card .map-view{min-height:clamp(260px,45vh,420px)}
 .map-view img{display:block; width:100%; height:auto}
 .map-placeholder{position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; gap:18px; padding:32px 24px; text-align:center; background:rgba(15,23,42,.86); color:var(--muted); font-size:.96rem; line-height:1.5; z-index:2; overflow:auto}
-.map-overlay{position:absolute; inset:0; pointer-events:none; --marker-scale:1}
+.map-overlay{position:absolute; inset:0; pointer-events:none; --marker-scale:1; z-index:3}
 .map-overlay .map-marker{position:absolute; width:clamp(4px, calc(12px * var(--marker-scale)), 12px); height:clamp(4px, calc(12px * var(--marker-scale)), 12px); border-radius:999px; transform:translate(-50%,-50%); box-shadow:0 0 clamp(6px, calc(12px * var(--marker-scale)), 12px) rgba(0,0,0,.4); border:clamp(1px, calc(2px * var(--marker-scale)), 2px) solid rgba(0,0,0,.45)}
 .map-overlay .map-marker.active{box-shadow:0 0 0 3px rgba(225,29,72,.35)}
 .map-overlay .map-marker.dimmed{opacity:.4}
