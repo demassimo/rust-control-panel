@@ -1384,16 +1384,45 @@
         if (meta) candidates.push(...collectValues(meta, META_WORLD_SIZE_PATHS));
         if (info) candidates.push(...collectValues(info, INFO_WORLD_SIZE_PATHS));
         if (state.worldDetails) candidates.push(state.worldDetails.size);
+
+        let metadataSize = null;
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
           if (numeric != null && numeric > 0) {
-            state.estimatedWorldSize = null;
-            state.estimatedWorldSizeSource = null;
-            return numeric;
+            metadataSize = numeric;
+            break;
           }
         }
+
         const imageSize = Number(state.imageWorldSize);
-        if (Number.isFinite(imageSize) && imageSize > 0) {
+        const hasImageSize = Number.isFinite(imageSize) && imageSize > 0;
+        const preferImageForCustomMap = hasImageSize
+          && meta
+          && mapIsCustom(meta, info)
+          && hasMapImage(meta);
+        const metadataMatchesImage = hasImageSize && Number.isFinite(metadataSize)
+          ? Math.abs(metadataSize - imageSize) <= 5
+          : false;
+
+        if (preferImageForCustomMap) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          return imageSize;
+        }
+
+        if (hasImageSize && !metadataMatchesImage) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          return imageSize;
+        }
+
+        if (Number.isFinite(metadataSize) && metadataSize > 0) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          return metadataSize;
+        }
+
+        if (hasImageSize) {
           state.estimatedWorldSize = null;
           state.estimatedWorldSizeSource = null;
           return imageSize;
