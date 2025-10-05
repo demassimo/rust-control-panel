@@ -1195,9 +1195,24 @@
         const text = String(value).trim();
         if (!text) return null;
         const normalised = text.replace(/[_\s,]/g, '');
-        if (!normalised) return null;
-        const num = Number(normalised);
-        return Number.isFinite(num) ? num : null;
+        if (normalised) {
+          const direct = Number(normalised);
+          if (Number.isFinite(direct)) return direct;
+          const dimensionMatch = normalised.match(/^(-?\d+(?:\.\d+)?)[x×](-?\d+(?:\.\d+)?)/i);
+          if (dimensionMatch) {
+            const primary = Number(dimensionMatch[1]);
+            if (Number.isFinite(primary)) return primary;
+          }
+          const magnitudeMatch = normalised.match(/^(-?\d+(?:\.\d+)?)([kK])$/);
+          if (magnitudeMatch) {
+            const base = Number(magnitudeMatch[1]);
+            if (Number.isFinite(base)) return base * 1000;
+          }
+        }
+        const fallbackMatch = text.match(/-?\d+(?:\.\d+)?/);
+        if (!fallbackMatch) return null;
+        const numeric = Number(fallbackMatch[0]);
+        return Number.isFinite(numeric) ? numeric : null;
       }
 
       function worldDetailKey(size, seed) {
@@ -1369,16 +1384,45 @@
         if (meta) candidates.push(...collectValues(meta, META_WORLD_SIZE_PATHS));
         if (info) candidates.push(...collectValues(info, INFO_WORLD_SIZE_PATHS));
         if (state.worldDetails) candidates.push(state.worldDetails.size);
+
+        let metadataSize = null;
         for (const candidate of candidates) {
           const numeric = toNumber(candidate);
           if (numeric != null && numeric > 0) {
-            state.estimatedWorldSize = null;
-            state.estimatedWorldSizeSource = null;
-            return numeric;
+            metadataSize = numeric;
+            break;
           }
         }
+
         const imageSize = Number(state.imageWorldSize);
-        if (Number.isFinite(imageSize) && imageSize > 0) {
+        const hasImageSize = Number.isFinite(imageSize) && imageSize > 0;
+        const preferImageForCustomMap = hasImageSize
+          && meta
+          && mapIsCustom(meta, info)
+          && hasMapImage(meta);
+        const metadataMatchesImage = hasImageSize && Number.isFinite(metadataSize)
+          ? Math.abs(metadataSize - imageSize) <= 5
+          : false;
+
+        if (preferImageForCustomMap) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          return imageSize;
+        }
+
+        if (hasImageSize && !metadataMatchesImage) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          return imageSize;
+        }
+
+        if (Number.isFinite(metadataSize) && metadataSize > 0) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          return metadataSize;
+        }
+
+        if (hasImageSize) {
           state.estimatedWorldSize = null;
           state.estimatedWorldSizeSource = null;
           return imageSize;
