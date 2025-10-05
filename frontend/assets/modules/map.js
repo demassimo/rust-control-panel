@@ -416,6 +416,18 @@
 
       mapImage.addEventListener('load', () => {
         mapView.classList.add('map-view-has-image');
+        if (typeof console !== 'undefined' && typeof console.log === 'function') {
+          const canvasRect = mapCanvas && typeof mapCanvas.getBoundingClientRect === 'function'
+            ? mapCanvas.getBoundingClientRect()
+            : null;
+          console.log('[live-map] Map image loaded', {
+            source: mapImageSource ?? mapImage.currentSrc ?? mapImage.src ?? null,
+            naturalWidth: Number.isFinite(mapImage.naturalWidth) ? mapImage.naturalWidth : null,
+            naturalHeight: Number.isFinite(mapImage.naturalHeight) ? mapImage.naturalHeight : null,
+            renderedWidth: mapImage.clientWidth || canvasRect?.width || null,
+            renderedHeight: mapImage.clientHeight || canvasRect?.height || null
+          });
+        }
         updateImageWorldSize();
         resetMapTransform();
         renderPlayerSections();
@@ -1990,6 +2002,68 @@
         return true;
       }
 
+      function logMarkerDiagnostics() {
+        if (typeof console === 'undefined') return;
+        const logger = console;
+        const players = Array.isArray(state.players) ? state.players.length : 0;
+        const ready = mapReady();
+        const worldSize = resolveWorldSize();
+        const canvasRect = mapCanvas && typeof mapCanvas.getBoundingClientRect === 'function'
+          ? mapCanvas.getBoundingClientRect()
+          : null;
+        const overlayRect = overlay && typeof overlay.getBoundingClientRect === 'function'
+          ? overlay.getBoundingClientRect()
+          : null;
+        const meta = getActiveMapMeta();
+        const info = {
+          ready,
+          players,
+          worldSize: worldSize ?? null,
+          worldSizeSource: state.estimatedWorldSizeSource ?? (worldSize != null ? 'metadata' : null),
+          derivedWorldSize: Number.isFinite(state.imageWorldSize) ? state.imageWorldSize : null,
+          estimatedWorldSize: Number.isFinite(state.estimatedWorldSize) ? state.estimatedWorldSize : null,
+          canvas: canvasRect ? {
+            width: Math.round(canvasRect.width),
+            height: Math.round(canvasRect.height)
+          } : null,
+          overlay: overlayRect ? {
+            width: Math.round(overlayRect.width),
+            height: Math.round(overlayRect.height)
+          } : null,
+          image: mapImage ? {
+            source: mapImageSource ?? mapImage.currentSrc ?? mapImage.src ?? null,
+            naturalWidth: Number.isFinite(mapImage.naturalWidth) ? mapImage.naturalWidth : null,
+            naturalHeight: Number.isFinite(mapImage.naturalHeight) ? mapImage.naturalHeight : null,
+            clientWidth: mapImage.clientWidth ?? null,
+            clientHeight: mapImage.clientHeight ?? null
+          } : null,
+          interactions: {
+            scale: Number.isFinite(mapInteractions.scale) ? Number(mapInteractions.scale.toFixed(3)) : mapInteractions.scale,
+            offsetX: Math.round(mapInteractions.offsetX || 0),
+            offsetY: Math.round(mapInteractions.offsetY || 0)
+          },
+          metaSizeFields: meta ? {
+            size: meta.size ?? null,
+            worldSize: meta.worldSize ?? null,
+            WorldSize: meta.WorldSize ?? null
+          } : null
+        };
+        const groupLabel = `[live-map] Rendering player markers: ${players}`;
+        if (typeof logger.groupCollapsed === 'function') {
+          logger.groupCollapsed(groupLabel);
+          logger.log('diagnostics', info);
+          if (Array.isArray(state.players) && state.players.length) {
+            logger.log('sample players', state.players.slice(0, 3).map((player) => ({
+              id: resolveSteamId(player),
+              position: player?.position ?? null
+            })));
+          }
+          logger.groupEnd();
+        } else if (typeof logger.log === 'function') {
+          logger.log(groupLabel, info);
+        }
+      }
+
       function renderMarkersInViewport(viewport) {
         if (!viewport || !viewport.overlay) return;
         viewport.overlay.innerHTML = '';
@@ -2018,6 +2092,7 @@
       }
 
       function renderMarkers() {
+        logMarkerDiagnostics();
         for (const viewport of getActiveViewports()) {
           renderMarkersInViewport(viewport);
         }
