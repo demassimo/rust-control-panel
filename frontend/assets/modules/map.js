@@ -333,6 +333,9 @@
         mapMeta: null,
         mapMetaServerId: null,
         serverInfo: null,
+        imageWorldSize: null,
+        loggedWorldSize: null,
+        loggedWorldSizeSource: null,
         teamColors: new Map(),
         selectedTeam: null,
         selectedSolo: null,
@@ -346,6 +349,8 @@
         pendingRefresh: null,
         projectionMode: null,
         horizontalAxis: null,
+        estimatedWorldSize: null,
+        estimatedWorldSizeSource: null,
         customMapChecksFrozen: false,
         worldDetails: {
           seed: null,
@@ -413,12 +418,17 @@
 
       mapImage.addEventListener('load', () => {
         mapView.classList.add('map-view-has-image');
+        updateImageWorldSize();
         resetMapTransform();
-        updateMarkerPopups();
+        renderPlayerSections();
       });
 
       mapImage.addEventListener('error', () => {
         mapView.classList.remove('map-view-has-image');
+        state.imageWorldSize = null;
+        state.loggedWorldSize = null;
+        state.loggedWorldSizeSource = null;
+        renderPlayerSections();
       });
 
       const handleResize = () => {
@@ -867,7 +877,12 @@
         const info = state.serverInfo || {};
         const details = [];
         const size = resolveWorldSize();
-        if (size != null) details.push({ label: 'World size (m)', value: size });
+        if (size != null) {
+          const sizeLabel = state.estimatedWorldSizeSource
+            ? 'World size (m, estimated)'
+            : 'World size (m)';
+          details.push({ label: sizeLabel, value: size });
+        }
         const seed = resolveWorldSeed();
 
         if (seed != null) details.push({ label: 'Seed', value: seed });
@@ -1313,16 +1328,102 @@
         return values;
       }
 
-      function resolveWorldSize(metaOverride, infoOverride) {
+      function deriveWorldSizeFromImage() {
+        if (!mapImage) return null;
+        const width = Number(mapImage.naturalWidth);
+        const height = Number(mapImage.naturalHeight);
+        if (!Number.isFinite(width) || width <= 0) return null;
+        if (!Number.isFinite(height) || height <= 0) return null;
+        const roundedWidth = Math.round(width);
+        const roundedHeight = Math.round(height);
+        const tolerance = Math.abs(roundedWidth - roundedHeight);
+        const average = Math.round((roundedWidth + roundedHeight) / 2);
+        const resolved = tolerance <= 5 ? average : Math.max(roundedWidth, roundedHeight);
+        return Number.isFinite(resolved) && resolved > 0 ? resolved : null;
+      }
+
+      function recordWorldSizeSource(size, source) {
+        if (!Number.isFinite(size) || size <= 0) return;
+        const resolvedSource = source == null ? null : String(source);
+        const previousSize = Number(state.loggedWorldSize);
+        const previousSource = state.loggedWorldSizeSource || null;
+        if (previousSize === size && previousSource === resolvedSource) return;
+        state.loggedWorldSize = size;
+        state.loggedWorldSizeSource = resolvedSource;
+        try {
+          console.log(`[Live Map] World size set to ${size}${resolvedSource ? ` (source: ${resolvedSource})` : ''}`);
+        } catch (err) {
+          // Ignore logging failures (e.g. console unavailable)
+        }
+      }
+
+      function updateImageWorldSize() {
+        const next = deriveWorldSizeFromImage();
+        if (!Number.isFinite(next) || next <= 0) return;
+        if (state.imageWorldSize === next) return;
+        state.imageWorldSize = next;
+        state.estimatedWorldSize = null;
+        state.estimatedWorldSizeSource = null;
+        recordWorldSizeSource(next, 'image');
+        const width = Number.isFinite(mapImage?.naturalWidth) ? Math.round(mapImage.naturalWidth) : null;
+        const height = Number.isFinite(mapImage?.naturalHeight) ? Math.round(mapImage.naturalHeight) : null;
+        if (width != null && height != null) {
+          try {
+            console.log(`[Live Map] Map image dimensions detected: ${width}×${height}`);
+          } catch (err) {
+            // Ignore logging failures
+          }
+        }
+      }
+
+      function resolveWorldSize(metaOverride, infoOverride, options = {}) {
+        const allowEstimated = options && Object.prototype.hasOwnProperty.call(options, 'allowEstimated')
+          ? !!options.allowEstimated
+          : true;
         const meta = metaOverride ?? getActiveMapMeta();
         const info = infoOverride ?? state.serverInfo ?? {};
-        const candidates = [];
-        if (meta) candidates.push(...collectValues(meta, META_WORLD_SIZE_PATHS));
-        if (info) candidates.push(...collectValues(info, INFO_WORLD_SIZE_PATHS));
-        if (state.worldDetails) candidates.push(state.worldDetails.size);
-        for (const candidate of candidates) {
-          const numeric = toNumber(candidate);
-          if (numeric != null && numeric > 0) return numeric;
+        const sources = [];
+        if (meta) {
+          sources.push({ values: collectValues(meta, META_WORLD_SIZE_PATHS), source: 'map_metadata' });
+        }
+        if (info) {
+          sources.push({ values: collectValues(info, INFO_WORLD_SIZE_PATHS), source: 'server_info' });
+        }
+        if (state.worldDetails) {
+          sources.push({ values: [state.worldDetails.size], source: 'world_details' });
+        }
+        for (const entry of sources) {
+          if (!entry || !Array.isArray(entry.values)) continue;
+          for (const candidate of entry.values) {
+            const numeric = toNumber(candidate);
+            if (numeric != null && numeric > 0) {
+              state.estimatedWorldSize = null;
+              state.estimatedWorldSizeSource = null;
+              recordWorldSizeSource(numeric, entry.source);
+              return numeric;
+            }
+          }
+        }
+        const imageSize = Number(state.imageWorldSize);
+        if (Number.isFinite(imageSize) && imageSize > 0) {
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
+          recordWorldSizeSource(imageSize, 'image');
+          return imageSize;
+        }
+        if (!allowEstimated) return null;
+        const estimate = estimateWorldSizeFromPlayers();
+        if (Number.isFinite(estimate) && estimate > 0) {
+          const previous = Number(state.estimatedWorldSize);
+          const next = Number.isFinite(previous) && previous > estimate ? previous : estimate;
+          state.estimatedWorldSize = next;
+          state.estimatedWorldSizeSource = 'players';
+          recordWorldSizeSource(next, 'players');
+          return next;
+        }
+        if (Number.isFinite(state.estimatedWorldSize) && state.estimatedWorldSize > 0) {
+          recordWorldSizeSource(state.estimatedWorldSize, state.estimatedWorldSizeSource || 'players');
+          return state.estimatedWorldSize;
         }
         return null;
       }
@@ -1509,7 +1610,7 @@
         if (typeof ctx.runCommand !== 'function') return;
         if (state.customMapChecksFrozen) return;
         const activeMeta = getActiveMapMeta();
-        const needsSize = resolveWorldSize(activeMeta, state.serverInfo) == null;
+        const needsSize = resolveWorldSize(activeMeta, state.serverInfo, { allowEstimated: false }) == null;
         const needsSeed = resolveWorldSeed(activeMeta, state.serverInfo) == null;
         if (!needsSize && !needsSeed) return;
         const infoState = state.worldDetails;
@@ -1597,6 +1698,60 @@
           positions.push(sample);
         }
         return positions;
+      }
+
+      function estimateWorldSizeFromPlayers() {
+        const samples = collectPlayerPositions();
+        if (!Array.isArray(samples) || samples.length === 0) return null;
+        const axis = determineHorizontalAxis(samples);
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minOther = Infinity;
+        let maxOther = -Infinity;
+        let count = 0;
+
+        for (const sample of samples) {
+          const x = typeof sample.x === 'number' ? sample.x : null;
+          const other = axisValue(sample, axis);
+          if (!Number.isFinite(x) || !Number.isFinite(other)) continue;
+          count += 1;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (other < minOther) minOther = other;
+          if (other > maxOther) maxOther = other;
+        }
+
+        if (count < 2) return null;
+
+        const spanX = maxX - minX;
+        const spanOther = maxOther - minOther;
+        const spans = [spanX, spanOther].filter((value) => Number.isFinite(value) && value > 0);
+        const maxSpan = spans.length ? Math.max(...spans) : null;
+        const maxAbs = Math.max(
+          Math.abs(minX),
+          Math.abs(maxX),
+          Math.abs(minOther),
+          Math.abs(maxOther)
+        );
+
+        let estimate = null;
+        const zeroBased = minX >= 0 && minOther >= 0;
+        if (zeroBased) {
+          const maxCoord = Math.max(maxX, maxOther);
+          if (Number.isFinite(maxCoord) && maxCoord > 0) estimate = maxCoord;
+        }
+        if (!Number.isFinite(estimate) || estimate <= 0) {
+          if (Number.isFinite(maxAbs) && maxAbs > 0) estimate = maxAbs * 2;
+        }
+        if (!Number.isFinite(estimate) || estimate <= 0) {
+          if (Number.isFinite(maxSpan) && maxSpan > 0) estimate = maxSpan;
+        }
+        if (!Number.isFinite(estimate) || estimate <= 0) return null;
+
+        const buffered = estimate * 1.1;
+        const rounded = Math.round(buffered / 50) * 50;
+        const normalised = clamp(rounded, 100, 8000);
+        return normalised;
       }
 
       function axisValue(sample, axis) {
@@ -1753,6 +1908,9 @@
         mapImageLocked = false;
         mapImage.removeAttribute('src');
         mapView.classList.remove('map-view-has-image');
+        state.imageWorldSize = null;
+        state.loggedWorldSize = null;
+        state.loggedWorldSizeSource = null;
         resetMapTransform();
       }
 
@@ -2249,7 +2407,10 @@
           { label: 'Solo players', value: soloCount }
         ];
         const mapSize = resolveWorldSize();
-        if (mapSize) metaLines.push({ label: 'World size', value: mapSize });
+        if (mapSize) {
+          const sizeLabel = state.estimatedWorldSizeSource ? 'World size (estimated)' : 'World size';
+          metaLines.push({ label: sizeLabel, value: mapSize });
+        }
         const mapSeed = resolveWorldSeed();
         if (mapSeed) metaLines.push({ label: 'Seed', value: mapSeed });
         if (meta?.cachedAt) {
@@ -2726,7 +2887,7 @@
           } else {
             renderAll();
           }
-          const needsWorldSize = resolveWorldSize(activeMeta, state.serverInfo) == null;
+          const needsWorldSize = resolveWorldSize(activeMeta, state.serverInfo, { allowEstimated: false }) == null;
           const needsWorldSeed = resolveWorldSeed(activeMeta, state.serverInfo) == null;
           const shouldUpdateWorldDetails = !skipMapChecks && (needsWorldSize || needsWorldSeed);
           if (shouldUpdateWorldDetails) {
@@ -2790,6 +2951,11 @@
         state.lastUpdated = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
+        state.imageWorldSize = null;
+        state.loggedWorldSize = null;
+        state.loggedWorldSizeSource = null;
+        state.estimatedWorldSize = null;
+        state.estimatedWorldSizeSource = null;
         state.customMapChecksFrozen = customMapFreezeCache.has(serverId);
         if (state.worldDetails) {
           state.worldDetails.seed = null;
@@ -2841,6 +3007,11 @@
           state.status = null;
           state.projectionMode = null;
           state.horizontalAxis = null;
+          state.imageWorldSize = null;
+          state.loggedWorldSize = null;
+          state.loggedWorldSizeSource = null;
+          state.estimatedWorldSize = null;
+          state.estimatedWorldSizeSource = null;
           state.customMapChecksFrozen = false;
           if (state.worldDetails) {
             state.worldDetails.seed = null;
@@ -2885,6 +3056,11 @@
         state.status = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
+        state.imageWorldSize = null;
+        state.loggedWorldSize = null;
+        state.loggedWorldSizeSource = null;
+        state.estimatedWorldSize = null;
+        state.estimatedWorldSizeSource = null;
         state.customMapChecksFrozen = false;
         if (state.worldDetails) {
           state.worldDetails.seed = null;
