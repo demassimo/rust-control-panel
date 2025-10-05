@@ -12,6 +12,7 @@ function createApi(pool, dialect) {
     const [rows] = await pool.query(sql, params);
     return rows;
   }
+  const escapeLike = (value) => String(value).replace(/[\\%_]/g, (match) => `\\${match}`);
   return {
     dialect,
     async init() {
@@ -318,7 +319,57 @@ function createApi(pool, dialect) {
     },
     async getPlayer(steamid){ const r = await exec('SELECT * FROM players WHERE steamid=?',[steamid]); return r[0]||null; },
     async getPlayersBySteamIds(steamids=[]){ if (!Array.isArray(steamids) || steamids.length === 0) return []; const placeholders = steamids.map(()=>'?' ).join(','); return await exec(`SELECT * FROM players WHERE steamid IN (${placeholders})`, steamids); },
-    async listPlayers({limit=100,offset=0}={}){ return await exec('SELECT * FROM players ORDER BY updated_at DESC LIMIT ? OFFSET ?',[limit,offset]); },
+    async listPlayers({ limit = 100, offset = 0, search = '' } = {}) {
+      let sql = `
+        SELECT *
+        FROM players
+      `;
+      const params = [];
+      const term = typeof search === 'string' ? search.trim() : '';
+      if (term) {
+        const likeTerm = `%${escapeLike(term)}%`;
+        sql += `
+        WHERE steamid = ?
+          OR steamid LIKE ? ESCAPE '\\'
+          OR persona LIKE ? ESCAPE '\\'
+          OR profileurl LIKE ? ESCAPE '\\'
+          OR country LIKE ? ESCAPE '\\'
+        `;
+        params.push(term, likeTerm, likeTerm, likeTerm, likeTerm);
+      }
+      sql += '
+        ORDER BY updated_at DESC
+      ';
+      const limitNum = Number(limit);
+      const offsetNum = Number(offset);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        const safeLimit = Math.floor(limitNum);
+        const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
+        sql += ' LIMIT ? OFFSET ?';
+        params.push(safeLimit, safeOffset);
+      } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
+        sql += ' LIMIT 18446744073709551615 OFFSET ?';
+        params.push(Math.floor(offsetNum));
+      }
+      return await exec(sql, params);
+    },
+    async countPlayers({ search = '' } = {}) {
+      let sql = 'SELECT COUNT(*) as total FROM players';
+      const params = [];
+      const term = typeof search === 'string' ? search.trim() : '';
+      if (term) {
+        const likeTerm = `%${escapeLike(term)}%`;
+        sql += ` WHERE steamid = ?
+          OR steamid LIKE ? ESCAPE '\\'
+          OR persona LIKE ? ESCAPE '\\'
+          OR profileurl LIKE ? ESCAPE '\\'
+          OR country LIKE ? ESCAPE '\\'`;
+        params.push(term, likeTerm, likeTerm, likeTerm, likeTerm);
+      }
+      const rows = await exec(sql, params);
+      const total = Array.isArray(rows) && rows.length ? Number(rows[0].total) : 0;
+      return Number.isFinite(total) && total >= 0 ? total : 0;
+    },
     async recordServerPlayer({ server_id, steamid, display_name=null, seen_at=null, ip=null, port=null }){
       const serverIdNum = Number(server_id);
       if (!Number.isFinite(serverIdNum)) return;
@@ -464,10 +515,12 @@ function createApi(pool, dialect) {
 
       return await exec(sql, params);
     },
-    async listServerPlayers(serverId,{limit=100,offset=0}={}){
+    async listServerPlayers(serverId, { limit = 100, offset = 0, search = '' } = {}) {
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];
-      return await exec(`
+      const limitNum = Number(limit);
+      const offsetNum = Number(offset);
+      let sql = `
         SELECT sp.server_id, sp.steamid, sp.display_name, sp.forced_display_name, sp.first_seen, sp.last_seen,
                 sp.last_ip, sp.last_port, sp.total_playtime_seconds,
                 p.persona, p.avatar, p.country, p.profileurl, p.vac_banned, p.game_bans,
@@ -475,16 +528,45 @@ function createApi(pool, dialect) {
         FROM server_players sp
         LEFT JOIN players p ON p.steamid = sp.steamid
         WHERE sp.server_id=?
+      `;
+      const params = [serverIdNum];
+      const term = typeof search === 'string' ? search.trim() : '';
+      if (term) {
+        const likeTerm = `%${escapeLike(term)}%`;
+        sql += `
+        AND (
+          sp.steamid = ?
+          OR sp.steamid LIKE ? ESCAPE '\\'
+          OR sp.display_name LIKE ? ESCAPE '\\'
+          OR sp.forced_display_name LIKE ? ESCAPE '\\'
+          OR sp.last_ip LIKE ? ESCAPE '\\'
+          OR CAST(sp.last_port AS CHAR) LIKE ? ESCAPE '\\'
+          OR p.persona LIKE ? ESCAPE '\\'
+          OR p.profileurl LIKE ? ESCAPE '\\'
+          OR p.country LIKE ? ESCAPE '\\'
+        )
+      `;
+        params.push(term, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm);
+      }
+      sql += '
         ORDER BY sp.last_seen DESC
-        LIMIT ? OFFSET ?
-      `,[serverIdNum,limit,offset]);
+      ';
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        const safeLimit = Math.floor(limitNum);
+        const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
+        sql += ' LIMIT ? OFFSET ?';
+        params.push(safeLimit, safeOffset);
+      } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
+        sql += ' LIMIT 18446744073709551615 OFFSET ?';
+        params.push(Math.floor(offsetNum));
+      }
+      return await exec(sql, params);
     },
     async searchServerPlayers(serverId, query, { limit = 10 } = {}){
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];
       const term = typeof query === 'string' ? query.trim() : '';
       if (!term) return [];
-      const escapeLike = (value) => String(value).replace(/[\\%_]/g, (m) => `\\${m}`);
       const likeTerm = `%${escapeLike(term)}%`;
       const limitValue = Number(limit);
       const limitNum = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(Math.floor(limitValue), 25) : 10;
@@ -498,13 +580,48 @@ function createApi(pool, dialect) {
         WHERE sp.server_id=?
           AND (
             sp.steamid = ? OR
+            sp.steamid LIKE ? ESCAPE '\\' OR
             sp.display_name LIKE ? ESCAPE '\\' OR
             sp.forced_display_name LIKE ? ESCAPE '\\' OR
-            p.persona LIKE ? ESCAPE '\\'
+            sp.last_ip LIKE ? ESCAPE '\\' OR
+            CAST(sp.last_port AS CHAR) LIKE ? ESCAPE '\\' OR
+            p.persona LIKE ? ESCAPE '\\' OR
+            p.profileurl LIKE ? ESCAPE '\\' OR
+            p.country LIKE ? ESCAPE '\\'
           )
         ORDER BY sp.last_seen DESC
         LIMIT ?
-      `,[serverIdNum, term, likeTerm, likeTerm, likeTerm, limitNum]);
+      `,[serverIdNum, term, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, limitNum]);
+    },
+    async countServerPlayers(serverId, { search = '' } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return 0;
+      let sql = `
+        SELECT COUNT(*) as total
+        FROM server_players sp
+        LEFT JOIN players p ON p.steamid = sp.steamid
+        WHERE sp.server_id=?
+      `;
+      const params = [serverIdNum];
+      const term = typeof search === 'string' ? search.trim() : '';
+      if (term) {
+        const likeTerm = `%${escapeLike(term)}%`;
+        sql += ` AND (
+          sp.steamid = ?
+          OR sp.steamid LIKE ? ESCAPE '\\'
+          OR sp.display_name LIKE ? ESCAPE '\\'
+          OR sp.forced_display_name LIKE ? ESCAPE '\\'
+          OR sp.last_ip LIKE ? ESCAPE '\\'
+          OR CAST(sp.last_port AS CHAR) LIKE ? ESCAPE '\\'
+          OR p.persona LIKE ? ESCAPE '\\'
+          OR p.profileurl LIKE ? ESCAPE '\\'
+          OR p.country LIKE ? ESCAPE '\\'
+        )`;
+        params.push(term, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm, likeTerm);
+      }
+      const rows = await exec(sql, params);
+      const total = Array.isArray(rows) && rows.length ? Number(rows[0].total) : 0;
+      return Number.isFinite(total) && total >= 0 ? total : 0;
     },
     async getServerPlayer(serverId, steamid){
       const serverIdNum = Number(serverId);
