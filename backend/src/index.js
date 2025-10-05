@@ -926,12 +926,123 @@ function parseLegacyPlayerList(message) {
   const numericPattern = /^-?\d+(?:\.\d+)?$/;
   const lines = message.split(/\r?\n/);
 
+  const parseKeyValueLine = (text) => {
+    if (!text || typeof text !== 'string') return null;
+    const pairPattern = /([A-Za-z0-9_][A-Za-z0-9_\s]*)\s*[:=]\s*/g;
+    let match;
+    let lastKey = null;
+    let lastIndex = 0;
+    const original = {};
+    const normalized = {};
+
+    while ((match = pairPattern.exec(text)) !== null) {
+      if (lastKey !== null) {
+        const rawValue = text.slice(lastIndex, match.index);
+        const cleaned = rawValue.replace(/^[,;\s]+/, '').replace(/[,;\s]+$/, '');
+        if (cleaned) {
+          const trimmedKey = lastKey.trim();
+          if (trimmedKey) {
+            let value = cleaned.trim();
+            if (value && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+              value = value.slice(1, -1);
+            }
+            const normalizedKey = trimmedKey.replace(/[\s_-]+/g, '').toLowerCase();
+            original[trimmedKey] = value;
+            normalized[normalizedKey] = value;
+          }
+        }
+      }
+      lastKey = match[1];
+      lastIndex = pairPattern.lastIndex;
+    }
+
+    if (lastKey !== null) {
+      const rawValue = text.slice(lastIndex);
+      const cleaned = rawValue.replace(/^[,;\s]+/, '').replace(/[,;\s]+$/, '');
+      if (cleaned) {
+        const trimmedKey = lastKey.trim();
+        if (trimmedKey) {
+          let value = cleaned.trim();
+          if (value && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+            value = value.slice(1, -1);
+          }
+          const normalizedKey = trimmedKey.replace(/[\s_-]+/g, '').toLowerCase();
+          original[trimmedKey] = value;
+          normalized[normalizedKey] = value;
+        }
+      }
+    }
+
+    if (!normalized.steamid || !STEAM_ID_REGEX.test(String(normalized.steamid).trim())) {
+      return null;
+    }
+
+    return { original, normalized };
+  };
+
   for (const rawLine of lines) {
     const line = rawLine.replace(/\u0000/g, '').trim();
     if (!line) continue;
     if (/^id\b/i.test(line)) continue;
     if (/^players?\b/i.test(line)) continue;
     if (!/\d{17}/.test(line)) continue;
+
+    const keyValue = parseKeyValueLine(line);
+    if (keyValue) {
+      const data = keyValue.normalized;
+      const original = keyValue.original;
+      const steamId = String(data.steamid || '').trim();
+      if (!STEAM_ID_REGEX.test(steamId)) continue;
+
+      const ownerCandidate = String(data.ownersteamid || data.ownerid || '').trim();
+      const ownerSteamId = STEAM_ID_REGEX.test(ownerCandidate) ? ownerCandidate : null;
+      const displayName = (
+        original.DisplayName
+        ?? original.displayname
+        ?? data.displayname
+        ?? steamId
+      );
+      const ping = Number(data.ping ?? data.networkping ?? 0) || 0;
+      const address = original.Address || data.address || '';
+      const connectedSeconds = Number(
+        data.connectedseconds
+        ?? data.connectedtime
+        ?? data.connectiontime
+        ?? 0
+      ) || 0;
+      const violationLevel = Number(
+        data.violationlevel
+        ?? data.voiationlevel
+        ?? data.violations
+        ?? 0
+      ) || 0;
+      const health = Number(data.health ?? 0) || 0;
+      const teamCandidate = Number(data.teamid ?? data.team ?? 0);
+      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0 ? teamCandidate : 0;
+      const positionSource = (
+        original.Position
+        ?? original.position
+        ?? data.position
+        ?? data.pos
+        ?? null
+      );
+      const position = parseVector3(positionSource);
+
+      players.push({
+        steamId,
+        ownerSteamId,
+        displayName,
+        ping,
+        address,
+        connectedSeconds,
+        violationLevel,
+        health,
+        position,
+        teamId,
+        networkId: null
+      });
+      continue;
+    }
 
     let remaining = line;
     let position = null;
