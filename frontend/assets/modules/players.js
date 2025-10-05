@@ -10,7 +10,7 @@
       const sharedSearchKey = '__playerSearchQuery';
       const sharedLimitKey = '__playerDirectoryLimit';
       const limitStorageKey = 'playersDirectoryLimit';
-      const defaultLimitRaw = 'unlimited';
+      const defaultLimitRaw = '200';
       const limitOptions = [
         { value: '50', label: '50' },
         { value: '100', label: '100' },
@@ -64,6 +64,30 @@
       message.textContent = 'Sign in to view player directory.';
       ctx.body?.appendChild(list);
       ctx.body?.appendChild(message);
+
+      const pagination = document.createElement('div');
+      pagination.className = 'module-pagination hidden';
+      const prevButton = document.createElement('button');
+      prevButton.type = 'button';
+      prevButton.className = 'btn ghost small';
+      prevButton.textContent = 'Previous';
+      prevButton.setAttribute('aria-label', 'Load previous players');
+      const pageIndicator = document.createElement('span');
+      pageIndicator.className = 'module-pagination-info muted small';
+      pageIndicator.textContent = 'Page 1';
+      const nextButton = document.createElement('button');
+      nextButton.type = 'button';
+      nextButton.className = 'btn ghost small';
+      nextButton.textContent = 'Next';
+      nextButton.setAttribute('aria-label', 'Load more players');
+      pagination.appendChild(prevButton);
+      pagination.appendChild(pageIndicator);
+      pagination.appendChild(nextButton);
+      ctx.body?.appendChild(pagination);
+      const onPrevPage = () => goToPage(state.page - 1);
+      const onNextPage = () => goToPage(state.page + 1);
+      prevButton.addEventListener('click', onPrevPage);
+      nextButton.addEventListener('click', onNextPage);
 
       const initialLimitRaw = readSharedLimit();
       let searchInput = null;
@@ -220,6 +244,12 @@
         directoryCount.textContent = parts.length ? `(${parts.join('/')})` : '(—)';
       }
 
+      function safeCount(value, fallback = 0) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+        return Math.floor(numeric);
+      }
+
       const modalState = {
         open: false,
         steamid: null,
@@ -231,8 +261,46 @@
 
       const modal = createPlayerModal();
 
-      function render(players) {
-        state.players = Array.isArray(players) ? players : [];
+      function render(payload) {
+        let items = [];
+        let filteredCount = 0;
+        let totalCount = 0;
+        let offset = 0;
+        let appliedQuery = '';
+        let pageFromResponse = null;
+        let hasMore = false;
+        if (Array.isArray(payload)) {
+          items = payload;
+          filteredCount = items.length;
+          totalCount = items.length;
+        } else if (payload && typeof payload === 'object') {
+          items = Array.isArray(payload.items) ? payload.items : [];
+          filteredCount = safeCount(payload.filtered, items.length);
+          totalCount = safeCount(payload.total, filteredCount);
+          offset = safeCount(payload.offset, state.limit ? state.page * state.limit : 0);
+          appliedQuery = typeof payload.query === 'string' ? payload.query.trim() : '';
+          if (payload.hasMore != null) hasMore = Boolean(payload.hasMore);
+          if (payload.page != null) {
+            const numericPage = Number(payload.page);
+            if (Number.isFinite(numericPage) && numericPage >= 0) {
+              pageFromResponse = Math.floor(numericPage);
+            }
+          }
+        }
+        state.players = items;
+        state.filteredCount = filteredCount;
+        state.totalCount = totalCount;
+        state.offset = offset;
+        state.serverSearch = appliedQuery;
+        state.hasMore = hasMore;
+        if (state.limit == null || !Number.isFinite(state.limit) || state.limit <= 0) {
+          state.page = 0;
+        } else if (pageFromResponse != null) {
+          state.page = pageFromResponse;
+        } else {
+          state.page = Math.floor(offset / state.limit);
+        }
+        state.viewCounts = { displayed: items.length, filtered: filteredCount, total: totalCount };
         state.mode = 'ready';
         window.dispatchEvent?.(new CustomEvent('players:list', { detail: { players: state.players } }));
         renderList();
@@ -249,19 +317,37 @@
       }
 
       function renderList() {
-        if (state.mode !== 'ready') return;
         list.innerHTML = '';
-        const total = state.players.length;
-        const filtered = getFilteredPlayers();
-        const limit = state.limit;
-        const visible = limit == null ? filtered : filtered.slice(0, limit);
-        updateCount(visible.length, filtered.length, total);
-        if (total === 0) {
-          setMessage('No tracked players for this server yet. Import Steam profiles or let players connect to populate this list.');
+        if (state.mode !== 'ready') {
+          updateCount(null, null, null);
+          renderPagination();
           return;
         }
-        if (filtered.length === 0) {
+        const players = Array.isArray(state.players) ? [...state.players] : [];
+        const trimmedSearch = (state.searchRaw || '').trim();
+        const appliedSearch = (state.serverSearch || '').trim();
+        let visible = players;
+        let filteredCount = safeCount(state.filteredCount, players.length);
+        if (trimmedSearch && trimmedSearch !== appliedSearch) {
+          visible = getFilteredPlayers();
+          filteredCount = visible.length;
+        }
+        const totalCount = safeCount(state.totalCount, filteredCount);
+        state.viewCounts = { displayed: visible.length, filtered: filteredCount, total: totalCount };
+        updateCount(visible.length, filteredCount, totalCount);
+        if (totalCount === 0) {
+          setMessage('No tracked players for this server yet. Import Steam profiles or let players connect to populate this list.');
+          renderPagination();
+          return;
+        }
+        if (filteredCount === 0) {
           setMessage('No players match your search.');
+          renderPagination();
+          return;
+        }
+        if (visible.length === 0) {
+          setMessage('No players on this page yet.');
+          renderPagination();
           return;
         }
         clearMessage();
@@ -367,6 +453,57 @@
           });
           list.appendChild(li);
         }
+        renderPagination();
+      }
+
+      function renderPagination() {
+        if (!pagination) return;
+        if (state.mode !== 'ready') {
+          pagination.classList.add('hidden');
+          return;
+        }
+        const limit = state.limit;
+        if (limit == null || !Number.isFinite(limit) || limit <= 0) {
+          pagination.classList.add('hidden');
+          return;
+        }
+        const view = state.viewCounts || {};
+        const filteredCount = safeCount(view.filtered, safeCount(state.filteredCount, state.players.length));
+        if (filteredCount <= limit && state.page === 0) {
+          pagination.classList.add('hidden');
+          return;
+        }
+        const totalPages = Math.max(1, Math.ceil(filteredCount / limit));
+        const currentPage = Math.min(totalPages, Math.max(1, state.page + 1));
+        prevButton.disabled = currentPage <= 1;
+        nextButton.disabled = currentPage >= totalPages;
+        pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
+        pagination.classList.remove('hidden');
+      }
+
+      function getMaxPage() {
+        const limit = state.limit;
+        if (limit == null || !Number.isFinite(limit) || limit <= 0) return 0;
+        const filteredCount = safeCount(state.viewCounts.filtered, safeCount(state.filteredCount, state.players.length));
+        if (filteredCount <= 0) return 0;
+        return Math.max(0, Math.ceil(filteredCount / limit) - 1);
+      }
+
+      function goToPage(targetPage) {
+        const limit = state.limit;
+        if (limit == null || !Number.isFinite(limit) || limit <= 0) return;
+        const maxPage = getMaxPage();
+        const clamped = Math.max(0, Math.min(targetPage, maxPage));
+        if (clamped === state.page) return;
+        if (state.isLoading) {
+          state.page = clamped;
+          state.offset = clamped * Math.floor(limit);
+          queuedRefresh = { reason: 'page-change', serverId: state.serverId };
+          return;
+        }
+        state.page = clamped;
+        state.offset = clamped * Math.floor(limit);
+        refresh('page-change');
       }
 
       function matchesQuery(player, query) {
@@ -401,17 +538,29 @@
         search: '',
         limitRaw: initialLimitRaw,
         limit: parseLimit(initialLimitRaw),
-        mode: 'idle'
+        mode: 'idle',
+        page: 0,
+        offset: 0,
+        totalCount: 0,
+        filteredCount: 0,
+        serverSearch: '',
+        hasMore: false,
+        viewCounts: { displayed: 0, filtered: 0, total: 0 }
       };
+      let queuedRefresh = null;
 
       function setSearch(value, { skipBroadcast = false } = {}) {
         const raw = typeof value === 'string' ? value : '';
         if (state.searchRaw === raw) return;
         state.searchRaw = raw;
         state.search = normalizeQuery(raw);
+        state.page = 0;
+        state.offset = 0;
+        state.serverSearch = '';
         if (searchInput && searchInput.value !== raw) searchInput.value = raw;
         if (!skipBroadcast) broadcastSearch(raw);
         if (state.mode === 'ready') renderList();
+        if (state.mode === 'ready' || state.mode === 'error') refresh('search-change');
       }
 
       const initialSearch = readSharedQuery();
@@ -431,8 +580,11 @@
           if (state.limitRaw === normalized) return;
           state.limitRaw = normalized;
           state.limit = parseLimit(normalized);
+          state.page = 0;
+          state.offset = 0;
           writeSharedLimit(normalized);
           if (state.mode === 'ready') renderList();
+          refresh('limit-change');
         });
       }
 
@@ -478,14 +630,25 @@
       }
 
       async function refresh(reason, serverIdOverride){
-        if (state.isLoading) return;
+        if (state.isLoading) {
+          queuedRefresh = { reason, serverId: serverIdOverride };
+          return;
+        }
         const globalState = ctx.getState?.();
         if (!globalState?.currentUser) {
           list.innerHTML = '';
           setMessage('Sign in to view player directory.');
+          state.serverId = null;
           state.players = [];
           state.mode = 'idle';
+          state.page = 0;
+          state.offset = 0;
+          state.totalCount = 0;
+          state.filteredCount = 0;
+          state.viewCounts = { displayed: 0, filtered: 0, total: 0 };
           updateCount(null, null, null);
+          renderPagination();
+          queuedRefresh = null;
           return;
         }
         const serverId = Number(serverIdOverride ?? state.serverId ?? globalState.currentServerId);
@@ -495,30 +658,72 @@
           setMessage('Select a server to view player directory.');
           state.players = [];
           state.mode = 'idle';
+          state.page = 0;
+          state.offset = 0;
+          state.totalCount = 0;
+          state.filteredCount = 0;
+          state.viewCounts = { displayed: 0, filtered: 0, total: 0 };
           updateCount(null, null, null);
+          renderPagination();
+          queuedRefresh = null;
           return;
         }
+        if (state.serverId !== serverId) {
+          state.page = 0;
+          state.offset = 0;
+        }
         state.serverId = serverId;
+        const limitValue = Number.isFinite(state.limit) && state.limit > 0 ? Math.floor(state.limit) : null;
+        if (limitValue == null) {
+          state.page = 0;
+          state.offset = 0;
+        } else {
+          state.offset = Math.max(0, state.page * limitValue);
+        }
+        const offsetValue = state.offset;
+        const queryParts = [];
+        if (limitValue == null) {
+          queryParts.push(['limit', 'unlimited']);
+        } else {
+          queryParts.push(['limit', String(limitValue)]);
+          if (offsetValue > 0) {
+            queryParts.push(['offset', String(offsetValue)]);
+          }
+        }
+        const searchRaw = (state.searchRaw || '').trim();
+        if (searchRaw) {
+          queryParts.push(['q', searchRaw]);
+        }
         state.isLoading = true;
         state.mode = 'loading';
+        queuedRefresh = null;
         setMessage('Loading players…');
         updateCount(null, null, null);
+        renderPagination();
         try {
-          const players = await ctx.api(`/servers/${serverId}/players?limit=200`);
-          render(players);
+          const query = queryParts.length
+            ? `?${queryParts.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&')}`
+            : '';
+          const payload = await ctx.api(`/servers/${serverId}/players${query}`);
+          render(payload);
         } catch (err) {
           if (ctx.errorCode?.(err) === 'unauthorized') {
             ctx.handleUnauthorized?.();
+            renderPagination();
           } else {
             setMessage('Unable to load players: ' + (ctx.describeError?.(err) || err?.message || 'Unknown error'));
             ctx.log?.('Players module error: ' + (err?.message || err));
-            if (!state.players.length) {
-              state.mode = 'error';
-              updateCount(null, null, null);
-            }
+            state.mode = 'error';
+            updateCount(null, null, null);
+            renderPagination();
           }
         } finally {
           state.isLoading = false;
+          if (queuedRefresh) {
+            const next = queuedRefresh;
+            queuedRefresh = null;
+            refresh(next.reason || 'queued', next.serverId);
+          }
         }
       }
 
@@ -1194,7 +1399,6 @@
 
       const offLogin = ctx.on?.('auth:login', () => refresh('login'));
       const offServerConnect = ctx.on?.('server:connected', ({ serverId }) => {
-        state.serverId = Number(serverId);
         refresh('server-connect', serverId);
       });
       const offServerDisconnect = ctx.on?.('server:disconnected', ({ serverId }) => {
@@ -1205,6 +1409,13 @@
           state.players = [];
           state.mode = 'idle';
           updateCount(null, null, null);
+          state.page = 0;
+          state.offset = 0;
+          state.totalCount = 0;
+          state.filteredCount = 0;
+          state.serverSearch = '';
+          state.viewCounts = { displayed: 0, filtered: 0, total: 0 };
+          renderPagination();
         }
       });
       const offRefresh = ctx.on?.('players:refresh', (payload) => {
@@ -1218,6 +1429,13 @@
         state.players = [];
         state.mode = 'idle';
         updateCount(null, null, null);
+        state.page = 0;
+        state.offset = 0;
+        state.totalCount = 0;
+        state.filteredCount = 0;
+        state.serverSearch = '';
+        state.viewCounts = { displayed: 0, filtered: 0, total: 0 };
+        renderPagination();
       });
 
       ctx.onCleanup?.(() => offLogin?.());
@@ -1231,6 +1449,10 @@
         if (searchListener) window.removeEventListener('players:search', searchListener);
         if (externalOpenListener) window.removeEventListener('players:open-profile', externalOpenListener);
         if (externalCloseListener) window.removeEventListener('players:close-profile', externalCloseListener);
+      });
+      ctx.onCleanup?.(() => {
+        prevButton.removeEventListener('click', onPrevPage);
+        nextButton.removeEventListener('click', onNextPage);
       });
 
       // Initial state when module mounts

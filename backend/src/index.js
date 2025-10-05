@@ -382,6 +382,9 @@ const MAX_PLAYER_HISTORY_RANGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MIN_PLAYER_HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_PLAYER_HISTORY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PLAYER_HISTORY_MAX_BUCKETS = 2000;
+const PLAYER_LIST_DEFAULT_LIMIT = 200;
+const PLAYER_LIST_MAX_LIMIT = 1000;
+const PLAYER_LIMIT_UNLIMITED_TOKENS = new Set(['unlimited', 'all', '*', 'infinite', 'infinity', 'none']);
 
 const DEFAULT_RANGE_INTERVALS = [
   { maxRange: 6 * 60 * 60 * 1000, interval: 15 * 60 * 1000 },
@@ -396,6 +399,36 @@ function clamp(value, min, max) {
   if (value < min) return min;
   if (value > max) return max;
   return value;
+}
+
+function parsePlayerQueryLimit(value, { defaultLimit = PLAYER_LIST_DEFAULT_LIMIT, maxLimit = PLAYER_LIST_MAX_LIMIT } = {}) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  if (rawValue == null) return defaultLimit;
+  const str = String(rawValue).trim();
+  if (!str) return defaultLimit;
+  const lower = str.toLowerCase();
+  if (PLAYER_LIMIT_UNLIMITED_TOKENS.has(lower)) return null;
+  const numeric = Number(str);
+  if (!Number.isFinite(numeric) || numeric <= 0) return defaultLimit;
+  const integer = Math.floor(numeric);
+  if (!Number.isFinite(maxLimit) || maxLimit <= 0) return integer;
+  return Math.min(integer, Math.floor(maxLimit));
+}
+
+function parsePlayerQueryOffset(value) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  const parsed = parseInt(rawValue ?? '0', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed);
+}
+
+function parsePlayerQuerySearch(value, { maxLength = 200 } = {}) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  if (rawValue == null) return '';
+  const str = String(rawValue).trim();
+  if (!str) return '';
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return str;
+  return str.slice(0, Math.floor(maxLength));
 }
 
 function parseDurationMs(value, fallback) {
@@ -3518,12 +3551,39 @@ app.post('/api/rcon/:id', auth, async (req, res) => {
 
 // --- Players & Steam sync
 app.get('/api/players', auth, async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
-  const offset = parseInt(req.query.offset || '0', 10);
+  const limit = parsePlayerQueryLimit(req.query.limit);
+  const offset = limit == null ? 0 : parsePlayerQueryOffset(req.query.offset);
+  const search = parsePlayerQuerySearch(req.query.q ?? req.query.query ?? req.query.search);
   try {
-    const rows = await db.listPlayers({ limit, offset });
-    res.json(rows);
-  } catch {
+    const listPromise = db.listPlayers({ limit, offset, search });
+    const canCount = typeof db.countPlayers === 'function';
+    const filteredCountPromise = canCount ? db.countPlayers({ search }) : Promise.resolve(null);
+    const totalCountPromise = canCount && search ? db.countPlayers({ search: '' }) : Promise.resolve(null);
+    const [rows, filteredRaw, totalRaw] = await Promise.all([listPromise, filteredCountPromise, totalCountPromise]);
+    const toCount = (value, fallback = 0) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+      return Math.floor(numeric);
+    };
+    const filteredCount = toCount(filteredRaw, Array.isArray(rows) ? rows.length : 0);
+    const totalCount = totalRaw != null ? toCount(totalRaw, filteredCount) : filteredCount;
+    const effectiveLimit = limit == null ? null : Math.floor(limit);
+    const page = effectiveLimit && effectiveLimit > 0 ? Math.floor(offset / effectiveLimit) : 0;
+    const hasMore = effectiveLimit && effectiveLimit > 0
+      ? offset + (Array.isArray(rows) ? rows.length : 0) < filteredCount
+      : false;
+    res.json({
+      items: rows,
+      total: totalCount,
+      filtered: filteredCount,
+      limit: effectiveLimit,
+      offset,
+      page,
+      hasMore,
+      query: search
+    });
+  } catch (err) {
+    console.error('listPlayers failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
@@ -3531,12 +3591,40 @@ app.get('/api/players', auth, async (req, res) => {
 app.get('/api/servers/:id/players', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'players');
   if (id == null) return;
-  const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
-  const offset = parseInt(req.query.offset || '0', 10);
+  const limit = parsePlayerQueryLimit(req.query.limit);
+  const offset = limit == null ? 0 : parsePlayerQueryOffset(req.query.offset);
+  const search = parsePlayerQuerySearch(req.query.q ?? req.query.query ?? req.query.search);
   try {
-    const rows = await db.listServerPlayers(id, { limit, offset });
-    const payload = rows.map((row) => normaliseServerPlayer(row)).filter(Boolean);
-    res.json(payload);
+    const listPromise = db.listServerPlayers(id, { limit, offset, search });
+    const canCount = typeof db.countServerPlayers === 'function';
+    const filteredCountPromise = canCount ? db.countServerPlayers(id, { search }) : Promise.resolve(null);
+    const totalCountPromise = canCount && search ? db.countServerPlayers(id, { search: '' }) : Promise.resolve(null);
+    const [rows, filteredRaw, totalRaw] = await Promise.all([listPromise, filteredCountPromise, totalCountPromise]);
+    const toCount = (value, fallback = 0) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+      return Math.floor(numeric);
+    };
+    const filteredCount = toCount(filteredRaw, Array.isArray(rows) ? rows.length : 0);
+    const totalCount = totalRaw != null ? toCount(totalRaw, filteredCount) : filteredCount;
+    const payload = (Array.isArray(rows) ? rows : [])
+      .map((row) => normaliseServerPlayer(row))
+      .filter(Boolean);
+    const effectiveLimit = limit == null ? null : Math.floor(limit);
+    const page = effectiveLimit && effectiveLimit > 0 ? Math.floor(offset / effectiveLimit) : 0;
+    const hasMore = effectiveLimit && effectiveLimit > 0
+      ? offset + payload.length < filteredCount
+      : false;
+    res.json({
+      items: payload,
+      total: totalCount,
+      filtered: filteredCount,
+      limit: effectiveLimit,
+      offset,
+      page,
+      hasMore,
+      query: search
+    });
   } catch (err) {
     console.error('listServerPlayers failed', err);
     res.status(500).json({ error: 'db_error' });
