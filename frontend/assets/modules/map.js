@@ -452,7 +452,9 @@
       layout.appendChild(mapView);
       layout.appendChild(sidebar);
 
-      scheduleViewportSizeUpdate({ immediate: true });
+      const viewportSizeCache = new WeakMap();
+      let viewportSizeUpdateHandle = null;
+      let viewportSizeUpdateScheduled = false;
 
       const parentView = ctx.root?.closest?.('[data-view]');
       let visibilityObserver = null;
@@ -524,9 +526,6 @@
       const MAP_SIZE_MIN = 260;
       const MAP_SIZE_MAX = 720;
       const MAP_SIZE_VERTICAL_MARGIN = 180;
-      const viewportSizeCache = new WeakMap();
-      let viewportSizeUpdateHandle = null;
-      let viewportSizeUpdateScheduled = false;
       const scheduleViewportAnimationFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
         ? window.requestAnimationFrame.bind(window)
         : (fn) => setTimeout(fn, 16);
@@ -563,6 +562,8 @@
         offsetX: 0,
         offsetY: 0
       };
+
+      scheduleViewportSizeUpdate({ immediate: true });
 
       const panState = {
         active: false,
