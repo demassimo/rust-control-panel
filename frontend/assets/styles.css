@@ -1445,37 +1445,23 @@ button.menu-tab.active {
 
 .chat-entry-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
   font-size: 0.85rem;
   color: var(--muted-strong);
 }
 
-.chat-entry-time {
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-.chat-entry-channel {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(244, 63, 94, 0.18);
-  color: var(--accent-strong);
-  font-weight: 600;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.chat-entry.team .chat-entry-channel {
-  background: rgba(59, 130, 246, 0.22);
-  color: rgba(191, 219, 254, 0.95);
-}
-
 .chat-entry-name {
   font-weight: 600;
   color: var(--text);
+}
+
+.chat-entry-id {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
 }
 
 .chat-entry-message {
