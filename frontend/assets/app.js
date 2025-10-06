@@ -103,6 +103,11 @@
   const workspaceInfoNetworkIn = $('#workspaceInfoNetworkIn');
   const workspaceInfoNetworkOut = $('#workspaceInfoNetworkOut');
   const workspaceInfoSaveCreatedTime = $('#workspaceInfoSaveCreatedTime');
+  const workspaceChatBody = $('#workspaceChatBody');
+  const workspaceChatList = $('#workspaceChatList');
+  const workspaceChatEmpty = $('#workspaceChatEmpty');
+  const workspaceChatLoading = $('#workspaceChatLoading');
+  const workspaceChatNotice = $('#workspaceChatNotice');
   const btnBackToDashboard = $('#btnBackToDashboard');
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
@@ -136,8 +141,16 @@
   const workspaceViewSections = Array.from(document.querySelectorAll('.workspace-view'));
   const workspaceViewSectionMap = new Map(workspaceViewSections.map((section) => [section.dataset.view, section]));
   const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
+  const chatFilterButtons = Array.from(document.querySelectorAll('.chat-filter-btn'));
   const workspaceViewDefault = 'players';
   let activeWorkspaceView = workspaceViewDefault;
+  const chatState = {
+    filter: 'all',
+    cache: new Map(),
+    lastFetched: new Map(),
+    loading: false,
+    error: null
+  };
 
   function emitWorkspaceEvent(name, detail) {
     if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
@@ -193,9 +206,270 @@
     });
   });
 
+  chatFilterButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      setChatFilter(btn.dataset.channel || 'all');
+    });
+  });
+
   if (workspaceViewSections.length) {
     setWorkspaceView(workspaceViewDefault);
   }
+
+  function normalizeChatFilter(value) {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (text === 'team') return 'team';
+    if (text === 'global') return 'global';
+    return 'all';
+  }
+
+  function normalizeChatChannel(value) {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return text === 'team' ? 'team' : 'global';
+  }
+
+  function normalizeChatColor(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return null;
+    const hexMatch = text.match(/^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+    if (hexMatch) {
+      return `#${hexMatch[1].toLowerCase()}`;
+    }
+    const compact = text.replace(/\s+/g, '');
+    const rgbMatch = compact.match(/^rgba?\((\d{1,3}),(\d{1,3}),(\d{1,3})(?:,(0|1|0?\.\d+))?\)$/i);
+    if (rgbMatch) {
+      const numeric = rgbMatch.slice(1, 4).map((part) => {
+        const parsed = Number(part);
+        return Number.isFinite(parsed) ? parsed : null;
+      });
+      if (numeric.some((part) => part == null || part < 0 || part > 255)) return null;
+      const alphaRaw = rgbMatch[4];
+      if (typeof alphaRaw === 'string') {
+        const alpha = Number(alphaRaw);
+        if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) return null;
+        return `rgba(${numeric[0]}, ${numeric[1]}, ${numeric[2]}, ${alpha})`;
+      }
+      return `rgb(${numeric[0]}, ${numeric[1]}, ${numeric[2]})`;
+    }
+    return null;
+  }
+
+  function formatChatTime(value) {
+    const text = pickString(value);
+    if (!text) return '';
+    const date = new Date(text);
+    if (Number.isNaN(date.valueOf())) return text;
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function messageSignature(entry) {
+    if (!entry) return '';
+    if (entry.id != null) return `id:${entry.id}`;
+    return `ts:${entry.createdAt}:${entry.message}`;
+  }
+
+  function updateChatFilterButtons() {
+    chatFilterButtons.forEach((btn) => {
+      const value = normalizeChatFilter(btn.dataset.channel || 'all');
+      const active = value === chatState.filter;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  function setChatFilter(next) {
+    const normalized = normalizeChatFilter(next);
+    if (chatState.filter === normalized) return;
+    chatState.filter = normalized;
+    updateChatFilterButtons();
+    renderChatMessages();
+  }
+
+  function normalizeChatMessage(payload, fallbackServerId) {
+    if (!payload) return null;
+    const serverId = Number(payload?.serverId ?? payload?.server_id ?? fallbackServerId);
+    if (!Number.isFinite(serverId)) return null;
+    const messageText = pickString(payload?.message, payload?.text, payload?.body);
+    const trimmedMessage = messageText ? messageText.trim() : '';
+    if (!trimmedMessage) return null;
+    let createdAt = pickString(payload?.createdAt, payload?.created_at, payload?.timestamp);
+    if (createdAt) {
+      const parsed = new Date(createdAt);
+      createdAt = Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+    }
+    if (!createdAt) createdAt = new Date().toISOString();
+    const idValue = payload?.id ?? payload?.messageId ?? payload?.message_id ?? null;
+    let id = null;
+    if (idValue != null) {
+      const numeric = Number(idValue);
+      if (Number.isFinite(numeric)) id = numeric;
+      else {
+        const trimmedId = String(idValue).trim();
+        id = trimmedId || null;
+      }
+    }
+    const channel = normalizeChatChannel(pickString(payload?.channel, payload?.scope, payload?.type));
+    const username = pickString(payload?.username, payload?.user, payload?.name, payload?.displayName);
+    const steamId = pickString(payload?.steamId, payload?.steamid, payload?.userId, payload?.userid, payload?.playerId);
+    const raw = pickString(payload?.raw);
+    const color = normalizeChatColor(pickString(payload?.color, payload?.Color));
+    return {
+      id,
+      serverId,
+      channel,
+      steamId: steamId || null,
+      username: username || null,
+      message: trimmedMessage.length > 4000 ? trimmedMessage.slice(0, 4000) : trimmedMessage,
+      createdAt,
+      raw: raw || null,
+      color: color || null
+    };
+  }
+
+  function storeChatMessages(serverId, entries, { replace = false } = {}) {
+    const key = Number(serverId);
+    if (!Number.isFinite(key)) return;
+    const list = replace ? [] : [...(chatState.cache.get(key) || [])];
+    const seen = new Set(list.map((item) => messageSignature(item)));
+    for (const raw of Array.isArray(entries) ? entries : []) {
+      const normalized = normalizeChatMessage(raw, key);
+      if (!normalized) continue;
+      const signature = messageSignature(normalized);
+      if (seen.has(signature)) continue;
+      list.push(normalized);
+      seen.add(signature);
+    }
+    list.sort((a, b) => {
+      const aTime = new Date(a.createdAt).getTime();
+      const bTime = new Date(b.createdAt).getTime();
+      if (aTime === bTime) return messageSignature(a).localeCompare(messageSignature(b));
+      return aTime - bTime;
+    });
+    chatState.cache.set(key, list);
+    chatState.lastFetched.set(key, Date.now());
+    if (key === state.currentServerId) renderChatMessages();
+  }
+
+  function renderChatMessages() {
+    if (!workspaceChatList) return;
+    updateChatFilterButtons();
+    const serverId = state.currentServerId;
+    const hasServer = Number.isFinite(serverId);
+    const records = hasServer ? (chatState.cache.get(serverId) || []) : [];
+    const filtered = chatState.filter === 'all'
+      ? records
+      : records.filter((entry) => entry.channel === chatState.filter);
+    const loadingVisible = chatState.loading && hasServer;
+    if (workspaceChatLoading) {
+      workspaceChatLoading.classList.toggle('hidden', !loadingVisible);
+    }
+    if (chatState.error && workspaceChatNotice) {
+      showNotice(workspaceChatNotice, chatState.error, 'error');
+    } else {
+      hideNotice(workspaceChatNotice);
+    }
+    if (!filtered.length) {
+      workspaceChatList.innerHTML = '';
+      workspaceChatList.classList.add('hidden');
+      if (workspaceChatEmpty) {
+        if (!hasServer) {
+          workspaceChatEmpty.textContent = 'Select a server to view chat.';
+          workspaceChatEmpty.classList.remove('hidden');
+        } else if (!loadingVisible) {
+          workspaceChatEmpty.textContent = 'No chat messages yet.';
+          workspaceChatEmpty.classList.remove('hidden');
+        } else {
+          workspaceChatEmpty.classList.add('hidden');
+        }
+      }
+      return;
+    }
+    workspaceChatEmpty?.classList.add('hidden');
+    workspaceChatList.classList.remove('hidden');
+    workspaceChatList.innerHTML = '';
+    filtered.forEach((entry) => {
+      const li = document.createElement('li');
+      li.className = 'chat-entry';
+      if (entry.channel === 'team') li.classList.add('team');
+      if (entry.id != null) li.dataset.messageId = String(entry.id);
+      li.dataset.channel = entry.channel;
+      const header = document.createElement('div');
+      header.className = 'chat-entry-header';
+      const timeEl = document.createElement('time');
+      timeEl.className = 'chat-entry-time';
+      timeEl.dateTime = entry.createdAt;
+      timeEl.textContent = formatChatTime(entry.createdAt);
+      const channelEl = document.createElement('span');
+      channelEl.className = 'chat-entry-channel';
+      channelEl.textContent = entry.channel === 'team' ? 'Team' : 'Global';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'chat-entry-name';
+      const displayName = entry.username || entry.steamId || 'Unknown';
+      nameEl.textContent = displayName;
+      nameEl.style.color = entry.color || '';
+      if (entry.steamId && entry.username && entry.username !== entry.steamId) {
+        nameEl.title = entry.steamId;
+      }
+      header.append(timeEl, channelEl, nameEl);
+      const messageEl = document.createElement('p');
+      messageEl.className = 'chat-entry-message';
+      messageEl.textContent = entry.message;
+      li.append(header, messageEl);
+      workspaceChatList.appendChild(li);
+    });
+  }
+
+  async function refreshChatForServer(serverId, { force = false } = {}) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return;
+    if (!hasServerCapability('console')) return;
+    const now = Date.now();
+    const last = chatState.lastFetched.get(numeric) || 0;
+    if (!force && chatState.cache.has(numeric) && now - last < 15000) {
+      chatState.loading = false;
+      if (numeric === state.currentServerId) renderChatMessages();
+      return;
+    }
+    chatState.loading = true;
+    if (numeric === state.currentServerId) renderChatMessages();
+    try {
+      const data = await api(`/servers/${numeric}/chat?limit=200`);
+      const messages = Array.isArray(data?.messages) ? data.messages : [];
+      storeChatMessages(numeric, messages, { replace: true });
+      chatState.error = null;
+      chatState.lastFetched.set(numeric, now);
+    } catch (err) {
+      chatState.error = describeError(err);
+      if (errorCode(err) === 'unauthorized') {
+        handleUnauthorized();
+      } else {
+        ui.log('Failed to load chat history: ' + describeError(err));
+      }
+    } finally {
+      chatState.loading = false;
+      if (numeric === state.currentServerId) renderChatMessages();
+    }
+  }
+
+  function ingestChatMessage(serverId, payload) {
+    if (!payload) return;
+    if (Array.isArray(payload)) {
+      storeChatMessages(serverId, payload);
+    } else {
+      storeChatMessages(serverId, [payload]);
+    }
+  }
+
+  function handleIncomingChat(payload) {
+    if (!payload) return;
+    const serverId = Number(payload?.serverId ?? payload?.server_id ?? state.currentServerId);
+    if (!Number.isFinite(serverId)) return;
+    const content = payload?.message ?? payload?.messages ?? payload;
+    ingestChatMessage(serverId, content);
+  }
+
+  renderChatMessages();
 
   const ROLE_CAPABILITY_INFO = {
     view: {
@@ -1458,6 +1732,7 @@
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
     emitWorkspaceEvent('workspace:server-cleared', { reason });
     highlightSelectedServer();
+    renderChatMessages();
   }
 
   function coerceNumber(value) {
@@ -1727,6 +2002,9 @@
 
       moduleBus.emit('console:message', { serverId: state.currentServerId, message: msg });
 
+    });
+    socket.on('chat', (payload) => {
+      handleIncomingChat(payload);
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
@@ -2215,6 +2493,8 @@
       updateWorkspaceDisplay(entry);
       if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
       emitWorkspaceEvent('workspace:server-selected', { serverId: numericId, repeat: true });
+      renderChatMessages();
+      refreshChatForServer(numericId).catch(() => {});
       return;
     }
     if (previous != null && previous !== numericId) {
@@ -2229,6 +2509,7 @@
     emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
     highlightSelectedServer();
     ui.clearConsole();
+    renderChatMessages();
     const name = entry?.data?.name || `Server #${numericId}`;
     const consoleAccess = hasServerCapability('console');
     ui.log(`${consoleAccess ? 'Connecting to' : 'Opening'} ${name}...`);
@@ -2239,6 +2520,7 @@
     showWorkspaceForServer(numericId);
     moduleBus.emit('server:connected', { serverId: numericId, server: entry?.data || null });
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
+    refreshChatForServer(numericId, { force: true }).catch(() => {});
   }
 
   const ui = {
@@ -2433,6 +2715,11 @@
     hideNotice(passwordStatus);
     clearPasswordInputs();
     if (rustMapsKeyInput) rustMapsKeyInput.value = '';
+    chatState.cache.clear();
+    chatState.lastFetched.clear();
+    chatState.loading = false;
+    chatState.error = null;
+    renderChatMessages();
     ui.showLogin();
     loadPublicConfig();
     moduleBus.emit('auth:logout');

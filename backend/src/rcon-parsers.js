@@ -2,6 +2,9 @@ const FACEPUNCH_LEVEL_HOST_PATTERN = /^(?:blob:)?https?:\/\/files\.facepunch\.co
 const LEVEL_URL_PATTERN = /^(?:blob:)?https?:\/\/\S+/i;
 const LEVEL_URL_INLINE_PATTERN = /(?:blob:)?https?:\/\/\S+/i;
 const ANSI_ESCAPE_SEQUENCE_PATTERN = /\u001b\[[0-?]*[ -\/]*[@-~]/g;
+const CHAT_PREFIX_PATTERN = /^(?:\[(?:chat|CHAT)\]|chat)\s*[:>\-]?\s*/i;
+const CHAT_SCOPE_PATTERN = /^(?:\[(team|global)\]|\((team|global)\))\s*/i;
+const CHAT_STEAMID_PATTERN = /(\d{16,})/;
 
 export function stripAnsiSequences(value) {
   if (typeof value !== 'string' || !value) return value;
@@ -41,6 +44,152 @@ export function normaliseRconLine(line) {
   const withoutAnsi = stripAnsiSequences(line);
   const withoutTimestamp = stripRconTimestampPrefix(withoutAnsi);
   return withoutTimestamp.replace(/^\s*>+\s*/, '');
+}
+
+function normaliseChatScope(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim().toLowerCase();
+  if (!text) return null;
+  if (text.startsWith('team')) return 'team';
+  if (text.startsWith('global')) return 'global';
+  return null;
+}
+
+function sanitiseSteamId(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const text = String(value).trim();
+  if (!/^[0-9]{16,}$/.test(text)) return null;
+  return text;
+}
+
+function normaliseChatColor(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!text) return null;
+
+  const hexMatch = text.match(/^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (hexMatch) {
+    return `#${hexMatch[1].toLowerCase()}`;
+  }
+
+  const compact = text.replace(/\s+/g, '');
+  const rgbMatch = compact.match(/^rgba?\((\d{1,3}),(\d{1,3}),(\d{1,3})(?:,(0|1|0?\.\d+))?\)$/i);
+  if (rgbMatch) {
+    const [r, g, b] = rgbMatch.slice(1, 4).map((component) => {
+      const parsed = Number(component);
+      return Number.isFinite(parsed) ? parsed : null;
+    });
+    if ([r, g, b].some((component) => component == null || component < 0 || component > 255)) {
+      return null;
+    }
+    const alphaRaw = rgbMatch[4];
+    if (typeof alphaRaw === 'string') {
+      const alpha = Number(alphaRaw);
+      if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) return null;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  return null;
+}
+
+function trimOrNull(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text || null;
+}
+
+export function parseChatMessage(message, payload = {}) {
+  const payloadMessage = typeof payload?.Message === 'string' ? payload.Message : (typeof payload?.message === 'string' ? payload.message : null);
+  const baseText = trimOrNull(stripAnsiSequences(message ?? payloadMessage ?? ''));
+  const raw = baseText || null;
+
+  const fromPayloadName = trimOrNull(
+    payload?.Username
+    ?? payload?.User
+    ?? payload?.Name
+    ?? payload?.username
+    ?? payload?.user
+    ?? payload?.name
+  );
+  const fromPayloadSteam = sanitiseSteamId(
+    payload?.UserId
+    ?? payload?.UserID
+    ?? payload?.SteamId
+    ?? payload?.steamid
+    ?? payload?.userid
+    ?? payload?.playerId
+  );
+  const fromPayloadScope = normaliseChatScope(payload?.Channel || payload?.channel || payload?.Scope || payload?.scope);
+  const color = normaliseChatColor(payload?.Color || payload?.color);
+
+  if (!raw && !fromPayloadName && !fromPayloadSteam) {
+    return null;
+  }
+
+  let working = stripRconTimestampPrefix(raw || '').trim();
+  if (!working && typeof payloadMessage === 'string') {
+    working = stripRconTimestampPrefix(stripAnsiSequences(payloadMessage)).trim();
+  }
+
+  if (!working) {
+    working = '';
+  }
+
+  if (CHAT_PREFIX_PATTERN.test(working)) {
+    working = working.replace(CHAT_PREFIX_PATTERN, '').trim();
+  }
+
+  let scope = fromPayloadScope;
+  const scopeMatch = working.match(CHAT_SCOPE_PATTERN);
+  if (scopeMatch) {
+    scope = scope || normaliseChatScope(scopeMatch[1] || scopeMatch[2]);
+    working = working.slice(scopeMatch[0].length).trim();
+  }
+
+  let namePart = working;
+  let bodyPart = '';
+  const colonIndex = working.indexOf(':');
+  if (colonIndex >= 0) {
+    namePart = working.slice(0, colonIndex).trim();
+    bodyPart = working.slice(colonIndex + 1).trim();
+  }
+
+  if (!scope) {
+    const inlineScope = namePart.match(/\[(team|global)\]/i) || namePart.match(/\((team|global)\)/i);
+    if (inlineScope) {
+      scope = normaliseChatScope(inlineScope[1]);
+      namePart = namePart.replace(inlineScope[0], '').trim();
+    }
+  }
+
+  let steamId = null;
+  const steamMatch = namePart.match(CHAT_STEAMID_PATTERN);
+  if (steamMatch) {
+    steamId = sanitiseSteamId(steamMatch[1]);
+    namePart = namePart.replace(steamMatch[0], '').trim();
+  }
+  namePart = namePart.replace(/[\[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const username = trimOrNull(namePart) || fromPayloadName;
+  let text = trimOrNull(bodyPart);
+  if (!text) {
+    const fallback = working && working !== namePart ? working : null;
+    text = trimOrNull(fallback) || trimOrNull(payloadMessage);
+  }
+
+  const messageText = text;
+  if (!messageText) return null;
+
+  return {
+    raw: raw || messageText,
+    message: messageText,
+    username: username || null,
+    steamId: steamId || fromPayloadSteam || null,
+    channel: scope || 'global',
+    color: color || null
+  };
 }
 
 export function extractInteger(value) {
