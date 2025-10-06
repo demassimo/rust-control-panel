@@ -1247,6 +1247,30 @@ function parseLegacyPlayerList(message) {
   return players;
 }
 
+function findNestedPositionCandidate(value, depth = 0) {
+  if (!value || typeof value !== 'object') return null;
+  if (depth > 5) return null;
+  const direct = value.Position ?? value.position ?? value.LocalPosition ?? value.localPosition ?? null;
+  if (direct) return direct;
+  const queue = [];
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || typeof nested !== 'object') continue;
+    if (/position/i.test(key)) {
+      const candidate = nested.Position ?? nested.position ?? nested;
+      if (candidate && typeof candidate === 'object') {
+        if (candidate.x != null || candidate.y != null || candidate.z != null) return candidate;
+        if (Array.isArray(candidate) && candidate.length >= 2) return candidate;
+      }
+    }
+    queue.push(nested);
+  }
+  for (const nested of queue) {
+    const found = findNestedPositionCandidate(nested, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 function parsePlayerListMessage(message) {
   if (!message) return [];
   let text = message.trim();
@@ -1275,6 +1299,15 @@ function parsePlayerListMessage(message) {
 
     let rawPosition = entry.Position ?? entry.position ?? null;
     if (!rawPosition && entry && typeof entry === 'object') {
+      const transform = entry.Transform || entry.transform || null;
+      if (!rawPosition && transform && typeof transform === 'object') {
+        rawPosition = findNestedPositionCandidate(transform);
+      }
+      if (!rawPosition) {
+        const nested = findNestedPositionCandidate(entry);
+        if (nested) rawPosition = nested;
+      }
+
       const positionFields = {};
       const xCandidates = [
         entry.X,
