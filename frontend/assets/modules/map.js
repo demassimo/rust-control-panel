@@ -524,8 +524,8 @@
       let mapImageLocked = false;
 
       const MAP_SIZE_MIN = 260;
-      const MAP_SIZE_MAX = 720;
-      const MAP_SIZE_VERTICAL_MARGIN = 180;
+      const MAP_SIZE_MAX = 1400;
+      const MAP_SIZE_VERTICAL_MARGIN = 96;
       const scheduleViewportAnimationFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
         ? window.requestAnimationFrame.bind(window)
         : (fn) => setTimeout(fn, 16);
@@ -673,14 +673,10 @@
         const hadDynamicClass = mapElement.classList.contains('map-view-dynamic');
         const previousInlineValue = mapElement.style.getPropertyValue('--map-size');
 
-        if (hadDynamicClass) {
-          mapElement.classList.remove('map-view-dynamic');
-        }
-        if (previousInlineValue) {
-          mapElement.style.removeProperty('--map-size');
-        }
-
-        const width = mapElement.offsetWidth;
+        const containerWidth = mapElement.parentElement?.clientWidth;
+        const width = Number.isFinite(containerWidth) && containerWidth > 0
+          ? containerWidth
+          : mapElement.offsetWidth;
         if (!width || width <= 0) {
           if (previousInlineValue) {
             mapElement.style.setProperty('--map-size', previousInlineValue);
@@ -719,7 +715,9 @@
 
         viewportSizeCache.set(mapElement, size);
         mapElement.style.setProperty('--map-size', `${size}px`);
-        mapElement.classList.add('map-view-dynamic');
+        if (!hadDynamicClass) {
+          mapElement.classList.add('map-view-dynamic');
+        }
       }
 
       function computeViewportHeightLimit() {

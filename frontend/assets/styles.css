@@ -2430,9 +2430,9 @@ button.chat-filter-btn:focus-visible {
 }
 
 .map-view.map-view-dynamic {
-  --map-size: clamp(420px, 65vh, 880px);
-  width: min(100%, var(--map-size));
-  max-width: 100%;
+  --map-size: clamp(420px, 70vh, 1200px);
+  width: 100%;
+  max-width: var(--map-size);
   align-self: center;
 }
 
