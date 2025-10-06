@@ -677,6 +677,7 @@ await purgeExpiredMapCaches().catch((err) => console.error('initial map purge fa
 
 const auth = authMiddleware(JWT_SECRET, { loadUserContext });
 const rconBindings = new Map();
+const monitoredServerRows = new Map();
 const statusMap = new Map();
 const serverInfoCache = new Map();
 
@@ -701,6 +702,7 @@ const MANUAL_REFRESH_MIN_INTERVAL_MS = 20 * 1000;
 const teamInfoCache = new Map();
 const positionCache = new Map();
 const manualRefreshState = new Map();
+const teamInfoMonitorState = new Map();
 let monitoring = false;
 let monitorTimer = null;
 
@@ -734,6 +736,8 @@ function cleanupRconBinding(id) {
   const unsubscribe = rconBindings.get(key);
   if (!unsubscribe) return;
   rconBindings.delete(key);
+  monitoredServerRows.delete(key);
+  teamInfoMonitorState.delete(key);
   try { unsubscribe(); }
   catch { /* ignore */ }
 }
@@ -741,6 +745,7 @@ function cleanupRconBinding(id) {
 function ensureRconBinding(row) {
   const key = Number(row?.id);
   if (!Number.isFinite(key)) throw new Error('invalid_server_id');
+  monitoredServerRows.set(key, row);
   if (rconBindings.has(key)) return;
 
   const host = row.host;
@@ -791,6 +796,23 @@ function ensureRconBinding(row) {
 function closeServerRcon(id) {
   cleanupRconBinding(id);
   terminateRcon(id);
+}
+
+async function getMonitoredServerRow(serverId) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return null;
+  const cached = monitoredServerRows.get(numeric);
+  if (cached) return cached;
+  try {
+    const row = await db.getServer(numeric);
+    if (row) {
+      monitoredServerRows.set(numeric, row);
+      return row;
+    }
+  } catch (err) {
+    console.warn('Failed to load server for monitor lookup', err);
+  }
+  return null;
 }
 
 function extractPlayerConnection(line) {
@@ -3088,6 +3110,49 @@ async function enrichPlayersWithPositions(
   return { players, lookupsPerformed, pending: remaining };
 }
 
+async function maybeRefreshTeamInfoFromMonitor(serverId, players) {
+  const numericId = Number(serverId);
+  if (!Number.isFinite(numericId)) return players;
+  if (!Array.isArray(players) || players.length === 0) {
+    teamInfoMonitorState.delete(numericId);
+    return players;
+  }
+
+  const state = teamInfoMonitorState.get(numericId) || { lastRun: 0, pending: [] };
+  let result = await enrichPlayersWithTeamInfo(numericId, null, players, {
+    allowLookup: false,
+    pendingSteamIds: Array.isArray(state.pending) && state.pending.length > 0 ? state.pending : null
+  });
+
+  const now = Date.now();
+  const shouldLookup = result.pending.length > 0 && now - state.lastRun >= MANUAL_REFRESH_MIN_INTERVAL_MS;
+
+  if (shouldLookup) {
+    const serverRow = await getMonitoredServerRow(numericId);
+    if (serverRow) {
+      const logger = createLogger(`teaminfo-monitor:${numericId}`);
+      try {
+        const lookupResult = await enrichPlayersWithTeamInfo(numericId, serverRow, result.players, {
+          logger,
+          allowLookup: true,
+          pendingSteamIds: result.pending
+        });
+        result = lookupResult;
+        state.lastRun = Date.now();
+      } catch (err) {
+        state.lastRun = Date.now();
+        logger.warn('Failed to refresh teaminfo during monitor', err);
+      }
+    } else {
+      state.lastRun = now;
+    }
+  }
+
+  state.pending = Array.isArray(result.pending) ? result.pending : [];
+  teamInfoMonitorState.set(numericId, state);
+  return result.players;
+}
+
 async function enrichLivePlayers(players) {
   if (!Array.isArray(players) || players.length === 0) return [];
   try {
@@ -3176,6 +3241,7 @@ async function processMonitorPlayerListSnapshot(serverId, message) {
   try {
     let players = parsePlayerListMessage(message);
     if (!Array.isArray(players) || players.length === 0) return;
+    players = await maybeRefreshTeamInfoFromMonitor(serverId, players);
     players = await enrichLivePlayers(players);
     await syncServerPlayerDirectory(serverId, players);
   } catch (err) {
@@ -3771,6 +3837,12 @@ async function refreshMonitoredServers() {
       }
       for (const [serverId] of [...offlineSnapshotTimestamps.entries()]) {
         if (!seen.has(serverId)) offlineSnapshotTimestamps.delete(serverId);
+      }
+      for (const key of [...monitoredServerRows.keys()]) {
+        if (!seen.has(key)) monitoredServerRows.delete(key);
+      }
+      for (const key of [...teamInfoMonitorState.keys()]) {
+        if (!seen.has(key)) teamInfoMonitorState.delete(key);
       }
       if (!monitorController) {
         monitorController = startAutoMonitor(list, {
