@@ -1199,10 +1199,16 @@
       }
 
       function mapReady() {
-        const meta = getActiveMapMeta();
-        if (!meta || !hasMapImage(meta)) return false;
         const size = resolveWorldSize();
-        return Number.isFinite(size) && size > 0;
+        if (!Number.isFinite(size) || size <= 0) return false;
+
+        const meta = getActiveMapMeta();
+        const imageLoaded = hasMapImage(meta)
+          || !!(mapImageSource || (mapImage && mapImage.currentSrc));
+        if (imageLoaded) return true;
+
+        const samples = collectPlayerPositions();
+        return Array.isArray(samples) && samples.length > 0;
       }
 
       function updateUploadSection() {
