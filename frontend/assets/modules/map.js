@@ -452,6 +452,10 @@
       layout.appendChild(mapView);
       layout.appendChild(sidebar);
 
+      const viewportSizeCache = new WeakMap();
+      let viewportSizeUpdateHandle = null;
+      let viewportSizeUpdateScheduled = false;
+
       scheduleViewportSizeUpdate({ immediate: true });
 
       const parentView = ctx.root?.closest?.('[data-view]');
@@ -524,9 +528,6 @@
       const MAP_SIZE_MIN = 260;
       const MAP_SIZE_MAX = 720;
       const MAP_SIZE_VERTICAL_MARGIN = 180;
-      const viewportSizeCache = new WeakMap();
-      let viewportSizeUpdateHandle = null;
-      let viewportSizeUpdateScheduled = false;
       const scheduleViewportAnimationFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
         ? window.requestAnimationFrame.bind(window)
         : (fn) => setTimeout(fn, 16);
