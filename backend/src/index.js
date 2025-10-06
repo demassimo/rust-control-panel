@@ -910,7 +910,8 @@ async function handleChatMessage(serverId, line, payload) {
     username: parsed.username || null,
     message: parsed.message,
     raw: parsed.raw || (typeof rawInput === 'string' ? rawInput : null),
-    color: parsed.color || null
+    color: parsed.color || null,
+    created_at: parsed.timestamp || null
   };
 
   let stored = null;
@@ -922,7 +923,7 @@ async function handleChatMessage(serverId, line, payload) {
     }
   }
 
-  const createdAt = stored?.created_at || new Date().toISOString();
+  const createdAt = stored?.created_at || parsed.timestamp || new Date().toISOString();
   const eventPayload = {
     id: stored?.id ?? null,
     serverId: key,
