@@ -242,8 +242,21 @@
   }
 
   function normalizeChatChannel(value) {
-    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    return text === 'team' ? 'team' : 'global';
+    if (typeof value === 'number') {
+      return value === 1 ? 'team' : 'global';
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return 'global';
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric)) return numeric === 1 ? 'team' : 'global';
+      const lower = trimmed.toLowerCase();
+      if (lower === 'team') return 'team';
+      if (lower === 'global') return 'global';
+      if (lower === '1') return 'team';
+      if (lower === '0') return 'global';
+    }
+    return 'global';
   }
 
   function normalizeChatColor(value) {
@@ -270,14 +283,6 @@
       return `rgb(${numeric[0]}, ${numeric[1]}, ${numeric[2]})`;
     }
     return null;
-  }
-
-  function formatChatTime(value) {
-    const text = pickString(value);
-    if (!text) return '';
-    const date = new Date(text);
-    if (Number.isNaN(date.valueOf())) return text;
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
 
   function messageSignature(entry) {
@@ -413,22 +418,17 @@
       li.dataset.channel = entry.channel;
       const header = document.createElement('div');
       header.className = 'chat-entry-header';
-      const timeEl = document.createElement('time');
-      timeEl.className = 'chat-entry-time';
-      timeEl.dateTime = entry.createdAt;
-      timeEl.textContent = formatChatTime(entry.createdAt);
-      const channelEl = document.createElement('span');
-      channelEl.className = 'chat-entry-channel';
-      channelEl.textContent = entry.channel === 'team' ? 'Team' : 'Global';
       const nameEl = document.createElement('span');
       nameEl.className = 'chat-entry-name';
-      const displayName = entry.username || entry.steamId || 'Unknown';
-      nameEl.textContent = displayName;
+      nameEl.textContent = entry.username || entry.steamId || 'Unknown';
       nameEl.style.color = entry.color || '';
-      if (entry.steamId && entry.username && entry.username !== entry.steamId) {
-        nameEl.title = entry.steamId;
+      header.appendChild(nameEl);
+      if (entry.steamId) {
+        const idEl = document.createElement('span');
+        idEl.className = 'chat-entry-id';
+        idEl.textContent = entry.steamId;
+        header.appendChild(idEl);
       }
-      header.append(timeEl, channelEl, nameEl);
       const messageEl = document.createElement('p');
       messageEl.className = 'chat-entry-message';
       messageEl.textContent = entry.message;
