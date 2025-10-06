@@ -9,6 +9,7 @@
   const WORLD_SYNC_THROTTLE = 15000;
   const REFRESH_STORAGE_KEY = 'live-map:poll-interval';
   const STATUS_MESSAGE_STORAGE_KEY = 'live-map:last-status-message';
+  const MARKER_ANIMATION_DURATION_MS = 5000;
   const REFRESH_OPTIONS = [
     { value: 5000, label: 'Every 5 seconds' },
     { value: 10000, label: 'Every 10 seconds' },
@@ -18,8 +19,114 @@
     { value: 120000, label: 'Every 2 minutes' }
   ];
 
+  const markerAnimationStates = new Map();
+
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
+  }
+
+  function now() {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now();
+    }
+    return Date.now();
+  }
+
+  function parsePercent(value, fallback = 0) {
+    const numeric = parseFloat(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function setMarkerPosition(marker, left, top) {
+    if (!marker) return;
+    marker.style.left = left + '%';
+    marker.style.top = top + '%';
+  }
+
+  function scheduleMarkerFrame(state, step) {
+    if (typeof requestAnimationFrame === 'function') {
+      state.rafId = requestAnimationFrame(step);
+      return;
+    }
+    state.timeoutId = setTimeout(() => step(now()), 16);
+  }
+
+  function stopMarkerAnimation(marker) {
+    const state = markerAnimationStates.get(marker);
+    if (!state) return;
+    if (state.rafId != null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(state.rafId);
+    }
+    if (state.timeoutId != null) {
+      clearTimeout(state.timeoutId);
+    }
+    markerAnimationStates.delete(marker);
+  }
+
+  function animateMarkerTo(marker, targetLeft, targetTop) {
+    if (!marker) return;
+
+    const currentTime = now();
+    const existing = markerAnimationStates.get(marker);
+    let startLeft;
+    let startTop;
+
+    if (existing) {
+      const elapsed = currentTime - existing.startTime;
+      const progress = existing.duration > 0 ? clamp(elapsed / existing.duration, 0, 1) : 1;
+      startLeft = existing.startLeft + existing.deltaLeft * progress;
+      startTop = existing.startTop + existing.deltaTop * progress;
+    } else {
+      startLeft = parsePercent(marker.style.left, targetLeft);
+      startTop = parsePercent(marker.style.top, targetTop);
+    }
+
+    if (!Number.isFinite(startLeft)) startLeft = targetLeft;
+    if (!Number.isFinite(startTop)) startTop = targetTop;
+
+    const deltaLeft = targetLeft - startLeft;
+    const deltaTop = targetTop - startTop;
+
+    if (Math.abs(deltaLeft) <= 0.001 && Math.abs(deltaTop) <= 0.001) {
+      stopMarkerAnimation(marker);
+      setMarkerPosition(marker, targetLeft, targetTop);
+      return;
+    }
+
+    const animation = {
+      startLeft,
+      startTop,
+      targetLeft,
+      targetTop,
+      deltaLeft,
+      deltaTop,
+      startTime: currentTime,
+      duration: MARKER_ANIMATION_DURATION_MS,
+      rafId: null,
+      timeoutId: null
+    };
+
+    stopMarkerAnimation(marker);
+    markerAnimationStates.set(marker, animation);
+    setMarkerPosition(marker, startLeft, startTop);
+
+    const step = (timestamp) => {
+      const frameTime = typeof timestamp === 'number' ? timestamp : now();
+      const elapsed = frameTime - animation.startTime;
+      const progress = animation.duration > 0 ? clamp(elapsed / animation.duration, 0, 1) : 1;
+      const currentLeft = animation.startLeft + animation.deltaLeft * progress;
+      const currentTop = animation.startTop + animation.deltaTop * progress;
+      setMarkerPosition(marker, currentLeft, currentTop);
+
+      if (progress < 1) {
+        scheduleMarkerFrame(animation, step);
+      } else {
+        stopMarkerAnimation(marker);
+        setMarkerPosition(marker, animation.targetLeft, animation.targetTop);
+      }
+    };
+
+    scheduleMarkerFrame(animation, step);
   }
 
   function formatDuration(seconds) {
@@ -380,6 +487,7 @@
         mapCanvas,
         mapImage,
         overlay,
+        markers: new Map(),
         message,
         summary,
         teamInfo,
@@ -463,6 +571,32 @@
 
       function getActiveViewports() {
         return [mainViewport];
+      }
+
+      function getViewportMarkerStore(viewport) {
+        if (!viewport) return null;
+        if (!viewport.markers || !(viewport.markers instanceof Map)) {
+          viewport.markers = new Map();
+        }
+        return viewport.markers;
+      }
+
+      function clearViewportMarkers(viewport) {
+        if (!viewport || !viewport.overlay) return;
+        const store = getViewportMarkerStore(viewport);
+        if (store?.size) {
+          for (const marker of store.values()) {
+            stopMarkerAnimation(marker);
+          }
+          store.clear();
+        }
+        viewport.overlay.innerHTML = '';
+      }
+
+      function clearAllViewportMarkers() {
+        for (const viewport of getActiveViewports()) {
+          clearViewportMarkers(viewport);
+        }
       }
 
       function clampMapOffsets() {
@@ -2098,30 +2232,77 @@
         }
       }
 
+      function handleMarkerClick(event) {
+        if (!event) return;
+        event.stopPropagation();
+        const marker = event.currentTarget;
+        const steamId = marker?.dataset?.steamid;
+        if (!steamId) return;
+        const player = state.players.find((p) => resolveSteamId(p) === steamId);
+        if (!player) return;
+        selectPlayer(player, { suppressPanel: true, showPopup: true });
+      }
+
       function renderMarkersInViewport(viewport) {
         if (!viewport || !viewport.overlay) return;
-        viewport.overlay.innerHTML = '';
-        if (!mapReady()) return;
+        const overlayEl = viewport.overlay;
+        const markerStore = getViewportMarkerStore(viewport);
+
+        if (!mapReady()) {
+          if (markerStore.size || overlayEl.childElementCount) {
+            clearViewportMarkers(viewport);
+          }
+          return;
+        }
+
         const axis = resolveHorizontalAxis();
+        const staleIds = new Set(markerStore.keys());
+        const selectionEngaged = selectionActive();
+
         for (const player of state.players) {
-          const position = projectPosition(player.position, axis);
-          if (!position) continue;
-          const marker = viewport.doc.createElement('div');
-          marker.className = 'map-marker';
-          marker.style.backgroundColor = colorForPlayer(player);
-          marker.style.left = position.left + '%';
-          marker.style.top = position.top + '%';
           const steamId = resolveSteamId(player);
+          if (!steamId) continue;
+          const position = projectPosition(player.position, axis);
+          if (!position) {
+            const existing = markerStore.get(steamId);
+            if (existing) {
+              stopMarkerAnimation(existing);
+              existing.remove();
+              markerStore.delete(steamId);
+              staleIds.delete(steamId);
+            }
+            continue;
+          }
+
+          let marker = markerStore.get(steamId);
+          if (!marker) {
+            marker = viewport.doc.createElement('div');
+            marker.className = 'map-marker';
+            marker.dataset.steamid = steamId;
+            marker.addEventListener('click', handleMarkerClick);
+            setMarkerPosition(marker, position.left, position.top);
+            marker.style.backgroundColor = colorForPlayer(player);
+            marker.title = player.displayName || player.persona || steamId;
+            overlayEl.appendChild(marker);
+            markerStore.set(steamId, marker);
+          }
+
+          animateMarkerTo(marker, position.left, position.top);
+          marker.style.backgroundColor = colorForPlayer(player);
           marker.title = player.displayName || player.persona || steamId;
-          marker.dataset.steamid = steamId;
           const focused = isPlayerFocused(player);
-          if (selectionActive() && !focused) marker.classList.add('dimmed');
-          if (focused) marker.classList.add('active');
-          marker.addEventListener('click', (e) => {
-            e.stopPropagation();
-            selectPlayer(player, { suppressPanel: true, showPopup: true });
-          });
-          viewport.overlay.appendChild(marker);
+          marker.classList.toggle('active', focused);
+          marker.classList.toggle('dimmed', selectionEngaged && !focused);
+          staleIds.delete(steamId);
+        }
+
+        for (const steamId of staleIds) {
+          const marker = markerStore.get(steamId);
+          if (marker) {
+            stopMarkerAnimation(marker);
+            marker.remove();
+          }
+          markerStore.delete(steamId);
         }
       }
 
@@ -3035,7 +3216,7 @@
           state.worldDetails.syncing = false;
           state.worldDetails.syncError = null;
         }
-        overlay.innerHTML = '';
+        clearAllViewportMarkers();
         cancelMapImageRequest();
         clearMapImage();
         updateConfigPanel();
@@ -3090,7 +3271,7 @@
             state.worldDetails.syncError = null;
           }
           clearSelection();
-          overlay.innerHTML = '';
+          clearAllViewportMarkers();
           cancelMapImageRequest();
           clearMapImage();
           renderPlayerList();
@@ -3137,7 +3318,7 @@
           state.worldDetails.syncError = null;
         }
         clearSelection();
-        overlay.innerHTML = '';
+        clearAllViewportMarkers();
         cancelMapImageRequest();
         clearMapImage();
         renderPlayerList();
