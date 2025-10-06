@@ -267,12 +267,16 @@ main.grid{
 .map-player-team{white-space:nowrap; font-size:.85rem; color:var(--muted-strong)}
 .map-player-stat{text-align:right; font-variant-numeric:tabular-nums}
 .map-filter-note{margin-top:8px}
-.map-team-info{display:flex; flex-direction:column; gap:10px; background:rgba(15,19,28,.78); border-radius:12px; padding:14px; border:1px solid rgba(148,163,184,.1)}
-.map-team-info .team-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 0}
-.map-team-info .team-label{display:inline-flex; align-items:center; gap:8px; font-weight:600; color:#e2e8f0}
-.map-team-info .team-detail{color:#cbd5f5; font-variant-numeric:tabular-nums}
-.map-team-info .team-row.active .team-detail{color:#f8fafc}
-.map-team-info .team-color{width:14px; height:14px; border-radius:50%; border:2px solid rgba(15,23,42,.6)}
+.map-team-info{display:flex; flex-direction:column; gap:12px; background:rgba(15,19,28,.78); border-radius:12px; padding:14px; border:1px solid rgba(148,163,184,.1)}
+.map-team-info .team-tile{background:rgba(15,23,42,.55); border:1px solid rgba(148,163,184,.16); color:#cbd5f5; transition:border-color .15s ease, box-shadow .15s ease, transform .15s ease}
+.map-team-info .team-tile:hover{border-color:rgba(148,163,184,.32); box-shadow:0 10px 26px rgba(2,6,23,.65); transform:translateY(-1px)}
+.map-team-info .team-tile:focus-visible{outline:2px solid var(--team-color, rgba(94,234,212,.75)); outline-offset:3px}
+.map-team-info .team-tile.active{border-color:var(--team-color, rgba(94,234,212,.75)); box-shadow:0 0 0 1px var(--team-color, rgba(94,234,212,.5)), 0 14px 32px rgba(2,6,23,.7)}
+.map-team-info .team-label{color:#f8fafc}
+.map-team-info .team-detail{color:#cbd5f5}
+.map-team-info .team-tile.active .team-detail{color:#f8fafc}
+.map-team-info .team-member-avatar{background:rgba(30,41,59,.8); color:#e2e8f0}
+.map-team-info .team-member-avatar.placeholder{background:rgba(226,232,240,.9); color:rgba(15,23,42,.85)}
 .map-color-chip{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid rgba(15,23,42,.6);vertical-align:middle}
 .map-upload{border:1px dashed rgba(148,163,184,.25); border-radius:12px; padding:16px; background:rgba(17,20,30,.6); display:flex; flex-direction:column; gap:12px}
 .map-upload-actions{display:flex; gap:10px; flex-wrap:wrap}

@@ -3213,14 +3213,49 @@ button.chat-filter-btn:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--muted);
   font-size: 0.88rem;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.map-team-info .team-row {
+.map-team-info .team-tile {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 42, 0.2);
+  padding: 12px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.25;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.map-team-info .team-tile:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.28);
+  transform: translateY(-1px);
+}
+
+.map-team-info .team-tile:focus-visible {
+  outline: 2px solid var(--team-color, rgba(59, 130, 246, 0.65));
+  outline-offset: 2px;
+}
+
+.map-team-info .team-tile.active {
+  border-color: var(--team-color, rgba(94, 234, 212, 0.6));
+  box-shadow: 0 0 0 1px var(--team-color, rgba(94, 234, 212, 0.4)), 0 12px 24px rgba(15, 23, 42, 0.35);
+}
+
+.map-team-info .team-tile-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 0;
+  margin-bottom: 10px;
 }
 
 .map-team-info .team-label {
@@ -3229,15 +3264,80 @@ button.chat-filter-btn:focus-visible {
   gap: 8px;
   font-weight: 600;
   color: var(--text);
+  font-size: 0.95rem;
 }
 
 .map-team-info .team-detail {
   color: var(--muted-strong);
   font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
 }
 
-.map-team-info .team-row.active .team-detail {
+.map-team-info .team-tile.active .team-detail {
   color: var(--text);
+}
+
+.map-team-info .team-members {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.map-team-info .team-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.map-team-info .team-member-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+  background: rgba(148, 163, 184, 0.25);
+  color: var(--text);
+}
+
+.map-team-info .team-member-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.map-team-info .team-member-avatar.placeholder {
+  color: rgba(15, 23, 42, 0.85);
+  background: rgba(226, 232, 240, 0.8);
+}
+
+.map-team-info .team-member-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.map-team-info .team-member-name {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-team-info .team-member-steamid {
+  color: var(--muted-strong);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .map-color-chip {
