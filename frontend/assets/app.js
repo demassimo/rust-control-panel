@@ -159,6 +159,8 @@
   const workspaceViewSectionMap = new Map(workspaceViewSections.map((section) => [section.dataset.view, section]));
   const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
   const chatFilterButtons = Array.from(document.querySelectorAll('.chat-filter-btn'));
+  const CHAT_REFRESH_INTERVAL_MS = 5000;
+  const DEFAULT_TEAM_CHAT_COLOR = '#3b82f6';
   const workspaceViewDefault = 'players';
   let activeWorkspaceView = workspaceViewDefault;
   const chatState = {
@@ -168,7 +170,8 @@
     loading: false,
     error: null,
     profileCache: new Map(),
-    profileRequests: new Map()
+    profileRequests: new Map(),
+    teamColors: new Map()
   };
 
   function emitWorkspaceEvent(name, detail) {
@@ -285,6 +288,77 @@
       return `rgb(${numeric[0]}, ${numeric[1]}, ${numeric[2]})`;
     }
     return null;
+  }
+
+  function parseCssColor(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const hexMatch = trimmed.match(/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+    if (hexMatch) {
+      const hex = hexMatch[1];
+      if (hex.length === 3 || hex.length === 4) {
+        const r = parseInt(hex[0] + hex[0], 16);
+        const g = parseInt(hex[1] + hex[1], 16);
+        const b = parseInt(hex[2] + hex[2], 16);
+        const a = hex.length === 4 ? parseInt(hex[3] + hex[3], 16) / 255 : 1;
+        return { r, g, b, a };
+      }
+      if (hex.length === 6 || hex.length === 8) {
+        const r = parseInt(hex.slice(0, 2), 16);
+        const g = parseInt(hex.slice(2, 4), 16);
+        const b = parseInt(hex.slice(4, 6), 16);
+        const a = hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1;
+        return { r, g, b, a };
+      }
+    }
+    const rgbMatch = trimmed.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(0|1|0?\.\d+))?\s*\)$/i);
+    if (rgbMatch) {
+      const r = Number(rgbMatch[1]);
+      const g = Number(rgbMatch[2]);
+      const b = Number(rgbMatch[3]);
+      const a = rgbMatch[4] != null ? Number(rgbMatch[4]) : 1;
+      if ([r, g, b].some((n) => !Number.isFinite(n) || n < 0 || n > 255)) return null;
+      if (!Number.isFinite(a) || a < 0 || a > 1) return null;
+      return { r, g, b, a };
+    }
+    return null;
+  }
+
+  function rgbaFromColor(value, alpha = 1) {
+    const parsed = parseCssColor(value) || parseCssColor(DEFAULT_TEAM_CHAT_COLOR);
+    if (!parsed) return null;
+    const clampChannel = (n) => Math.max(0, Math.min(255, Math.round(n)));
+    const clampAlpha = (n) => Math.max(0, Math.min(1, Number.isFinite(n) ? n : 1));
+    const a = Math.round(clampAlpha(alpha) * 1000) / 1000;
+    return `rgba(${clampChannel(parsed.r)}, ${clampChannel(parsed.g)}, ${clampChannel(parsed.b)}, ${a})`;
+  }
+
+  function findLatestTeamColor(entries) {
+    if (!Array.isArray(entries)) return null;
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const entry = entries[i];
+      if (!entry) continue;
+      if (entry.channel === 'team' && typeof entry.color === 'string' && entry.color) {
+        return entry.color;
+      }
+    }
+    return null;
+  }
+
+  function getTeamChatColor(serverId, fallback = null) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) {
+      return fallback || DEFAULT_TEAM_CHAT_COLOR;
+    }
+    if (chatState.teamColors.has(numeric)) {
+      return chatState.teamColors.get(numeric);
+    }
+    if (fallback) {
+      chatState.teamColors.set(numeric, fallback);
+      return fallback;
+    }
+    return DEFAULT_TEAM_CHAT_COLOR;
   }
 
   function messageSignature(entry) {
@@ -501,7 +575,11 @@
   function storeChatMessages(serverId, entries, { replace = false } = {}) {
     const key = Number(serverId);
     if (!Number.isFinite(key)) return;
-    const list = replace ? [] : [...(chatState.cache.get(key) || [])];
+    const previous = chatState.cache.get(key) || [];
+    const list = replace ? [] : [...previous];
+    if (replace) {
+      chatState.teamColors.delete(key);
+    }
     const seen = new Set(list.map((item) => messageSignature(item)));
     for (const raw of Array.isArray(entries) ? entries : []) {
       const normalized = normalizeChatMessage(raw, key);
@@ -520,6 +598,12 @@
       if (aTime === bTime) return messageSignature(a).localeCompare(messageSignature(b));
       return aTime - bTime;
     });
+    const latestTeamColor = findLatestTeamColor(list);
+    if (latestTeamColor) {
+      chatState.teamColors.set(key, latestTeamColor);
+    } else if (replace) {
+      chatState.teamColors.delete(key);
+    }
     chatState.cache.set(key, list);
     chatState.lastFetched.set(key, Date.now());
     if (key === state.currentServerId) renderChatMessages();
@@ -588,9 +672,6 @@
         const avatarLabel = document.createElement('span');
         avatarLabel.className = 'chat-entry-avatar-label';
         avatarLabel.textContent = chatAvatarInitial(displayName);
-        if (entry.color) {
-          avatar.style.backgroundColor = entry.color;
-        }
         avatar.appendChild(avatarLabel);
       }
 
@@ -608,7 +689,6 @@
         nameEl.target = '_blank';
         nameEl.rel = 'noopener noreferrer';
       }
-      nameEl.style.color = entry.color || '';
       infoRow.appendChild(nameEl);
 
       const channelEl = document.createElement('span');
@@ -625,6 +705,34 @@
         timeEl.textContent = timeInfo.label;
         timeEl.title = timeInfo.title;
         infoRow.appendChild(timeEl);
+      }
+
+      const hasAvatarImage = !!avatarUrl;
+      if (entry.channel === 'team') {
+        const teamColor = getTeamChatColor(serverId, entry.color);
+        const nameColor = rgbaFromColor(teamColor, 0.95) || teamColor;
+        const badgeColor = rgbaFromColor(teamColor, 0.2) || teamColor;
+        const borderColor = rgbaFromColor(teamColor, 0.45) || teamColor;
+        const avatarColor = rgbaFromColor(teamColor, 0.35) || teamColor;
+        if (!hasAvatarImage) {
+          avatar.style.backgroundColor = avatarColor || '';
+        } else {
+          avatar.style.backgroundColor = '';
+        }
+        nameEl.style.color = nameColor || '';
+        channelEl.style.backgroundColor = badgeColor || '';
+        channelEl.style.color = nameColor || '';
+        li.style.borderLeft = `3px solid ${borderColor || teamColor}`;
+      } else {
+        if (!hasAvatarImage) {
+          avatar.style.backgroundColor = entry.color || '';
+        } else {
+          avatar.style.backgroundColor = '';
+        }
+        nameEl.style.color = entry.color || '';
+        channelEl.style.backgroundColor = '';
+        channelEl.style.color = '';
+        li.style.removeProperty('border-left');
       }
 
       meta.appendChild(infoRow);
@@ -651,7 +759,7 @@
     if (!hasServerCapability('console')) return;
     const now = Date.now();
     const last = chatState.lastFetched.get(numeric) || 0;
-    if (!force && chatState.cache.has(numeric) && now - last < 15000) {
+    if (!force && chatState.cache.has(numeric) && now - last < CHAT_REFRESH_INTERVAL_MS) {
       chatState.loading = false;
       if (numeric === state.currentServerId) renderChatMessages();
       return;
@@ -675,6 +783,31 @@
       chatState.loading = false;
       if (numeric === state.currentServerId) renderChatMessages();
     }
+  }
+
+  function clearChatRefreshTimer() {
+    if (chatRefreshTimer) {
+      clearInterval(chatRefreshTimer);
+      chatRefreshTimer = null;
+    }
+  }
+
+  function scheduleChatRefresh(serverId) {
+    clearChatRefreshTimer();
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return;
+    if (!hasServerCapability('console')) return;
+    chatRefreshTimer = setInterval(() => {
+      if (state.currentServerId !== numeric) {
+        clearChatRefreshTimer();
+        return;
+      }
+      if (!hasServerCapability('console')) {
+        clearChatRefreshTimer();
+        return;
+      }
+      refreshChatForServer(numeric).catch(() => {});
+    }, CHAT_REFRESH_INTERVAL_MS);
   }
 
   function ingestChatMessage(serverId, payload) {
@@ -743,6 +876,7 @@
   };
 
   let socket = null;
+  let chatRefreshTimer = null;
   let addServerPinned = false;
   let activeUserDetails = null;
   let lastUserDetailsTrigger = null;
@@ -1937,6 +2071,7 @@
       catch { /* ignore */ }
     }
     moduleBus.emit('server:disconnected', { serverId: previous, reason });
+    clearChatRefreshTimer();
     state.currentServerId = null;
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
     emitWorkspaceEvent('workspace:server-cleared', { reason });
@@ -2704,6 +2839,7 @@
       emitWorkspaceEvent('workspace:server-selected', { serverId: numericId, repeat: true });
       renderChatMessages();
       refreshChatForServer(numericId).catch(() => {});
+      scheduleChatRefresh(numericId);
       return;
     }
     if (previous != null && previous !== numericId) {
@@ -2713,6 +2849,7 @@
       }
       moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
     }
+    clearChatRefreshTimer();
     state.currentServerId = numericId;
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
     emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
@@ -2730,6 +2867,7 @@
     moduleBus.emit('server:connected', { serverId: numericId, server: entry?.data || null });
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
     refreshChatForServer(numericId, { force: true }).catch(() => {});
+    scheduleChatRefresh(numericId);
   }
 
   const ui = {
@@ -2930,6 +3068,7 @@
     chatState.error = null;
     chatState.profileCache.clear();
     chatState.profileRequests.clear();
+    chatState.teamColors.clear();
     renderChatMessages();
     ui.showLogin();
     loadPublicConfig();
