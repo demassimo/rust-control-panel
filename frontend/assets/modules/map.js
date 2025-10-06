@@ -383,6 +383,7 @@
         mapCanvas,
         mapImage,
         overlay,
+        markers: new Map(),
         message,
         summary,
         teamInfo,
@@ -466,6 +467,27 @@
 
       function getActiveViewports() {
         return [mainViewport];
+      }
+
+      function getViewportMarkerStore(viewport) {
+        if (!viewport) return null;
+        if (!viewport.markers || !(viewport.markers instanceof Map)) {
+          viewport.markers = new Map();
+        }
+        return viewport.markers;
+      }
+
+      function clearViewportMarkers(viewport) {
+        if (!viewport || !viewport.overlay) return;
+        viewport.overlay.innerHTML = '';
+        const store = getViewportMarkerStore(viewport);
+        store?.clear?.();
+      }
+
+      function clearAllViewportMarkers() {
+        for (const viewport of getActiveViewports()) {
+          clearViewportMarkers(viewport);
+        }
       }
 
       function clampMapOffsets() {
@@ -2117,30 +2139,75 @@
         }
       }
 
+      function handleMarkerClick(event) {
+        if (!event) return;
+        event.stopPropagation();
+        const marker = event.currentTarget;
+        const steamId = marker?.dataset?.steamid;
+        if (!steamId) return;
+        const player = state.players.find((p) => resolveSteamId(p) === steamId);
+        if (!player) return;
+        selectPlayer(player, { suppressPanel: true, showPopup: true });
+      }
+
       function renderMarkersInViewport(viewport) {
         if (!viewport || !viewport.overlay) return;
-        viewport.overlay.innerHTML = '';
-        if (!mapReady()) return;
+        const overlayEl = viewport.overlay;
+        const markerStore = getViewportMarkerStore(viewport);
+
+        if (!mapReady()) {
+          if (markerStore.size || overlayEl.childElementCount) {
+            clearViewportMarkers(viewport);
+          }
+          return;
+        }
+
         const axis = resolveHorizontalAxis();
+        const staleIds = new Set(markerStore.keys());
+        const selectionEngaged = selectionActive();
+
         for (const player of state.players) {
+          const steamId = resolveSteamId(player);
+          if (!steamId) continue;
           const position = projectPosition(player.position, axis);
-          if (!position) continue;
-          const marker = viewport.doc.createElement('div');
-          marker.className = 'map-marker';
-          marker.style.backgroundColor = colorForPlayer(player);
+          if (!position) {
+            const existing = markerStore.get(steamId);
+            if (existing) {
+              existing.remove();
+              markerStore.delete(steamId);
+              staleIds.delete(steamId);
+            }
+            continue;
+          }
+
+          let marker = markerStore.get(steamId);
+          if (!marker) {
+            marker = viewport.doc.createElement('div');
+            marker.className = 'map-marker';
+            marker.dataset.steamid = steamId;
+            marker.addEventListener('click', handleMarkerClick);
+            marker.style.left = position.left + '%';
+            marker.style.top = position.top + '%';
+            marker.style.backgroundColor = colorForPlayer(player);
+            marker.title = player.displayName || player.persona || steamId;
+            overlayEl.appendChild(marker);
+            markerStore.set(steamId, marker);
+          }
+
           marker.style.left = position.left + '%';
           marker.style.top = position.top + '%';
-          const steamId = resolveSteamId(player);
+          marker.style.backgroundColor = colorForPlayer(player);
           marker.title = player.displayName || player.persona || steamId;
-          marker.dataset.steamid = steamId;
           const focused = isPlayerFocused(player);
-          if (selectionActive() && !focused) marker.classList.add('dimmed');
-          if (focused) marker.classList.add('active');
-          marker.addEventListener('click', (e) => {
-            e.stopPropagation();
-            selectPlayer(player, { suppressPanel: true, showPopup: true });
-          });
-          viewport.overlay.appendChild(marker);
+          marker.classList.toggle('active', focused);
+          marker.classList.toggle('dimmed', selectionEngaged && !focused);
+          staleIds.delete(steamId);
+        }
+
+        for (const steamId of staleIds) {
+          const marker = markerStore.get(steamId);
+          if (marker) marker.remove();
+          markerStore.delete(steamId);
         }
       }
 
@@ -3075,7 +3142,7 @@
           state.worldDetails.syncing = false;
           state.worldDetails.syncError = null;
         }
-        overlay.innerHTML = '';
+        clearAllViewportMarkers();
         cancelMapImageRequest();
         clearMapImage();
         updateConfigPanel();
@@ -3130,7 +3197,7 @@
             state.worldDetails.syncError = null;
           }
           clearSelection();
-          overlay.innerHTML = '';
+          clearAllViewportMarkers();
           cancelMapImageRequest();
           clearMapImage();
           renderPlayerList();
@@ -3177,7 +3244,7 @@
           state.worldDetails.syncError = null;
         }
         clearSelection();
-        overlay.innerHTML = '';
+        clearAllViewportMarkers();
         cancelMapImageRequest();
         clearMapImage();
         renderPlayerList();
