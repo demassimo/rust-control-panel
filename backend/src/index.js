@@ -868,19 +868,78 @@ function parseStatusMessage(message) {
 
 const STEAM_ID_REGEX = /^\d{17}$/;
 
+function extractNumericValue(input, depth = 0) {
+  if (input == null) return null;
+  if (depth > 6) return null;
+
+  if (typeof input === 'number') {
+    return Number.isFinite(input) ? input : null;
+  }
+  if (typeof input === 'bigint') {
+    const num = Number(input);
+    return Number.isFinite(num) ? num : null;
+  }
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+    const normalised = trimmed.replace(/,/g, '');
+    const direct = Number(normalised);
+    if (Number.isFinite(direct)) return direct;
+    const match = normalised.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    const parsed = Number(match[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (Array.isArray(input)) {
+    for (const entry of input) {
+      const nested = extractNumericValue(entry, depth + 1);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+  if (typeof input === 'object') {
+    const priorityKeys = [
+      'value',
+      'Value',
+      '_value',
+      '_Value',
+      'data',
+      'Data',
+      'val',
+      'Val',
+      'number',
+      'Number',
+      'raw',
+      'Raw',
+      '$numberFloat',
+      '$numberDouble',
+      '$numberDecimal',
+      '$numberInt64',
+      '$numberLong',
+      '$numberInt32',
+      '$number'
+    ];
+    for (const key of priorityKeys) {
+      if (Object.prototype.hasOwnProperty.call(input, key)) {
+        const nested = extractNumericValue(input[key], depth + 1);
+        if (nested != null) return nested;
+      }
+    }
+    for (const nested of Object.values(input)) {
+      const resolved = extractNumericValue(nested, depth + 1);
+      if (resolved != null) return resolved;
+    }
+  }
+  return null;
+}
+
 function parseVector3(value) {
   if (!value) return null;
 
-  const toNumber = (input) => {
-    if (input == null) return null;
-    const num = Number(input);
-    return Number.isFinite(num) ? num : null;
-  };
-
   const buildResult = ({ x, y, z }) => {
-    const numericX = toNumber(x);
-    const numericY = toNumber(y);
-    const numericZ = toNumber(z);
+    const numericX = extractNumericValue(x);
+    const numericY = extractNumericValue(y);
+    const numericZ = extractNumericValue(z);
     if (numericX == null) return null;
     if (numericY == null && numericZ == null) return null;
     const result = { x: numericX };
@@ -1181,6 +1240,123 @@ function parseLegacyPlayerList(message) {
   return players;
 }
 
+function findNestedPositionCandidate(value, depth = 0) {
+  if (!value || typeof value !== 'object') return null;
+  if (depth > 6) return null;
+  const directCandidates = [
+    value.Position,
+    value.position,
+    value.LocalPosition,
+    value.localPosition,
+    value.WorldPosition,
+    value.worldPosition,
+    value.Location,
+    value.location,
+    value.Pos,
+    value.pos,
+    value.Coordinates,
+    value.coordinates
+  ];
+  for (const candidate of directCandidates) {
+    if (candidate == null) continue;
+    if (Array.isArray(candidate)) {
+      if (candidate.length >= 2) return candidate;
+      continue;
+    }
+    if (typeof candidate === 'object') return candidate;
+    if (typeof candidate === 'string') return candidate;
+  }
+  const queue = [];
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || typeof nested !== 'object') continue;
+    if (/(position|coordinates?|coords?|pos|location)/i.test(key)) {
+      const candidate = nested.Position ?? nested.position ?? nested;
+      if (candidate != null) {
+        if (Array.isArray(candidate) && candidate.length >= 2) return candidate;
+        if (typeof candidate === 'object') {
+          if (candidate.x != null || candidate.y != null || candidate.z != null) return candidate;
+          return candidate;
+        }
+        if (typeof candidate === 'string') return candidate;
+      }
+    }
+    queue.push(nested);
+  }
+  for (const nested of queue) {
+    const found = findNestedPositionCandidate(nested, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findNestedTeamId(value, depth = 0) {
+  if (!value || depth > 6) return null;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = findNestedTeamId(entry, depth + 1);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+
+  const directKeys = [
+    'TeamID',
+    'TeamId',
+    'teamID',
+    'teamId',
+    'team_id',
+    'Team_id',
+    'CurrentTeamID',
+    'CurrentTeamId',
+    'currentTeamID',
+    'currentTeamId',
+    'currentTeam',
+    'CurrentTeam',
+    'ActiveTeamID',
+    'ActiveTeamId',
+    'activeTeamID',
+    'activeTeamId',
+    'activeTeam',
+    'ActiveTeam',
+    'Team',
+    'team',
+    'GroupID',
+    'GroupId',
+    'groupID',
+    'groupId',
+    'ClanTeamID',
+    'clanTeamID',
+    'clanTeamId'
+  ];
+
+  for (const key of directKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      const numeric = extractNumericValue(value[key], depth + 1);
+      if (numeric != null && numeric > 0) return numeric;
+    }
+  }
+
+  const targetedPattern = /(team|group|party|squad|relation)/i;
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || (typeof nested !== 'object' && !Array.isArray(nested))) continue;
+    if (!targetedPattern.test(key)) continue;
+    const candidate = findNestedTeamId(nested, depth + 1);
+    if (candidate != null) return candidate;
+  }
+
+  const skipPattern = /(position|coordinates?|transform|rotation|velocity|health|ping|seconds|time|level|sleep|violation|connected|owner|display|name|persona|address|ip|steam|inventory|blueprint|bag|spawn|stat|flags?)/i;
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || (typeof nested !== 'object' && !Array.isArray(nested))) continue;
+    if (targetedPattern.test(key)) continue;
+    if (skipPattern.test(key)) continue;
+    const candidate = findNestedTeamId(nested, depth + 1);
+    if (candidate != null) return candidate;
+  }
+
+  return null;
+}
+
 function parsePlayerListMessage(message) {
   if (!message) return [];
   let text = message.trim();
@@ -1195,6 +1371,28 @@ function parsePlayerListMessage(message) {
     }
   }
   if (payload && Array.isArray(payload.Players)) payload = payload.Players;
+  if (payload && Array.isArray(payload.players)) payload = payload.players;
+  if (payload && payload.players && Array.isArray(payload.players.list)) payload = payload.players.list;
+  if (payload && payload.Players && Array.isArray(payload.Players.list)) payload = payload.Players.list;
+  if (payload && payload.data && Array.isArray(payload.data.Players)) payload = payload.data.Players;
+  if (payload && payload.data && Array.isArray(payload.data.players)) payload = payload.data.players;
+  if (payload && Array.isArray(payload.list)) payload = payload.list;
+  if (!Array.isArray(payload)) {
+    const nestedArrays = [
+      payload?.Result,
+      payload?.result,
+      payload?.value,
+      payload?.Value,
+      payload?.payload,
+      payload?.Payload
+    ];
+    for (const candidate of nestedArrays) {
+      if (Array.isArray(candidate)) {
+        payload = candidate;
+        break;
+      }
+    }
+  }
   if (!Array.isArray(payload)) {
     return parseLegacyPlayerList(message);
   }
@@ -1209,6 +1407,15 @@ function parsePlayerListMessage(message) {
 
     let rawPosition = entry.Position ?? entry.position ?? null;
     if (!rawPosition && entry && typeof entry === 'object') {
+      const transform = entry.Transform || entry.transform || null;
+      if (!rawPosition && transform && typeof transform === 'object') {
+        rawPosition = findNestedPositionCandidate(transform);
+      }
+      if (!rawPosition) {
+        const nested = findNestedPositionCandidate(entry);
+        if (nested) rawPosition = nested;
+      }
+
       const positionFields = {};
       const xCandidates = [
         entry.X,
@@ -1253,6 +1460,36 @@ function parsePlayerListMessage(message) {
     }
     const position = parseVector3(rawPosition);
 
+    const directTeamCandidates = [
+      entry.TeamId,
+      entry.TeamID,
+      entry.teamId,
+      entry.teamID,
+      entry.team_id,
+      entry.Team,
+      entry.team,
+      entry.CurrentTeam,
+      entry.currentTeam,
+      entry.CurrentTeamId,
+      entry.currentTeamId,
+      entry.ActiveTeam,
+      entry.activeTeam
+    ];
+    let teamId = null;
+    for (const candidate of directTeamCandidates) {
+      const parsed = extractNumericValue(candidate);
+      if (parsed != null && parsed > 0) {
+        teamId = parsed;
+        break;
+      }
+    }
+    if (teamId == null || teamId <= 0) {
+      const nestedTeam = findNestedTeamId(entry);
+      if (nestedTeam != null && nestedTeam > 0) {
+        teamId = nestedTeam;
+      }
+    }
+
     result.push({
       steamId,
       ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
@@ -1263,15 +1500,7 @@ function parsePlayerListMessage(message) {
       violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
       health: Number(entry.Health ?? entry.health ?? 0) || 0,
       position,
-      teamId: Number(
-        entry.TeamId
-        ?? entry.TeamID
-        ?? entry.teamId
-        ?? entry.teamID
-        ?? entry.Team
-        ?? entry.team
-        ?? 0
-      ) || 0,
+      teamId: Number.isFinite(teamId) && teamId > 0 ? teamId : 0,
       networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
     });
   }
