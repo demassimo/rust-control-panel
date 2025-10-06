@@ -1077,6 +1077,80 @@ function parseVector3(value) {
   return null;
 }
 
+function extractTeamIdentifier(value, depth = 0) {
+  if (value == null || depth > 6) return null;
+
+  const toPositiveInt = (input) => {
+    if (input == null) return null;
+    const numeric = Number(input);
+    if (!Number.isFinite(numeric)) return null;
+    const truncated = Math.trunc(numeric);
+    return truncated > 0 ? truncated : null;
+  };
+
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return toPositiveInt(value);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed) {
+      const stripped = trimmed
+        .replace(/\u001b\[[0-9;]*m/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\[[^\]]*\]/g, ' ')
+        .replace(/#[0-9a-f]{3,8}\b/gi, ' ');
+      const parts = stripped.match(/\d+/g);
+      if (parts) {
+        for (const part of parts) {
+          const candidate = toPositiveInt(part);
+          if (candidate != null) return candidate;
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractTeamIdentifier(entry, depth + 1);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    const priorityKeys = [
+      'team',
+      'Team',
+      'teamId',
+      'TeamId',
+      'teamID',
+      'TeamID',
+      'groupId',
+      'GroupId',
+      'groupID',
+      'GroupID',
+      'value',
+      'Value',
+      'id',
+      'Id'
+    ];
+    for (const key of priorityKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const nested = extractTeamIdentifier(value[key], depth + 1);
+        if (nested != null) return nested;
+      }
+    }
+    for (const nested of Object.values(value)) {
+      const resolved = extractTeamIdentifier(nested, depth + 1);
+      if (resolved != null) return resolved;
+    }
+  }
+
+  const extracted = extractNumericValue(value, depth + 1);
+  return toPositiveInt(extracted);
+}
+
 function parseLegacyPlayerList(message) {
   if (!message || typeof message !== 'string') return [];
 
@@ -1175,8 +1249,17 @@ function parseLegacyPlayerList(message) {
         ?? 0
       ) || 0;
       const health = Number(data.health ?? 0) || 0;
-      const teamCandidate = Number(data.teamid ?? data.team ?? 0);
-      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0 ? teamCandidate : 0;
+      const rawTeamCandidate = (
+        data.teamid
+        ?? data.team
+        ?? original.Team
+        ?? original.team
+        ?? null
+      );
+      const teamCandidate = extractTeamIdentifier(rawTeamCandidate);
+      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0
+        ? Math.trunc(teamCandidate)
+        : 0;
       const positionSource = (
         original.Position
         ?? original.position
@@ -1281,7 +1364,11 @@ function parseLegacyPlayerList(message) {
     const currentLevel = pickInt() ?? 0;
     const health = pickFloat() ?? 0;
     let teamId = 0;
-    if (numericTail.length > 0) {
+    const teamMatch = line.match(/(?:team|group|party|squad)\s*(?:[:=]\s*|id\s*)?([^,]+)/i);
+    const matchedTeam = teamMatch ? extractTeamIdentifier(teamMatch[1]) : null;
+    if (Number.isFinite(matchedTeam) && matchedTeam > 0) {
+      teamId = Math.trunc(matchedTeam);
+    } else if (numericTail.length > 0) {
       const candidateTeam = pickInt();
       if (Number.isFinite(candidateTeam) && candidateTeam > 0) {
         teamId = candidateTeam;
@@ -1364,6 +1451,11 @@ function findNestedTeamId(value, depth = 0) {
     }
     return null;
   }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
+    const numeric = extractTeamIdentifier(value);
+    if (Number.isFinite(numeric) && numeric > 0) return Math.trunc(numeric);
+    return null;
+  }
   if (typeof value !== 'object') return null;
 
   const directKeys = [
@@ -1398,7 +1490,7 @@ function findNestedTeamId(value, depth = 0) {
 
   for (const key of directKeys) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
-      const numeric = extractNumericValue(value[key], depth + 1);
+      const numeric = extractTeamIdentifier(value[key]);
       if (numeric != null && numeric > 0) return numeric;
     }
   }
@@ -1543,16 +1635,16 @@ function parsePlayerListMessage(message) {
     ];
     let teamId = null;
     for (const candidate of directTeamCandidates) {
-      const parsed = extractNumericValue(candidate);
+      const parsed = extractTeamIdentifier(candidate);
       if (parsed != null && parsed > 0) {
-        teamId = parsed;
+        teamId = Math.trunc(parsed);
         break;
       }
     }
     if (teamId == null || teamId <= 0) {
       const nestedTeam = findNestedTeamId(entry);
       if (nestedTeam != null && nestedTeam > 0) {
-        teamId = nestedTeam;
+        teamId = Math.trunc(nestedTeam);
       }
     }
 
@@ -1566,7 +1658,7 @@ function parsePlayerListMessage(message) {
       violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
       health: Number(entry.Health ?? entry.health ?? 0) || 0,
       position,
-      teamId: Number.isFinite(teamId) && teamId > 0 ? teamId : 0,
+      teamId: Number.isFinite(teamId) && teamId > 0 ? Math.trunc(teamId) : 0,
       networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
     });
   }
