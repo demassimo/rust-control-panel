@@ -2454,7 +2454,8 @@ function extractTeamInfoFromText(text, requestedSteamId) {
     /team\s*id\s*[:=]\s*(\d{2,})/i,
     /team\s*[:=]\s*(\d{2,})/i,
     /group\s*id\s*[:=]\s*(\d{2,})/i,
-    /team\s*(\d{2,})\b/i
+    /team\s*(\d{2,})\b/i,
+    /\bid\s*[:=]\s*(\d{2,})/i
   ];
   let teamId = null;
   for (const pattern of teamPatterns) {
