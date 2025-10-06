@@ -38,6 +38,23 @@
   const btnSend = $('#btnSend');
   const cmdInput = $('#cmd');
   const cmdInputDefaultPlaceholder = cmdInput?.getAttribute('placeholder') || '';
+
+  const state = {
+    API: '',
+    TOKEN: localStorage.getItem('token') || '',
+    currentUser: null,
+    currentServerId: null,
+    serverItems: new Map(),
+    allowRegistration: false,
+    statusTimer: null,
+    settings: {},
+    activePanel: 'dashboard',
+    activeTeamId: null,
+    activeTeamName: null,
+    teams: [],
+    roles: [],
+    roleTemplates: { serverCapabilities: [], globalPermissions: [] }
+  };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
   const btnLogin = $('#btnLogin');
@@ -515,23 +532,6 @@
       name: 'Manage roles',
       description: 'Create, edit, and delete roles or adjust their permissions.'
     }
-  };
-
-  const state = {
-    API: '',
-    TOKEN: localStorage.getItem('token') || '',
-    currentUser: null,
-    currentServerId: null,
-    serverItems: new Map(),
-    allowRegistration: false,
-    statusTimer: null,
-    settings: {},
-    activePanel: 'dashboard',
-    activeTeamId: null,
-    activeTeamName: null,
-    teams: [],
-    roles: [],
-    roleTemplates: { serverCapabilities: [], globalPermissions: [] }
   };
 
   let socket = null;
