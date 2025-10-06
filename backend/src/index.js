@@ -94,6 +94,36 @@ const COUNTRY_NAME_FALLBACKS = {
   EU: 'European Union'
 };
 
+const WORLD_ENTITY_CACHE_TTL_MS = 15000;
+const ENTITY_SEARCH_TIMEOUT_MS = 4500;
+
+const ENTITY_SEARCH_DEFINITIONS = [
+  {
+    type: 'patrol_helicopter',
+    label: 'Patrol Helicopter',
+    icon: 'patrol-helicopter',
+    commands: [
+      'find "assets/prefabs/npc/patrolhelicopter/patrolhelicopter.prefab"',
+      'find "patrol helicopter"',
+      'find patrolhelicopter'
+    ],
+    matchers: [/patrol/i, /heli/i]
+  },
+  {
+    type: 'cargo_ship',
+    label: 'Cargo Ship',
+    icon: 'cargo-ship',
+    commands: [
+      'find "assets/content/vehicles/boats/cargoship/cargoship.prefab"',
+      'find "cargo ship"',
+      'find cargoship'
+    ],
+    matchers: [/cargo/i, /ship/i]
+  }
+];
+
+const worldEntityCache = new Map();
+
 function lookupCountryCodeFromIp(ip) {
   if (typeof ip !== 'string' || !ip) return null;
   try {
@@ -2934,6 +2964,219 @@ function parsePrintPosMessage(message) {
   return null;
 }
 
+const MONUMENT_ICON_RULES = [
+  { pattern: /oil\s*rig/i, icon: 'oil-rig' },
+  { pattern: /dome/i, icon: 'sphere-tank' },
+  { pattern: /lighthouse/i, icon: 'lighthouse' },
+  { pattern: /harbo(u)?r/i, icon: 'harbor' },
+  { pattern: /launch|rocket/i, icon: 'rocket' },
+  { pattern: /airfield|airport/i, icon: 'airfield' },
+  { pattern: /train.*yard/i, icon: 'train-yard' },
+  { pattern: /train.*station/i, icon: 'train-station' },
+  { pattern: /power\s*plant/i, icon: 'power-plant' },
+  { pattern: /military|outpost/i, icon: 'military' },
+  { pattern: /bandit/i, icon: 'bandit' },
+  { pattern: /satellite|dish|telecom|tower|antenna/i, icon: 'satellite' },
+  { pattern: /junkyard/i, icon: 'junkyard' },
+  { pattern: /ranch/i, icon: 'ranch' },
+  { pattern: /fishing/i, icon: 'fishing' },
+  { pattern: /gas\s*station|fuel/i, icon: 'gas-station' },
+  { pattern: /supermarket|shop/i, icon: 'store' },
+  { pattern: /excavator/i, icon: 'excavator' }
+];
+
+function monumentIconFromLabel(label, category) {
+  const haystack = [label, category]
+    .filter((value) => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+  for (const { pattern, icon } of MONUMENT_ICON_RULES) {
+    if (pattern.test(haystack)) return icon;
+  }
+  return 'map-pin';
+}
+
+function normaliseIconToken(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function slugifyMonumentId(value, fallback) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed) {
+      const slug = trimmed.replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      if (slug) return slug;
+    }
+  }
+  if (Number.isFinite(value)) return `mon-${Math.trunc(value)}`;
+  return fallback;
+}
+
+function extractMonumentPosition(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const candidates = [];
+  const direct = {
+    x: entry.x ?? entry.X ?? entry.posX ?? entry.positionX ?? entry.worldX,
+    y: entry.y ?? entry.Y ?? entry.posY ?? entry.positionY ?? entry.worldY,
+    z: entry.z ?? entry.Z ?? entry.posZ ?? entry.positionZ ?? entry.worldZ
+  };
+  if (direct.x != null || direct.y != null || direct.z != null) candidates.push(direct);
+  const nestedKeys = ['position', 'Position', 'location', 'Location', 'coords', 'Coords', 'worldPosition', 'WorldPosition'];
+  for (const key of nestedKeys) {
+    if (entry[key]) candidates.push(entry[key]);
+  }
+  if (entry.transform?.position) candidates.push(entry.transform.position);
+  if (entry.Transform?.Position) candidates.push(entry.Transform.Position);
+  for (const candidate of candidates) {
+    const vector = parseVector3(candidate);
+    if (vector) return vector;
+  }
+  return null;
+}
+
+function normaliseMonumentsFromMeta(monuments) {
+  if (!Array.isArray(monuments)) return [];
+  const results = [];
+  monuments.forEach((entry, index) => {
+    if (!entry || typeof entry !== 'object') return;
+    const position = extractMonumentPosition(entry);
+    if (!position) return;
+    const rawId = entry.id ?? entry.identifier ?? entry.prefabName ?? entry.name ?? entry.displayName ?? index;
+    const id = slugifyMonumentId(rawId, `mon-${index}`);
+    const label = entry.displayName || entry.name || entry.label || entry.token || `Monument ${index + 1}`;
+    const shortName = entry.shortName || entry.token || entry.name || label;
+    const category = entry.category || entry.type || entry.kind || entry.MonumentType || null;
+    const icon = normaliseIconToken(entry.icon) || monumentIconFromLabel(label, category);
+    results.push({ id, label, shortName, category, icon, position });
+  });
+  return results;
+}
+
+function parseEntitySearchResults(message) {
+  if (message == null) return [];
+  const raw = typeof message === 'object' && message && Object.prototype.hasOwnProperty.call(message, 'Message')
+    ? message.Message
+    : message;
+  const cleaned = stripAnsiSequences(String(raw ?? ''));
+  if (!cleaned.trim()) return [];
+  const lines = cleaned
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => stripRconTimestampPrefix(line).trim())
+    .filter(Boolean);
+  const results = [];
+  for (const line of lines) {
+    const coordMatch = line.match(/\((-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)\)/);
+    if (!coordMatch) continue;
+    const position = parseVector3({ x: coordMatch[1], y: coordMatch[2], z: coordMatch[3] });
+    if (!position) continue;
+    const entityMatch = line.match(/([a-z0-9_\/.-]+)\[(\d+)\]/i);
+    const prefab = entityMatch ? entityMatch[1] : null;
+    const entityId = entityMatch ? entityMatch[2] : null;
+    const label = entityMatch ? (line.slice(0, entityMatch.index).trim() || prefab) : line.slice(0, coordMatch.index).trim();
+    results.push({
+      entityId: entityId ? String(entityId) : null,
+      prefab: prefab || null,
+      label: label || prefab || null,
+      raw: line,
+      position
+    });
+  }
+  return results;
+}
+
+function matchesEntityDefinition(result, definition) {
+  if (!definition?.matchers || definition.matchers.length === 0) return true;
+  const haystack = [result.prefab, result.label, result.raw]
+    .filter((value) => typeof value === 'string' && value)
+    .join(' ')
+    .toLowerCase();
+  if (!haystack) return false;
+  return definition.matchers.some((pattern) => pattern.test(haystack));
+}
+
+function normaliseEntityResult(result, definition, index) {
+  return {
+    id: result.entityId ? `${definition.type}-${result.entityId}` : `${definition.type}-${index}`,
+    type: definition.type,
+    label: definition.label,
+    icon: definition.icon,
+    prefab: result.prefab || null,
+    position: result.position,
+    raw: result.raw || null
+  };
+}
+
+async function fetchDynamicWorldEntities(serverRow, { logger } = {}) {
+  const dynamic = [];
+  for (const definition of ENTITY_SEARCH_DEFINITIONS) {
+    const seen = new Set();
+    for (const command of definition.commands) {
+      let results = [];
+      try {
+        const reply = await sendRconCommand(serverRow, command, { silent: true, timeoutMs: ENTITY_SEARCH_TIMEOUT_MS });
+        results = parseEntitySearchResults(reply?.Message ?? reply);
+      } catch (err) {
+        if (logger?.debug) {
+          logger.debug('Entity search command failed', { command, error: err?.message || err });
+        }
+        continue;
+      }
+      for (const result of results) {
+        if (!matchesEntityDefinition(result, definition)) continue;
+        const dedupeKey = result.entityId
+          ? `${definition.type}:${result.entityId}`
+          : `${definition.type}:${result.prefab || ''}:${Math.round(result.position?.x ?? 0)}:${Math.round(result.position?.z ?? 0)}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        dynamic.push(normaliseEntityResult(result, definition, dynamic.length));
+      }
+      if (results.length > 0) break;
+    }
+  }
+  return dynamic;
+}
+
+async function resolveWorldEntities(serverId, serverRow, { mapMetadata, logger } = {}) {
+  const now = Date.now();
+  const cached = worldEntityCache.get(serverId);
+  let dynamic = cached?.entities || [];
+  let timestamp = cached?.timestamp || 0;
+  const shouldRefresh = !cached || now - cached.timestamp > WORLD_ENTITY_CACHE_TTL_MS;
+  if (shouldRefresh) {
+    try {
+      dynamic = await fetchDynamicWorldEntities(serverRow, { logger });
+      timestamp = now;
+      worldEntityCache.set(serverId, { timestamp: now, entities: dynamic });
+    } catch (err) {
+      if (logger?.warn) {
+        logger.warn('Dynamic world entity query failed', err);
+      }
+      if (!cached) {
+        timestamp = now;
+        worldEntityCache.set(serverId, { timestamp: now, entities: [] });
+        dynamic = [];
+      } else {
+        timestamp = cached.timestamp;
+        dynamic = cached.entities;
+      }
+    }
+  }
+
+  const monuments = normaliseMonumentsFromMeta(mapMetadata?.monuments);
+  const fetchedAt = new Date(timestamp || now).toISOString();
+  return {
+    fetchedAt,
+    monuments,
+    entities: dynamic.map((entry) => ({
+      ...entry,
+      position: entry.position ? { ...entry.position } : null
+    }))
+  };
+}
+
 async function enrichPlayersWithTeamInfo(
   serverId,
   serverRow,
@@ -4926,6 +5169,18 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       status
     });
 
+    let worldEntities;
+    try {
+      worldEntities = await resolveWorldEntities(id, server, { mapMetadata: mapPayload, logger });
+    } catch (entityErr) {
+      logger.warn('World entity resolution failed', entityErr);
+      worldEntities = {
+        fetchedAt: new Date().toISOString(),
+        monuments: normaliseMonumentsFromMeta(mapPayload?.monuments),
+        entities: []
+      };
+    }
+
     // backward-compatible shape + richer fields
     const responsePayload = {
       players,
@@ -4936,7 +5191,8 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       playerDataSources: {
         positions: positionDataSource,
         teams: teamDataSource
-      }
+      },
+      entities: worldEntities
     };
 
     res.json(responsePayload);
