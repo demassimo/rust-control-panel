@@ -456,8 +456,6 @@
       let viewportSizeUpdateHandle = null;
       let viewportSizeUpdateScheduled = false;
 
-      scheduleViewportSizeUpdate({ immediate: true });
-
       const parentView = ctx.root?.closest?.('[data-view]');
       let visibilityObserver = null;
       if (parentView && typeof MutationObserver === 'function') {
@@ -564,6 +562,8 @@
         offsetX: 0,
         offsetY: 0
       };
+
+      scheduleViewportSizeUpdate({ immediate: true });
 
       const panState = {
         active: false,
