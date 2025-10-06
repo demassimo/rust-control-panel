@@ -695,6 +695,7 @@ const chatCleanupSchedule = new Map();
 
 const steamProfileCache = new Map();
 const TEAM_INFO_CACHE_TTL = 30 * 1000;
+const TEAM_INFO_ERROR_RETRY_INTERVAL_MS = 10 * 1000;
 const TEAM_INFO_COMMAND_TIMEOUT_MS = 5000;
 const POSITION_CACHE_TTL = 30 * 1000;
 const POSITION_COMMAND_TIMEOUT_MS = 5000;
@@ -2380,7 +2381,7 @@ function extractTeamInfoFromNode(node, requestedSteamId) {
     health: Number.isFinite(member.health) ? Math.round(member.health) : null
   }));
 
-  const hasTeam = Number.isFinite(teamId) && teamId > 0 && members.length > 0;
+  const hasTeam = Number.isFinite(teamId) && teamId > 0;
 
   return {
     teamId: Number.isFinite(teamId) ? Math.trunc(teamId) : 0,
@@ -2453,7 +2454,8 @@ function extractTeamInfoFromText(text, requestedSteamId) {
     /team\s*id\s*[:=]\s*(\d{2,})/i,
     /team\s*[:=]\s*(\d{2,})/i,
     /group\s*id\s*[:=]\s*(\d{2,})/i,
-    /team\s*(\d{2,})\b/i
+    /team\s*(\d{2,})\b/i,
+    /\bid\s*[:=]\s*(\d{2,})/i
   ];
   let teamId = null;
   for (const pattern of teamPatterns) {
@@ -2514,7 +2516,7 @@ function extractTeamInfoFromText(text, requestedSteamId) {
     health: null
   }));
 
-  const hasTeam = Number.isFinite(teamId) && teamId > 0 && members.length > 0;
+  const hasTeam = Number.isFinite(teamId) && teamId > 0;
 
   return {
     teamId: Number.isFinite(teamId) ? Math.trunc(teamId) : 0,
@@ -2749,7 +2751,7 @@ function cacheTeamInfoForServer(serverId, info, now = Date.now()) {
   if (leaderSteamId) pushMember({ steamId: leaderSteamId });
   if (ownerSteamId) pushMember({ steamId: ownerSteamId });
 
-  const hasTeam = Number.isFinite(teamId) && teamId > 0 && members.length > 0;
+  const hasTeam = Number.isFinite(teamId) && teamId > 0;
 
   const cacheEntry = {
     teamId: hasTeam ? teamId : 0,
@@ -2966,7 +2968,10 @@ async function enrichPlayersWithTeamInfo(
     for (const [steamId, player] of playerMap.entries()) {
       if (Number(player.teamId) > 0) continue;
       const cached = lookupCachedTeamInfoForPlayer(numeric, steamId, now);
-      if (cached) continue;
+      if (cached) {
+        if (!cached.error) continue;
+        if (now - cached.fetchedAt < TEAM_INFO_ERROR_RETRY_INTERVAL_MS) continue;
+      }
       pending.push(steamId);
     }
   } else {
@@ -2987,10 +2992,32 @@ async function enrichPlayersWithTeamInfo(
       });
       lookupsPerformed = true;
       const info = parseTeamInfoMessage(reply, steamId);
-      if (info) {
+      if (info?.hasTeam) {
         cacheTeamInfoForServer(numeric, info, Date.now());
         if (logger?.debug) {
           logger.debug('teaminfo resolved', { steamId, teamId: info.teamId || 0, hasTeam: info.hasTeam });
+        }
+      } else if (info) {
+        const timestamp = Date.now();
+        const targets = new Set();
+        if (info.requestedSteamId && STEAM_ID_REGEX.test(info.requestedSteamId)) {
+          targets.add(info.requestedSteamId);
+        }
+        if (Array.isArray(info.members)) {
+          for (const member of info.members) {
+            if (member?.steamId && STEAM_ID_REGEX.test(member.steamId)) {
+              targets.add(member.steamId);
+            }
+          }
+        }
+        if (targets.size === 0 && STEAM_ID_REGEX.test(steamId)) {
+          targets.add(steamId);
+        }
+        for (const target of targets) {
+          cacheTeamInfoMiss(numeric, target, timestamp);
+        }
+        if (logger?.debug) {
+          logger.debug('teaminfo reported no team', { steamId, requestedSteamId: info.requestedSteamId, memberCount: info.members?.length || 0 });
         }
       } else {
         cacheTeamInfoMiss(numeric, steamId, Date.now());
@@ -4531,14 +4558,16 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     });
     players = positionPrep.players;
 
-    const needsManualTeamLookup = !playerListHasTeamData && teamPrep.pending.length > 0;
-    const needsManualPositionLookup = !playerListHasPositionData && positionPrep.pending.length > 0;
+    const needsManualTeamLookup = teamPrep.pending.length > 0;
+    const needsManualPositionLookup = positionPrep.pending.length > 0;
+    const requiresManualCooldown = (!playerListHasTeamData && needsManualTeamLookup)
+      || (!playerListHasPositionData && needsManualPositionLookup);
 
     if (!(needsManualTeamLookup || needsManualPositionLookup)) {
       clearManualRefreshState(id);
     }
 
-    if (needsManualTeamLookup || needsManualPositionLookup) {
+    if (requiresManualCooldown) {
       const cooldown = manualRefreshCooldown(id);
       if (cooldown.coolingDown) {
         const retryAfterSeconds = Math.max(1, Math.ceil(cooldown.retryAfterMs / 1000));
