@@ -63,7 +63,9 @@ import {
   isCustomLevelUrl,
   isFacepunchLevelUrl,
   parseServerInfoMessage,
-  parseChatMessage
+  parseChatMessage,
+  stripAnsiSequences,
+  stripRconTimestampPrefix
 } from './rcon-parsers.js';
 
 const mapImageUpload = multer({
@@ -691,6 +693,14 @@ const CHAT_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 const chatCleanupSchedule = new Map();
 
 const steamProfileCache = new Map();
+const TEAM_INFO_CACHE_TTL = 30 * 1000;
+const TEAM_INFO_COMMAND_TIMEOUT_MS = 5000;
+const POSITION_CACHE_TTL = 30 * 1000;
+const POSITION_COMMAND_TIMEOUT_MS = 5000;
+const MANUAL_REFRESH_MIN_INTERVAL_MS = 20 * 1000;
+const teamInfoCache = new Map();
+const positionCache = new Map();
+const manualRefreshState = new Map();
 let monitoring = false;
 let monitorTimer = null;
 
@@ -1442,6 +1452,17 @@ function findNestedPositionCandidate(value, depth = 0) {
   return null;
 }
 
+function hasValidPosition(position) {
+  if (!position || typeof position !== 'object') return false;
+  const numericX = Number(position.x);
+  if (!Number.isFinite(numericX)) return false;
+  const numericY = Number(position.y);
+  const numericZ = Number(position.z);
+  if (Number.isFinite(numericZ)) return true;
+  if (Number.isFinite(numericY)) return true;
+  return false;
+}
+
 function findNestedTeamId(value, depth = 0) {
   if (!value || depth > 6) return null;
   if (Array.isArray(value)) {
@@ -2098,6 +2119,973 @@ async function resolveSteamProfiles(steamids) {
     }
   }
   return profileMap;
+}
+
+function extractSteamIdFromText(value) {
+  if (typeof value === 'string') {
+    const match = value.match(/\b(7656119\d{10,})\b/);
+    if (match) return match[1];
+  }
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    const text = String(value);
+    if (STEAM_ID_REGEX.test(text)) return text;
+  }
+  return null;
+}
+
+function normaliseTeamMember(entry) {
+  if (!entry) return null;
+  if (typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'bigint') {
+    const text = String(entry);
+    const steamId = extractSteamIdFromText(text);
+    if (!steamId) return null;
+    const label = text.replace(steamId, '').replace(/[\[\]{}()<>]/g, ' ').replace(/[:,]/g, ' ');
+    const display = label.replace(/\s+/g, ' ').trim();
+    return {
+      steamId,
+      displayName: display || null,
+      online: null,
+      health: null
+    };
+  }
+  if (typeof entry !== 'object') return null;
+  const steamId = resolveSteamIdFromEntry(entry) || extractSteamIdFromText(entry?.id ?? entry?.Id ?? entry?.ID);
+  if (!steamId || !STEAM_ID_REGEX.test(steamId)) return null;
+  const nameCandidates = [
+    entry.DisplayName,
+    entry.displayName,
+    entry.Name,
+    entry.name,
+    entry.Username,
+    entry.username,
+    entry.UserName,
+    entry.userName,
+    entry.Nickname,
+    entry.nickname,
+    entry.PlayerName,
+    entry.playerName
+  ];
+  let displayName = null;
+  for (const candidate of nameCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      displayName = candidate.trim();
+      break;
+    }
+  }
+  const onlineCandidates = [
+    entry.IsOnline,
+    entry.isOnline,
+    entry.online,
+    entry.Online,
+    entry.isConnected,
+    entry.IsConnected,
+    entry.connected,
+    entry.Connected,
+    entry.isActive,
+    entry.IsActive,
+    entry.active,
+    entry.Active,
+    entry.isAlive,
+    entry.IsAlive,
+    entry.alive,
+    entry.Alive
+  ];
+  let online = null;
+  for (const candidate of onlineCandidates) {
+    if (typeof candidate !== 'undefined') {
+      online = interpretBoolean(candidate);
+      break;
+    }
+  }
+  const healthCandidates = [entry.Health, entry.health, entry.HP, entry.hp, entry.healthFraction];
+  let health = null;
+  for (const candidate of healthCandidates) {
+    if (candidate == null) continue;
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric)) {
+      health = numeric;
+      break;
+    }
+  }
+  const teamCandidates = [entry.teamId, entry.TeamId, entry.TeamID, entry.team, entry.Team];
+  let memberTeamId = null;
+  for (const candidate of teamCandidates) {
+    const parsed = extractTeamIdentifier(candidate);
+    if (parsed != null && parsed > 0) {
+      memberTeamId = parsed;
+      break;
+    }
+  }
+  const normalized = {
+    steamId,
+    displayName: displayName || null,
+    online: typeof online === 'boolean' ? online : null,
+    health: Number.isFinite(health) ? Math.round(health) : null
+  };
+  if (memberTeamId != null && memberTeamId > 0) normalized.teamId = memberTeamId;
+  return normalized;
+}
+
+function scoreTeamInfoCandidate(info, requestedSteamId) {
+  if (!info) return Number.NEGATIVE_INFINITY;
+  let score = 0;
+  if (info.hasTeam) score += 60;
+  if (Number.isFinite(info.teamId) && info.teamId > 0) score += 30;
+  if (Array.isArray(info.members)) score += info.members.length * 5;
+  if (requestedSteamId && info.members?.some((member) => member.steamId === requestedSteamId)) score += 20;
+  if (info.leaderSteamId) score += 5;
+  if (info.ownerSteamId) score += 3;
+  return score;
+}
+
+function extractTeamInfoFromNode(node, requestedSteamId) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
+
+  let teamId = null;
+  const teamCandidates = [
+    node.teamId,
+    node.TeamId,
+    node.TeamID,
+    node.teamID,
+    node.team,
+    node.Team,
+    node.groupId,
+    node.GroupId,
+    node.groupID,
+    node.GroupID,
+    node.id,
+    node.Id,
+    node.ID
+  ];
+  for (const candidate of teamCandidates) {
+    const parsed = extractTeamIdentifier(candidate);
+    if (parsed != null && parsed > 0) {
+      teamId = parsed;
+      break;
+    }
+  }
+
+  const nameCandidates = [node.teamName, node.TeamName, node.name, node.Name, node.label, node.Label];
+  let teamName = null;
+  for (const candidate of nameCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      teamName = candidate.trim();
+      break;
+    }
+  }
+
+  const memberMap = new Map();
+  const addMember = (entry) => {
+    const normalized = normaliseTeamMember(entry);
+    if (!normalized || !normalized.steamId || !STEAM_ID_REGEX.test(normalized.steamId)) return;
+    if (!memberMap.has(normalized.steamId)) memberMap.set(normalized.steamId, normalized);
+    if ((!Number.isFinite(teamId) || teamId <= 0) && Number.isFinite(normalized.teamId) && normalized.teamId > 0) {
+      teamId = normalized.teamId;
+    }
+  };
+
+  const memberKeys = [
+    'members',
+    'Members',
+    'teamMembers',
+    'TeamMembers',
+    'teammates',
+    'TeamMates',
+    'membersOnline',
+    'MembersOnline',
+    'activeMembers',
+    'ActiveMembers',
+    'players',
+    'Players',
+    'list',
+    'List'
+  ];
+  for (const key of memberKeys) {
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) addMember(entry);
+    }
+  }
+
+  if (node.member) addMember(node.member);
+  if (node.Member) addMember(node.Member);
+
+  const leaderEntry = node.leader ?? node.Leader ?? node.leaderInfo ?? node.LeaderInfo ?? node.captain ?? node.Captain ?? null;
+  const ownerEntry = node.owner ?? node.Owner ?? node.ownerInfo ?? node.OwnerInfo ?? null;
+  let leaderSteamId = null;
+  let ownerSteamId = null;
+
+  if (leaderEntry) {
+    const leaderMember = normaliseTeamMember(leaderEntry);
+    if (leaderMember?.steamId) {
+      leaderSteamId = leaderMember.steamId;
+      addMember(leaderMember);
+    } else if (typeof leaderEntry === 'string' || typeof leaderEntry === 'number' || typeof leaderEntry === 'bigint') {
+      const extracted = extractSteamIdFromText(leaderEntry);
+      if (extracted) {
+        leaderSteamId = extracted;
+        addMember({ steamId: extracted });
+      }
+    }
+  }
+
+  if (ownerEntry) {
+    const ownerMember = normaliseTeamMember(ownerEntry);
+    if (ownerMember?.steamId) {
+      ownerSteamId = ownerMember.steamId;
+      addMember(ownerMember);
+    } else if (typeof ownerEntry === 'string' || typeof ownerEntry === 'number' || typeof ownerEntry === 'bigint') {
+      const extracted = extractSteamIdFromText(ownerEntry);
+      if (extracted) {
+        ownerSteamId = extracted;
+        addMember({ steamId: extracted });
+      }
+    }
+  }
+
+  if (!ownerSteamId && leaderSteamId) ownerSteamId = leaderSteamId;
+
+  if (requestedSteamId && STEAM_ID_REGEX.test(requestedSteamId)) {
+    addMember({ steamId: requestedSteamId });
+  }
+
+  if (memberMap.size === 0 && (!Number.isFinite(teamId) || teamId <= 0)) return null;
+
+  const members = [...memberMap.values()].map((member) => ({
+    steamId: member.steamId,
+    displayName: member.displayName || null,
+    online: typeof member.online === 'boolean' ? member.online : null,
+    health: Number.isFinite(member.health) ? Math.round(member.health) : null
+  }));
+
+  const hasTeam = Number.isFinite(teamId) && teamId > 0 && members.length > 0;
+
+  return {
+    teamId: Number.isFinite(teamId) ? Math.trunc(teamId) : 0,
+    teamName: teamName || null,
+    leaderSteamId: leaderSteamId || ownerSteamId || null,
+    ownerSteamId: ownerSteamId || leaderSteamId || null,
+    members,
+    requestedSteamId,
+    hasTeam
+  };
+}
+
+function extractTeamInfoFromPayload(payload, requestedSteamId) {
+  if (!payload || typeof payload !== 'object') return null;
+  const seen = new WeakSet();
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  const visit = (node, depth = 0) => {
+    if (!node || typeof node !== 'object' || depth > 6) return;
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    if (!Array.isArray(node)) {
+      const info = extractTeamInfoFromNode(node, requestedSteamId);
+      if (info) {
+        const score = scoreTeamInfoCandidate(info, requestedSteamId);
+        if (score > bestScore) {
+          bestScore = score;
+          best = info;
+        }
+      }
+    }
+
+    if (Array.isArray(node)) {
+      for (const entry of node) visit(entry, depth + 1);
+    } else {
+      for (const value of Object.values(node)) {
+        if (value && typeof value === 'object') visit(value, depth + 1);
+      }
+    }
+  };
+
+  visit(payload, 0);
+  return best;
+}
+
+function extractTeamInfoFromText(text, requestedSteamId) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const normalized = text.replace(/\r\n/g, '\n');
+  const lower = normalized.toLowerCase();
+
+  if (/no\s+team|not\s+in\s+a\s+team|not\s+part\s+of\s+a\s+team|has\s+no\s+team/.test(lower)) {
+    const members = [];
+    if (requestedSteamId && STEAM_ID_REGEX.test(requestedSteamId)) {
+      members.push({ steamId: requestedSteamId, displayName: null, online: null, health: null });
+    }
+    return {
+      teamId: 0,
+      teamName: null,
+      leaderSteamId: null,
+      ownerSteamId: null,
+      members,
+      requestedSteamId,
+      hasTeam: false
+    };
+  }
+
+  const teamPatterns = [
+    /team\s*id\s*[:=]\s*(\d{2,})/i,
+    /team\s*[:=]\s*(\d{2,})/i,
+    /group\s*id\s*[:=]\s*(\d{2,})/i,
+    /team\s*(\d{2,})\b/i
+  ];
+  let teamId = null;
+  for (const pattern of teamPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      const parsed = extractTeamIdentifier(match[1]);
+      if (parsed != null && parsed > 0) {
+        teamId = parsed;
+        break;
+      }
+    }
+  }
+
+  const teamNameMatch = normalized.match(/team\s*name\s*[:=]\s*([^\n]+)/i);
+  const teamName = teamNameMatch ? teamNameMatch[1].trim() : null;
+
+  const memberMap = new Map();
+  const steamMatches = normalized.match(/\b7656119\d{10,}\b/g) || [];
+  for (const match of steamMatches) {
+    if (!memberMap.has(match)) {
+      memberMap.set(match, { steamId: match, displayName: null, online: null, health: null });
+    }
+  }
+
+  const lines = normalized.split('\n');
+  for (const line of lines) {
+    const ids = line.match(/\b7656119\d{10,}\b/g);
+    if (!ids) continue;
+    const lowerLine = line.toLowerCase();
+    for (const id of ids) {
+      const entry = memberMap.get(id) || { steamId: id, displayName: null, online: null, health: null };
+      const label = line.replace(id, '').replace(/[:,\-]/g, ' ').replace(/[\[\]{}()]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (label && !entry.displayName) entry.displayName = label;
+      if (/leader|captain/.test(lowerLine)) entry.isLeader = true;
+      if (/owner/.test(lowerLine)) entry.isOwner = true;
+      memberMap.set(id, entry);
+    }
+  }
+
+  if (requestedSteamId && STEAM_ID_REGEX.test(requestedSteamId) && !memberMap.has(requestedSteamId)) {
+    memberMap.set(requestedSteamId, { steamId: requestedSteamId, displayName: null, online: null, health: null });
+  }
+
+  let leaderSteamId = null;
+  let ownerSteamId = null;
+  for (const entry of memberMap.values()) {
+    if (entry.isLeader && !leaderSteamId) leaderSteamId = entry.steamId;
+    if (entry.isOwner && !ownerSteamId) ownerSteamId = entry.steamId;
+  }
+  if (!ownerSteamId) ownerSteamId = leaderSteamId || null;
+
+  if (memberMap.size === 0 && (teamId == null || teamId <= 0)) return null;
+
+  const members = [...memberMap.values()].map((entry) => ({
+    steamId: entry.steamId,
+    displayName: entry.displayName || null,
+    online: null,
+    health: null
+  }));
+
+  const hasTeam = Number.isFinite(teamId) && teamId > 0 && members.length > 0;
+
+  return {
+    teamId: Number.isFinite(teamId) ? Math.trunc(teamId) : 0,
+    teamName: teamName || null,
+    leaderSteamId: leaderSteamId || ownerSteamId || null,
+    ownerSteamId: ownerSteamId || leaderSteamId || null,
+    members,
+    requestedSteamId,
+    hasTeam
+  };
+}
+
+function parseTeamInfoText(raw, requestedSteamId = null) {
+  if (raw == null) return null;
+  const cleaned = stripRconTimestampPrefix(stripAnsiSequences(String(raw))).trim();
+  if (!cleaned) return null;
+
+  const normalized = cleaned.replace(/\r\n/g, '\n');
+  const lower = normalized.toLowerCase();
+  if (/no\s+team|not\s+in\s+a\s+team|not\s+part\s+of\s+a\s+team|has\s+no\s+team/.test(lower)) {
+    const members = [];
+    if (requestedSteamId && STEAM_ID_REGEX.test(requestedSteamId)) {
+      members.push({ steamId: requestedSteamId, displayName: null, online: null, health: null });
+    }
+    return {
+      teamId: 0,
+      teamName: null,
+      leaderSteamId: null,
+      ownerSteamId: null,
+      members,
+      requestedSteamId,
+      hasTeam: false
+    };
+  }
+
+  const jsonCandidates = [];
+  const tryParse = (text) => {
+    const input = typeof text === 'string' ? text : String(text ?? '');
+    if (!input.trim()) return;
+    try {
+      const parsed = JSON.parse(input);
+      jsonCandidates.push(parsed);
+    } catch {
+      // ignore malformed JSON fragments
+    }
+  };
+
+  tryParse(normalized);
+  const braceMatch = normalized.match(/\{[\s\S]*\}/);
+  if (braceMatch) tryParse(braceMatch[0]);
+  const bracketMatch = normalized.match(/\[[\s\S]*\]/);
+  if (bracketMatch) tryParse(bracketMatch[0]);
+
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of jsonCandidates) {
+    const extracted = extractTeamInfoFromPayload(candidate, requestedSteamId);
+    if (!extracted) continue;
+    const score = scoreTeamInfoCandidate(extracted, requestedSteamId);
+    if (score > bestScore) {
+      best = extracted;
+      bestScore = score;
+    }
+  }
+  if (best) return best;
+
+  return extractTeamInfoFromText(normalized, requestedSteamId);
+}
+
+function parseTeamInfoMessage(message, requestedSteamId = null) {
+  if (message == null) return null;
+
+  let best = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  const seenObjects = new WeakSet();
+  const seenStrings = new Set();
+
+  const considerCandidate = (info) => {
+    if (!info) return;
+    const score = scoreTeamInfoCandidate(info, requestedSteamId);
+    if (score > bestScore) {
+      best = info;
+      bestScore = score;
+    }
+  };
+
+  const considerText = (text) => {
+    if (text == null) return;
+    const raw = typeof text === 'string' ? text : String(text ?? '');
+    if (!raw.trim()) return;
+    const key = raw.trim();
+    if (seenStrings.has(key)) return;
+    seenStrings.add(key);
+    considerCandidate(parseTeamInfoText(raw, requestedSteamId));
+  };
+
+  const considerValue = (value) => {
+    if (value == null) return;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
+      considerText(value);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    if (seenObjects.has(value)) return;
+    seenObjects.add(value);
+
+    considerCandidate(extractTeamInfoFromPayload(value, requestedSteamId));
+
+    const stringKeys = ['Message', 'message', 'Result', 'result', 'Text', 'text', 'Value', 'value'];
+    for (const key of stringKeys) {
+      if (typeof value[key] === 'string' || typeof value[key] === 'number' || typeof value[key] === 'bigint') {
+        considerText(value[key]);
+      }
+    }
+
+    const nestedValues = Array.isArray(value) ? value : Object.values(value);
+    for (const nested of nestedValues) {
+      if (nested && typeof nested === 'object') {
+        considerValue(nested);
+      } else if (typeof nested === 'string' || typeof nested === 'number' || typeof nested === 'bigint') {
+        considerText(nested);
+      }
+    }
+  };
+
+  considerValue(message);
+  return best;
+}
+
+function manualRefreshCooldown(serverId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return { coolingDown: false, retryAfterMs: 0 };
+  const entry = manualRefreshState.get(numeric);
+  if (!entry || !Number.isFinite(entry.lastRun)) return { coolingDown: false, retryAfterMs: 0 };
+  const elapsed = now - entry.lastRun;
+  if (elapsed >= MANUAL_REFRESH_MIN_INTERVAL_MS) return { coolingDown: false, retryAfterMs: 0 };
+  return { coolingDown: true, retryAfterMs: MANUAL_REFRESH_MIN_INTERVAL_MS - elapsed };
+}
+
+function markManualRefresh(serverId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return;
+  manualRefreshState.set(numeric, { lastRun: now });
+}
+
+function clearManualRefreshState(serverId) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return;
+  manualRefreshState.delete(numeric);
+}
+
+function ensureTeamInfoCache(serverId) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return null;
+  let entry = teamInfoCache.get(numeric);
+  if (!entry) {
+    entry = { players: new Map(), teams: new Map() };
+    teamInfoCache.set(numeric, entry);
+  }
+  return entry;
+}
+
+function pruneTeamInfoCache(serverId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return;
+  const entry = teamInfoCache.get(numeric);
+  if (!entry) return;
+  for (const [steamId, cached] of entry.players) {
+    if (now - cached.fetchedAt > TEAM_INFO_CACHE_TTL) entry.players.delete(steamId);
+  }
+  for (const [teamId, cached] of entry.teams) {
+    if (now - cached.fetchedAt > TEAM_INFO_CACHE_TTL) entry.teams.delete(teamId);
+  }
+  if (entry.players.size === 0 && entry.teams.size === 0) teamInfoCache.delete(numeric);
+}
+
+function lookupCachedTeamInfoForPlayer(serverId, steamId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric) || !steamId) return null;
+  const entry = teamInfoCache.get(numeric);
+  if (!entry) return null;
+  const cached = entry.players.get(steamId);
+  if (!cached) return null;
+  if (now - cached.fetchedAt > TEAM_INFO_CACHE_TTL) {
+    entry.players.delete(steamId);
+    if (entry.players.size === 0 && entry.teams.size === 0) teamInfoCache.delete(numeric);
+    return null;
+  }
+  return cached;
+}
+
+function cacheTeamInfoForServer(serverId, info, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric) || !info) return;
+  const store = ensureTeamInfoCache(numeric);
+  if (!store) return;
+
+  let teamId = Number.isFinite(info.teamId) ? Math.trunc(info.teamId) : 0;
+  const teamName = typeof info.teamName === 'string' && info.teamName.trim() ? info.teamName.trim() : null;
+  const leaderSteamId = info.leaderSteamId && STEAM_ID_REGEX.test(info.leaderSteamId) ? info.leaderSteamId : null;
+  const ownerSteamId = info.ownerSteamId && STEAM_ID_REGEX.test(info.ownerSteamId)
+    ? info.ownerSteamId
+    : (leaderSteamId || null);
+
+  const members = [];
+  const seen = new Set();
+
+  const pushMember = (member) => {
+    const normalized = normaliseTeamMember(member);
+    if (!normalized || !normalized.steamId || !STEAM_ID_REGEX.test(normalized.steamId)) return;
+    if (seen.has(normalized.steamId)) return;
+    seen.add(normalized.steamId);
+    if ((!Number.isFinite(teamId) || teamId <= 0) && Number.isFinite(normalized.teamId) && normalized.teamId > 0) {
+      teamId = Math.trunc(normalized.teamId);
+    }
+    members.push({
+      steamId: normalized.steamId,
+      displayName: normalized.displayName || null,
+      online: typeof normalized.online === 'boolean' ? normalized.online : null,
+      health: Number.isFinite(normalized.health) ? Math.round(normalized.health) : null
+    });
+  };
+
+  if (Array.isArray(info.members)) {
+    for (const member of info.members) pushMember(member);
+  }
+
+  if (info.requestedSteamId && STEAM_ID_REGEX.test(info.requestedSteamId)) {
+    pushMember({ steamId: info.requestedSteamId });
+  }
+
+  if (leaderSteamId) pushMember({ steamId: leaderSteamId });
+  if (ownerSteamId) pushMember({ steamId: ownerSteamId });
+
+  const hasTeam = Number.isFinite(teamId) && teamId > 0 && members.length > 0;
+
+  const cacheEntry = {
+    teamId: hasTeam ? teamId : 0,
+    teamName,
+    leaderSteamId,
+    ownerSteamId,
+    members,
+    fetchedAt: now,
+    hasTeam,
+    error: false
+  };
+
+  if (hasTeam) store.teams.set(teamId, cacheEntry);
+
+  for (const member of members) {
+    store.players.set(member.steamId, { ...cacheEntry, steamId: member.steamId });
+  }
+  if (info.requestedSteamId && !store.players.has(info.requestedSteamId) && STEAM_ID_REGEX.test(info.requestedSteamId)) {
+    store.players.set(info.requestedSteamId, { ...cacheEntry, steamId: info.requestedSteamId });
+  }
+}
+
+function cacheTeamInfoMiss(serverId, steamId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric) || !steamId) return;
+  const store = ensureTeamInfoCache(numeric);
+  if (!store) return;
+  store.players.set(steamId, {
+    steamId,
+    teamId: 0,
+    teamName: null,
+    leaderSteamId: null,
+    ownerSteamId: null,
+    members: [],
+    fetchedAt: now,
+    hasTeam: false,
+    error: true
+  });
+}
+
+function applyTeamInfoToPlayers(serverId, players, now = Date.now()) {
+  if (!Array.isArray(players)) return;
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return;
+  for (const player of players) {
+    const steamId = String(player?.steamId || '').trim();
+    if (!steamId) continue;
+    const cached = lookupCachedTeamInfoForPlayer(numeric, steamId, now);
+    if (!cached) continue;
+    if (cached.teamId > 0 && Number(player.teamId) !== cached.teamId) {
+      player.teamId = cached.teamId;
+    } else if ((!Number.isFinite(player.teamId) || player.teamId == null || player.teamId <= 0) && !cached.error) {
+      player.teamId = cached.teamId || 0;
+    }
+    if (cached.ownerSteamId && !player.ownerSteamId) {
+      player.ownerSteamId = cached.ownerSteamId;
+    } else if (cached.leaderSteamId && !player.ownerSteamId) {
+      player.ownerSteamId = cached.leaderSteamId;
+    }
+    if (cached.teamName && !player.teamName) {
+      player.teamName = cached.teamName;
+    }
+  }
+}
+
+function ensurePositionCache(serverId) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return null;
+  let entry = positionCache.get(numeric);
+  if (!entry) {
+    entry = { players: new Map() };
+    positionCache.set(numeric, entry);
+  }
+  return entry;
+}
+
+function prunePositionCache(serverId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return;
+  const entry = positionCache.get(numeric);
+  if (!entry) return;
+  for (const [steamId, cached] of entry.players) {
+    if (now - cached.fetchedAt > POSITION_CACHE_TTL) entry.players.delete(steamId);
+  }
+  if (entry.players.size === 0) positionCache.delete(numeric);
+}
+
+function lookupCachedPositionForPlayer(serverId, steamId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric) || !steamId) return null;
+  const entry = positionCache.get(numeric);
+  if (!entry) return null;
+  const cached = entry.players.get(steamId);
+  if (!cached) return null;
+  if (now - cached.fetchedAt > POSITION_CACHE_TTL) {
+    entry.players.delete(steamId);
+    if (entry.players.size === 0) positionCache.delete(numeric);
+    return null;
+  }
+  return cached;
+}
+
+function cachePlayerPosition(serverId, steamId, position, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric) || !steamId || !position) return;
+  const store = ensurePositionCache(numeric);
+  if (!store) return;
+  store.players.set(steamId, {
+    steamId,
+    position,
+    fetchedAt: now,
+    error: false
+  });
+}
+
+function cachePlayerPositionMiss(serverId, steamId, now = Date.now()) {
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric) || !steamId) return;
+  const store = ensurePositionCache(numeric);
+  if (!store) return;
+  store.players.set(steamId, {
+    steamId,
+    position: null,
+    fetchedAt: now,
+    error: true
+  });
+}
+
+function applyPositionCacheToPlayers(serverId, players, now = Date.now()) {
+  if (!Array.isArray(players)) return;
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) return;
+  for (const player of players) {
+    if (hasValidPosition(player?.position)) continue;
+    const steamId = String(player?.steamId || '').trim();
+    if (!steamId) continue;
+    const cached = lookupCachedPositionForPlayer(numeric, steamId, now);
+    if (!cached || !cached.position || cached.error) continue;
+    player.position = cached.position;
+  }
+}
+
+function parsePrintPosMessage(message) {
+  if (message == null) return null;
+  const raw = typeof message === 'object' && message && Object.prototype.hasOwnProperty.call(message, 'Message')
+    ? message.Message
+    : message;
+  const cleaned = stripAnsiSequences(String(raw ?? ''));
+  if (!cleaned.trim()) return null;
+  const lines = cleaned
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => stripRconTimestampPrefix(line).trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  const candidates = [...lines].reverse();
+  for (const line of candidates) {
+    let match = line.match(/\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)/);
+    if (match) {
+      const vector = parseVector3({ x: match[1], y: match[2], z: match[3] });
+      if (vector) return vector;
+    }
+    const xMatch = line.match(/x\s*[:=]\s*(-?\d+(?:\.\d+)?)/i);
+    const yMatch = line.match(/y\s*[:=]\s*(-?\d+(?:\.\d+)?)/i);
+    const zMatch = line.match(/z\s*[:=]\s*(-?\d+(?:\.\d+)?)/i);
+    if (xMatch || yMatch || zMatch) {
+      const vector = parseVector3({
+        x: xMatch ? xMatch[1] : null,
+        y: yMatch ? yMatch[1] : null,
+        z: zMatch ? zMatch[1] : null
+      });
+      if (vector) return vector;
+    }
+    match = line.match(/(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)/);
+    if (match) {
+      const vector = parseVector3({ x: match[1], y: match[2], z: match[3] });
+      if (vector) return vector;
+    }
+  }
+  return null;
+}
+
+async function enrichPlayersWithTeamInfo(
+  serverId,
+  serverRow,
+  players,
+  { logger, allowLookup = true, pendingSteamIds = null } = {}
+) {
+  if (!Array.isArray(players) || players.length === 0) {
+    return { players, lookupsPerformed: false, pending: [] };
+  }
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) {
+    return { players, lookupsPerformed: false, pending: [] };
+  }
+
+  const now = Date.now();
+  pruneTeamInfoCache(numeric, now);
+  applyTeamInfoToPlayers(numeric, players, now);
+
+  const playerMap = new Map();
+  for (const player of players) {
+    const steamId = String(player?.steamId || '').trim();
+    if (!steamId || !STEAM_ID_REGEX.test(steamId)) continue;
+    if (!playerMap.has(steamId)) playerMap.set(steamId, player);
+  }
+
+  let pending = Array.isArray(pendingSteamIds)
+    ? pendingSteamIds.filter((steamId) => STEAM_ID_REGEX.test(steamId) && playerMap.has(steamId))
+    : null;
+
+  if (!pending) {
+    pending = [];
+    for (const [steamId, player] of playerMap.entries()) {
+      if (Number(player.teamId) > 0) continue;
+      const cached = lookupCachedTeamInfoForPlayer(numeric, steamId, now);
+      if (cached) continue;
+      pending.push(steamId);
+    }
+  } else {
+    pending = [...new Set(pending)];
+  }
+
+  if (!allowLookup || pending.length === 0) {
+    pruneTeamInfoCache(numeric, now);
+    return { players, lookupsPerformed: false, pending };
+  }
+
+  let lookupsPerformed = false;
+  for (const steamId of pending) {
+    try {
+      const reply = await sendRconCommand(serverRow, `teaminfo ${steamId}`, {
+        silent: true,
+        timeoutMs: TEAM_INFO_COMMAND_TIMEOUT_MS
+      });
+      lookupsPerformed = true;
+      const info = parseTeamInfoMessage(reply, steamId);
+      if (info) {
+        cacheTeamInfoForServer(numeric, info, Date.now());
+        if (logger?.debug) {
+          logger.debug('teaminfo resolved', { steamId, teamId: info.teamId || 0, hasTeam: info.hasTeam });
+        }
+      } else {
+        cacheTeamInfoMiss(numeric, steamId, Date.now());
+        if (logger?.debug) {
+          logger.debug('teaminfo returned no data', { steamId });
+        }
+      }
+    } catch (err) {
+      lookupsPerformed = true;
+      cacheTeamInfoMiss(numeric, steamId, Date.now());
+      if (logger?.warn) {
+        logger.warn('teaminfo command failed', { steamId, error: err?.message || err });
+      }
+    }
+  }
+
+  const refreshTime = Date.now();
+  applyTeamInfoToPlayers(numeric, players, refreshTime);
+  pruneTeamInfoCache(numeric, refreshTime);
+
+  const remaining = [];
+  for (const steamId of pending) {
+    const cached = lookupCachedTeamInfoForPlayer(numeric, steamId, refreshTime);
+    if (!cached || (cached.error && Number(playerMap.get(steamId)?.teamId) <= 0)) {
+      remaining.push(steamId);
+    }
+  }
+
+  return { players, lookupsPerformed, pending: remaining };
+}
+
+async function enrichPlayersWithPositions(
+  serverId,
+  serverRow,
+  players,
+  { logger, allowLookup = true, pendingSteamIds = null } = {}
+) {
+  if (!Array.isArray(players) || players.length === 0) {
+    return { players, lookupsPerformed: false, pending: [] };
+  }
+  const numeric = Number(serverId);
+  if (!Number.isFinite(numeric)) {
+    return { players, lookupsPerformed: false, pending: [] };
+  }
+
+  const now = Date.now();
+  prunePositionCache(numeric, now);
+  applyPositionCacheToPlayers(numeric, players, now);
+
+  const playerMap = new Map();
+  for (const player of players) {
+    const steamId = String(player?.steamId || '').trim();
+    if (!steamId || !STEAM_ID_REGEX.test(steamId)) continue;
+    if (!playerMap.has(steamId)) playerMap.set(steamId, player);
+  }
+
+  let pending = Array.isArray(pendingSteamIds)
+    ? pendingSteamIds.filter((steamId) => STEAM_ID_REGEX.test(steamId) && playerMap.has(steamId))
+    : null;
+
+  if (!pending) {
+    pending = [];
+    for (const [steamId, player] of playerMap.entries()) {
+      if (hasValidPosition(player.position)) continue;
+      const cached = lookupCachedPositionForPlayer(numeric, steamId, now);
+      if (cached) continue;
+      pending.push(steamId);
+    }
+  } else {
+    pending = [...new Set(pending)];
+  }
+
+  if (!allowLookup || pending.length === 0) {
+    prunePositionCache(numeric, now);
+    return { players, lookupsPerformed: false, pending };
+  }
+
+  let lookupsPerformed = false;
+  for (const steamId of pending) {
+    try {
+      const reply = await sendRconCommand(serverRow, `printpos ${steamId}`, {
+        silent: true,
+        timeoutMs: POSITION_COMMAND_TIMEOUT_MS
+      });
+      lookupsPerformed = true;
+      const position = parsePrintPosMessage(reply?.Message ?? reply);
+      if (position) {
+        cachePlayerPosition(numeric, steamId, position, Date.now());
+        const player = playerMap.get(steamId);
+        if (player) player.position = position;
+        if (logger?.debug) logger.debug('printpos resolved', { steamId });
+      } else {
+        cachePlayerPositionMiss(numeric, steamId, Date.now());
+        if (logger?.debug) logger.debug('printpos returned no position', { steamId });
+      }
+    } catch (err) {
+      lookupsPerformed = true;
+      cachePlayerPositionMiss(numeric, steamId, Date.now());
+      if (logger?.warn) {
+        logger.warn('printpos command failed', { steamId, error: err?.message || err });
+      }
+    }
+  }
+
+  const refreshTime = Date.now();
+  applyPositionCacheToPlayers(numeric, players, refreshTime);
+  prunePositionCache(numeric, refreshTime);
+
+  const remaining = [];
+  for (const steamId of pending) {
+    const cached = lookupCachedPositionForPlayer(numeric, steamId, refreshTime);
+    if (!cached || cached.error || !cached.position) {
+      remaining.push(steamId);
+    }
+  }
+
+  return { players, lookupsPerformed, pending: remaining };
 }
 
 async function enrichLivePlayers(players) {
@@ -3457,6 +4445,65 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       return res.status(502).json({ error: 'playerlist_failed' });
     }
     let players = parsePlayerListMessage(playerPayload);
+    const playerListHasTeamData = players.some((p) => Number(p?.teamId) > 0);
+    const playerListHasPositionData = players.some((p) => hasValidPosition(p?.position));
+
+    const teamPrep = await enrichPlayersWithTeamInfo(id, server, players, {
+      logger,
+      allowLookup: false
+    });
+    players = teamPrep.players;
+    const positionPrep = await enrichPlayersWithPositions(id, server, players, {
+      logger,
+      allowLookup: false
+    });
+    players = positionPrep.players;
+
+    const needsManualTeamLookup = !playerListHasTeamData && teamPrep.pending.length > 0;
+    const needsManualPositionLookup = !playerListHasPositionData && positionPrep.pending.length > 0;
+
+    if (!(needsManualTeamLookup || needsManualPositionLookup)) {
+      clearManualRefreshState(id);
+    }
+
+    if (needsManualTeamLookup || needsManualPositionLookup) {
+      const cooldown = manualRefreshCooldown(id);
+      if (cooldown.coolingDown) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(cooldown.retryAfterMs / 1000));
+        res.set('Retry-After', String(retryAfterSeconds));
+        return res.status(429).json({
+          error: 'manual_refresh_cooldown',
+          retryAfter: retryAfterSeconds,
+          message: `Manual refresh cooldown active. Try again in ${retryAfterSeconds} seconds.`
+        });
+      }
+    }
+
+    const teamResult = needsManualTeamLookup
+      ? await enrichPlayersWithTeamInfo(id, server, players, {
+        logger,
+        allowLookup: true,
+        pendingSteamIds: teamPrep.pending
+      })
+      : teamPrep;
+
+    const positionResult = needsManualPositionLookup
+      ? await enrichPlayersWithPositions(id, server, teamResult.players, {
+        logger,
+        allowLookup: true,
+        pendingSteamIds: positionPrep.pending
+      })
+      : positionPrep;
+
+    players = positionResult.players;
+
+    const manualLookupsPerformed = Boolean(teamResult.lookupsPerformed || positionResult.lookupsPerformed);
+    if (manualLookupsPerformed) {
+      markManualRefresh(id);
+    } else if (!(needsManualTeamLookup || needsManualPositionLookup)) {
+      clearManualRefreshState(id);
+    }
+
     players = await enrichLivePlayers(players);
     await syncServerPlayerDirectory(id, players);
     logger.debug('Processed live players', { count: players.length });

@@ -1470,6 +1470,7 @@
     rustmaps_image_error: 'RustMaps returned an invalid map image.',
     custom_level_url: 'This server is using a custom map. Configure a Facepunch level URL to enable the live map.',
     live_map_failed: 'Unable to load the live map right now.',
+    manual_refresh_cooldown: 'Manual live map refresh is cooling down. Try again in a few seconds.',
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
     no_server_selected: 'Select a server before sending commands.',
