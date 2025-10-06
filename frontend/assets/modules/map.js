@@ -1400,17 +1400,7 @@
           && meta
           && mapIsCustom(meta, info)
           && hasMapImage(meta);
-        const metadataMatchesImage = hasImageSize && Number.isFinite(metadataSize)
-          ? Math.abs(metadataSize - imageSize) <= 5
-          : false;
-
         if (preferImageForCustomMap) {
-          state.estimatedWorldSize = null;
-          state.estimatedWorldSizeSource = null;
-          return imageSize;
-        }
-
-        if (hasImageSize && !metadataMatchesImage) {
           state.estimatedWorldSize = null;
           state.estimatedWorldSizeSource = null;
           return imageSize;
