@@ -722,6 +722,7 @@ const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
 const CHAT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const CHAT_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 const chatCleanupSchedule = new Map();
+let globalChatCleanupPromise = null;
 
 const steamProfileCache = new Map();
 const TEAM_INFO_CACHE_TTL = 30 * 1000;
@@ -940,6 +941,22 @@ async function handleChatMessage(serverId, line, payload) {
   maybeCleanupChatHistory(key);
 }
 
+function runGlobalChatCleanup() {
+  if (typeof db?.purgeChatMessages !== 'function') return null;
+  if (globalChatCleanupPromise) return globalChatCleanupPromise;
+  const cutoffIso = new Date(Date.now() - CHAT_RETENTION_MS).toISOString();
+  globalChatCleanupPromise = (async () => {
+    try {
+      await db.purgeChatMessages({ before: cutoffIso });
+    } catch (err) {
+      console.warn('Failed to purge chat history globally', err);
+    } finally {
+      globalChatCleanupPromise = null;
+    }
+  })();
+  return globalChatCleanupPromise;
+}
+
 function maybeCleanupChatHistory(serverId) {
   if (typeof db?.purgeChatMessages !== 'function') return;
   const key = Number(serverId);
@@ -950,8 +967,9 @@ function maybeCleanupChatHistory(serverId) {
   chatCleanupSchedule.set(key, now);
   const cutoffIso = new Date(now - CHAT_RETENTION_MS).toISOString();
   db.purgeChatMessages({ before: cutoffIso, server_id: key }).catch((err) => {
-    console.warn('Failed to purge chat history', err);
+    console.warn(`Failed to purge chat history for server ${key}`, err);
   });
+  runGlobalChatCleanup();
 }
 
 function parseStatusMessage(message) {
@@ -4161,6 +4179,12 @@ async function refreshMonitoredServers() {
   })();
   return monitorRefreshPromise;
 }
+
+const chatPurgeHandle = setInterval(() => {
+  runGlobalChatCleanup();
+}, CHAT_PURGE_INTERVAL_MS);
+if (chatPurgeHandle.unref) chatPurgeHandle.unref();
+await runGlobalChatCleanup();
 
 const mapPurgeHandle = setInterval(() => {
   purgeExpiredMapCaches().catch((err) => console.error('scheduled map purge error', err));
