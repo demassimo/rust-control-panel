@@ -4941,7 +4941,10 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       logger.warn('Server reported non-Facepunch level URL, treating as custom map', { levelUrl });
     }
     let hasCustomLevelUrl = isCustomLevelUrl(levelUrl);
-    const skipImageryFetch = skipImagery && hasCustomLevelUrl;
+    // The frontend only opts-in to skip imagery when it has already paused
+    // RustMaps polling for a custom map. Trust that signal so we don't keep
+    // hitting the external API and trigger its rate limits.
+    const skipImageryFetch = skipImagery;
     const derivedMapKey = deriveMapKey(info) || null;
     let infoMapKey = hasCustomLevelUrl ? null : derivedMapKey;
 
