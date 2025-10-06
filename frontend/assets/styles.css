@@ -2503,6 +2503,38 @@ button.chat-filter-btn:focus-visible {
   margin: 0 auto;
 }
 
+.map-interaction-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  text-align: center;
+  background: rgba(8, 11, 19, 0.82);
+  color: #e2e8f0;
+  font-size: 1rem;
+  line-height: 1.5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.24s ease;
+  z-index: 4;
+}
+
+.map-interaction-hint-visible {
+  opacity: 1;
+}
+
+.map-interaction-hint-content {
+  max-width: 420px;
+  padding: 20px 26px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: 0 22px 48px rgba(8, 13, 28, 0.45);
+  font-weight: 600;
+}
+
 .map-placeholder-text {
   max-width: 480px;
   margin: 0 auto;

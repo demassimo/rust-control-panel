@@ -634,6 +634,15 @@
       mapCanvas.appendChild(overlay);
       mapStage.appendChild(mapCanvas);
       mapStage.appendChild(message);
+
+      const interactionHint = document.createElement('div');
+      interactionHint.className = 'map-interaction-hint';
+      interactionHint.setAttribute('aria-hidden', 'true');
+      const interactionHintContent = document.createElement('div');
+      interactionHintContent.className = 'map-interaction-hint-content';
+      interactionHintContent.textContent = 'Use Ctrl + scroll to zoom the map.';
+      interactionHint.appendChild(interactionHintContent);
+      mapStage.appendChild(interactionHint);
       mapView.appendChild(mapStage);
 
       const markerPopup = document.createElement('div');
@@ -821,6 +830,16 @@
         startOffsetY: 0,
         moved: false
       };
+
+      const zoomHintState = {
+        attempts: 0,
+        lastAttempt: 0,
+        timer: null,
+        visible: false
+      };
+      const ZOOM_HINT_THRESHOLD = 3;
+      const ZOOM_HINT_RESET_MS = 1200;
+      const ZOOM_HINT_DURATION_MS = 3500;
 
       let preventNextMapClick = false;
 
@@ -1133,9 +1152,59 @@
       function handleWheel(event) {
         if (!mapReady()) return;
         if (event.deltaY === 0) return;
+        if (!event.ctrlKey && !event.metaKey) {
+          handleModifierlessWheel(event);
+          return;
+        }
         event.preventDefault();
+        resetZoomHint();
+        hideInteractionHint();
         const zoomFactor = Math.exp(-event.deltaY * 0.0015);
         setMapScale(mapInteractions.scale * zoomFactor, { focusX: event.clientX, focusY: event.clientY });
+      }
+
+      function resetZoomHint() {
+        zoomHintState.attempts = 0;
+        zoomHintState.lastAttempt = 0;
+      }
+
+      function handleModifierlessWheel(event) {
+        if (!mapReady() || mapView.classList.contains('map-view-has-message')) return;
+        const now = Date.now();
+        if (now - zoomHintState.lastAttempt > ZOOM_HINT_RESET_MS) {
+          zoomHintState.attempts = 0;
+        }
+        zoomHintState.lastAttempt = now;
+        zoomHintState.attempts += 1;
+        if (zoomHintState.attempts >= ZOOM_HINT_THRESHOLD) {
+          zoomHintState.attempts = 0;
+          showInteractionHint();
+        } else if (zoomHintState.visible) {
+          showInteractionHint();
+        }
+      }
+
+      function hideInteractionHint() {
+        if (zoomHintState.timer) {
+          clearTimeout(zoomHintState.timer);
+          zoomHintState.timer = null;
+        }
+        if (!zoomHintState.visible || !interactionHint) return;
+        interactionHint.classList.remove('map-interaction-hint-visible');
+        interactionHint.setAttribute('aria-hidden', 'true');
+        zoomHintState.visible = false;
+      }
+
+      function showInteractionHint() {
+        if (!interactionHint || mapView.classList.contains('map-view-has-message')) return;
+        interactionHint.classList.add('map-interaction-hint-visible');
+        interactionHint.removeAttribute('aria-hidden');
+        zoomHintState.visible = true;
+        if (zoomHintState.timer) clearTimeout(zoomHintState.timer);
+        zoomHintState.timer = setTimeout(() => {
+          zoomHintState.timer = null;
+          hideInteractionHint();
+        }, ZOOM_HINT_DURATION_MS);
       }
 
       function updateMarkerScale() {
@@ -1264,6 +1333,7 @@
       }
 
       function setMessage(content, options = {}) {
+        hideInteractionHint();
         const { persist = false } = options;
         if (!persist) clearPersistentStatusMessage();
         const viewports = getActiveViewports();
@@ -1274,6 +1344,7 @@
       }
 
       function clearMessage() {
+        hideInteractionHint();
         clearPersistentStatusMessage();
         for (const viewport of getActiveViewports()) {
           if (!viewport.message || !viewport.mapView) continue;
