@@ -1175,8 +1175,17 @@ function parseLegacyPlayerList(message) {
         ?? 0
       ) || 0;
       const health = Number(data.health ?? 0) || 0;
-      const teamCandidate = Number(data.teamid ?? data.team ?? 0);
-      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0 ? teamCandidate : 0;
+      const rawTeamCandidate = (
+        data.teamid
+        ?? data.team
+        ?? original.Team
+        ?? original.team
+        ?? null
+      );
+      const teamCandidate = extractNumericValue(rawTeamCandidate);
+      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0
+        ? Math.trunc(teamCandidate)
+        : 0;
       const positionSource = (
         original.Position
         ?? original.position
@@ -1281,7 +1290,11 @@ function parseLegacyPlayerList(message) {
     const currentLevel = pickInt() ?? 0;
     const health = pickFloat() ?? 0;
     let teamId = 0;
-    if (numericTail.length > 0) {
+    const teamMatch = line.match(/(?:team|group|party|squad)\s*(?:[:=]\s*|id\s*)?([^,]+)/i);
+    const matchedTeam = teamMatch ? extractNumericValue(teamMatch[1]) : null;
+    if (Number.isFinite(matchedTeam) && matchedTeam > 0) {
+      teamId = Math.trunc(matchedTeam);
+    } else if (numericTail.length > 0) {
       const candidateTeam = pickInt();
       if (Number.isFinite(candidateTeam) && candidateTeam > 0) {
         teamId = candidateTeam;
