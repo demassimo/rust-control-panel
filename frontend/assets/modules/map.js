@@ -3631,32 +3631,94 @@
         updateRefreshDisplays();
       }
 
-      function createTeamInfoRow(viewport, options) {
+      function createTeamMember(viewport, player) {
         if (!viewport?.doc) return null;
-        const { label, detail, color, active = false } = options || {};
-        const row = viewport.doc.createElement('div');
-        row.className = 'team-row';
-        if (active) row.classList.add('active');
+        const member = viewport.doc.createElement('div');
+        member.className = 'team-member';
 
-        const left = viewport.doc.createElement('span');
-        left.className = 'team-label';
+        const avatarWrap = viewport.doc.createElement('div');
+        avatarWrap.className = 'team-member-avatar';
+        const avatarUrl = resolvePlayerAvatar(player);
+        const displayName = playerDisplayName(player);
+        if (avatarUrl) {
+          const img = viewport.doc.createElement('img');
+          img.src = avatarUrl;
+          img.alt = `${displayName} avatar`;
+          avatarWrap.appendChild(img);
+        } else {
+          avatarWrap.classList.add('placeholder');
+          avatarWrap.textContent = avatarInitial(displayName);
+        }
+
+        const meta = viewport.doc.createElement('div');
+        meta.className = 'team-member-meta';
+
+        const nameEl = viewport.doc.createElement('div');
+        nameEl.className = 'team-member-name';
+        nameEl.textContent = displayName;
+        meta.appendChild(nameEl);
+
+        const steamIdEl = viewport.doc.createElement('div');
+        steamIdEl.className = 'team-member-steamid';
+        steamIdEl.textContent = resolveSteamId(player) || '—';
+        meta.appendChild(steamIdEl);
+
+        member.appendChild(avatarWrap);
+        member.appendChild(meta);
+        return member;
+      }
+
+      function createTeamTile(viewport, options) {
+        if (!viewport?.doc) return null;
+        const { label, detail, members = [], color, active = false, teamId = null } = options || {};
+        const tile = viewport.doc.createElement('button');
+        tile.type = 'button';
+        tile.className = 'team-tile';
+        tile.setAttribute('aria-pressed', active ? 'true' : 'false');
+        if (active) tile.classList.add('active');
+        if (color) tile.style.setProperty('--team-color', color);
+        if (teamId != null) tile.dataset.teamId = String(teamId);
+
+        const header = viewport.doc.createElement('div');
+        header.className = 'team-tile-header';
+
+        const labelEl = viewport.doc.createElement('div');
+        labelEl.className = 'team-label';
         if (color) {
           const swatch = viewport.doc.createElement('span');
           swatch.className = 'map-color-chip';
           swatch.style.backgroundColor = color;
-          left.appendChild(swatch);
+          labelEl.appendChild(swatch);
         }
-        const labelEl = viewport.doc.createElement('span');
-        labelEl.textContent = label ?? '';
-        left.appendChild(labelEl);
+        const labelText = viewport.doc.createElement('span');
+        labelText.textContent = label ?? '';
+        labelEl.appendChild(labelText);
+        header.appendChild(labelEl);
 
-        const right = viewport.doc.createElement('span');
-        right.className = 'team-detail';
-        right.textContent = detail ?? '';
+        const detailEl = viewport.doc.createElement('span');
+        detailEl.className = 'team-detail';
+        if (detail != null) {
+          detailEl.textContent = detail;
+        } else if (members.length > 0) {
+          detailEl.textContent = `${members.length} player${members.length === 1 ? '' : 's'}`;
+        } else {
+          detailEl.textContent = 'No players';
+        }
+        header.appendChild(detailEl);
 
-        row.appendChild(left);
-        row.appendChild(right);
-        return row;
+        tile.appendChild(header);
+
+        if (members.length > 0) {
+          const list = viewport.doc.createElement('div');
+          list.className = 'team-members';
+          for (const player of members) {
+            const member = createTeamMember(viewport, player);
+            if (member) list.appendChild(member);
+          }
+          tile.appendChild(list);
+        }
+
+        return tile;
       }
 
       function renderTeamInfoInViewport(viewport) {
@@ -3671,14 +3733,21 @@
         if (state.selectedSolo) {
           const target = players.find((p) => resolveSteamId(p) === state.selectedSolo);
           if (!target) return;
-          const row = createTeamInfoRow(viewport, {
+          const tile = createTeamTile(viewport, {
             label: playerDisplayName(target),
             detail: 'Solo player',
+            members: [target],
             color: colorForPlayer(target),
-            active: true
+            active: true,
+            teamId: null
           });
-          if (row) container.appendChild(row);
-          container.classList.remove('hidden');
+          if (tile) {
+            tile.addEventListener('click', () => selectPlayer(target));
+            container.appendChild(tile);
+          }
+          if (container.childElementCount > 0) {
+            container.classList.remove('hidden');
+          }
           return;
         }
 
@@ -3695,13 +3764,25 @@
         const entries = [...teams.entries()].sort(([a], [b]) => a - b);
         for (const [teamId, members] of entries) {
           const color = state.teamColors.get(teamId) || colorForPlayer(members[0]);
-          const row = createTeamInfoRow(viewport, {
-            label: `Team ${teamId}`,
-            detail: `${members.length} player${members.length === 1 ? '' : 's'}`,
-            color,
-            active: state.selectedTeam === teamId
+          const sortedMembers = [...members].sort((a, b) => {
+            const nameA = playerDisplayName(a) || '';
+            const nameB = playerDisplayName(b) || '';
+            return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
           });
-          if (row) container.appendChild(row);
+          const tile = createTeamTile(viewport, {
+            label: `Team ${teamId}`,
+            members: sortedMembers,
+            color,
+            active: state.selectedTeam === teamId,
+            teamId
+          });
+          if (tile) {
+            tile.addEventListener('click', () => {
+              const primary = sortedMembers[0];
+              if (primary) selectPlayer(primary);
+            });
+            container.appendChild(tile);
+          }
         }
 
         if (container.childElementCount > 0) {
