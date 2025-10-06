@@ -62,7 +62,8 @@ import {
   isLikelyLevelUrl,
   isCustomLevelUrl,
   isFacepunchLevelUrl,
-  parseServerInfoMessage
+  parseServerInfoMessage,
+  parseChatMessage
 } from './rcon-parsers.js';
 
 const mapImageUpload = multer({
@@ -685,6 +686,9 @@ const recentPlayerConnections = new Map();
 const OFFLINE_SNAPSHOT_MIN_INTERVAL = Math.max(Math.floor(MONITOR_INTERVAL / 2), 15000);
 const offlineSnapshotTimestamps = new Map();
 const ANSI_COLOR_REGEX = /\u001b\[[0-9;]*m/g;
+const CHAT_RETENTION_MS = 24 * 60 * 60 * 1000;
+const CHAT_PURGE_INTERVAL_MS = 10 * 60 * 1000;
+const chatCleanupSchedule = new Map();
 
 const steamProfileCache = new Map();
 let monitoring = false;
@@ -755,6 +759,11 @@ function ensureRconBinding(row) {
       const cleanLine = typeof line === 'string' ? line.replace(ANSI_COLOR_REGEX, '') : '';
       if (cleanLine) handlePlayerConnectionLine(key, cleanLine);
     },
+    chat: (line, payload) => {
+      handleChatMessage(key, line, payload).catch((err) => {
+        console.warn('chat dispatch failed', err);
+      });
+    },
     rcon_error: handleError,
     close: ({ manual } = {}) => {
       recordStatus(key, { ok: false, lastCheck: new Date().toISOString(), error: 'connection_closed' });
@@ -821,6 +830,63 @@ function handlePlayerConnectionLine(serverId, line) {
   }).catch((err) => console.warn('server player upsert failed', err));
   db.addPlayerEvent({ steamid: info.steamid, server_id: serverId, event: 'connected', note }).catch((err) => {
     console.warn('player event log failed', err);
+  });
+}
+
+async function handleChatMessage(serverId, line, payload) {
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const rawInput = typeof line === 'string' ? line : (payload?.Message ?? payload?.message ?? '');
+  const parsed = parseChatMessage(rawInput, payload);
+  if (!parsed || !parsed.message) return;
+
+  const record = {
+    server_id: key,
+    channel: parsed.channel || 'global',
+    steamid: parsed.steamId || null,
+    username: parsed.username || null,
+    message: parsed.message,
+    raw: parsed.raw || (typeof rawInput === 'string' ? rawInput : null),
+    color: parsed.color || null
+  };
+
+  let stored = null;
+  if (typeof db?.recordChatMessage === 'function') {
+    try {
+      stored = await db.recordChatMessage(record);
+    } catch (err) {
+      console.warn('Failed to record chat message', err);
+    }
+  }
+
+  const createdAt = stored?.created_at || new Date().toISOString();
+  const eventPayload = {
+    id: stored?.id ?? null,
+    serverId: key,
+    channel: stored?.channel || record.channel,
+    steamId: stored?.steamid || record.steamid || null,
+    username: stored?.username || record.username || null,
+    message: stored?.message || record.message,
+    createdAt,
+    raw: stored?.raw || record.raw || null,
+    color: stored?.color || record.color || null
+  };
+
+  io.to(`srv:${key}`).emit('chat', { serverId: key, message: eventPayload });
+  maybeCleanupChatHistory(key);
+}
+
+function maybeCleanupChatHistory(serverId) {
+  if (typeof db?.purgeChatMessages !== 'function') return;
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const now = Date.now();
+  const last = chatCleanupSchedule.get(key) || 0;
+  if (now - last < CHAT_PURGE_INTERVAL_MS) return;
+  chatCleanupSchedule.set(key, now);
+  const cutoffIso = new Date(now - CHAT_RETENTION_MS).toISOString();
+  db.purgeChatMessages({ before: cutoffIso, server_id: key }).catch((err) => {
+    console.warn('Failed to purge chat history', err);
   });
 }
 
@@ -3857,6 +3923,35 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
   } catch (err) {
     console.error('listServerPlayers failed', err);
     res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/chat', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'console');
+  if (id == null) return;
+  const limitValue = Number(req.query.limit);
+  const limit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(Math.floor(limitValue), 500) : 200;
+  const rawChannel = typeof req.query.channel === 'string' ? req.query.channel.trim().toLowerCase() : 'all';
+  const channel = rawChannel === 'global' || rawChannel === 'team' ? rawChannel : null;
+  try {
+    const rows = typeof db.listChatMessages === 'function'
+      ? await db.listChatMessages(id, { limit, channel })
+      : [];
+    const messages = (rows || []).map((row) => ({
+      id: row?.id ?? null,
+      serverId: row?.server_id ?? id,
+      channel: row?.channel || (channel || 'global'),
+      steamId: row?.steamid || null,
+      username: row?.username || null,
+      message: row?.message || '',
+      createdAt: row?.created_at || null,
+      raw: row?.raw || null,
+      color: row?.color || null
+    })).filter((entry) => entry.message);
+    res.json({ messages });
+  } catch (err) {
+    console.error('chat history fetch failed', err);
+    res.status(500).json({ error: 'chat_history_failed' });
   }
 });
 

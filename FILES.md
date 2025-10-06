@@ -14,19 +14,19 @@ This document summarizes the purpose of the key files and directories that make 
 ## Backend service (`backend/`)
 - `package.json` / `package-lock.json` – Declare backend runtime dependencies (Express, Socket.IO, sqlite/mysql clients, Discord SDK) and start scripts.
 - `Dockerfile` – Produces a container image for the backend with Node.js 18, copying the source and installing dependencies.
-- `src/index.js` – Entry point that boots Express, attaches Socket.IO, seeds the database, manages RCON sessions, exposes REST APIs, and streams live server data to clients.【F:backend/src/index.js†L1-L121】
+- `src/index.js` – Entry point that boots Express, attaches Socket.IO, seeds the database, manages RCON sessions, persists chat history, exposes REST APIs, and streams live server data to clients.【F:backend/src/index.js†L1-L121】
 - `src/auth.js` – JWT-based authentication helpers used by HTTP routes and WebSocket handshakes, including middleware for enforcing admin access.【F:backend/src/auth.js†L1-L36】
 - `src/permissions.js` – Normalises role definitions, checks per-server capabilities, filters data by access level, and serialises permission payloads.【F:backend/src/permissions.js†L1-L120】
 - `src/db/index.js` – Chooses the configured database driver (SQLite or MySQL), ensures schema migrations, seeds default roles, and provisions the first admin account.【F:backend/src/db/index.js†L1-L63】
-- `src/db/sqlite.js` – SQLite-backed implementation of the database API, providing CRUD helpers for users, servers, roles, and telemetry records.
-- `src/db/mysql.js` – MySQL-backed implementation of the database API, including table creation statements and query helpers for user, server, and player data.【F:backend/src/db/mysql.js†L1-L120】
+- `src/db/sqlite.js` – SQLite-backed implementation of the database API, providing CRUD helpers for users, servers, roles, telemetry records, and chat logs (including scope and colour metadata).【F:backend/src/db/sqlite.js†L1-L220】
+- `src/db/mysql.js` – MySQL-backed implementation of the database API, including table creation statements and query helpers for user, server, player, and chat history data.【F:backend/src/db/mysql.js†L1-L200】
 - `src/rcon.js` – Robust WebRCON client that maintains persistent connections, queues commands, handles keepalive traffic, and emits structured events for the rest of the app.【F:backend/src/rcon.js†L1-L120】
 - `src/rustmaps.js` – Utilities for querying the RustMaps API, orchestrating map generation requests, caching results, and downloading map imagery for the live map module.【F:backend/src/rustmaps.js†L1-L80】
 - `src/discord-bot-service.js` – Optional background worker that syncs server status to Discord by driving the `discord.js` client against configured integrations.【F:backend/src/discord-bot-service.js†L1-L80】
 
 ## Frontend assets (`frontend/`)
 - `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI.
-- `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, and orchestrates dynamic modules within the dashboard.【F:frontend/assets/app.js†L1-L80】
+- `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, chat history rendering, and orchestrates dynamic modules within the dashboard.【F:frontend/assets/app.js†L1-L80】
 - `assets/styles.css` – Core stylesheet for layout, dashboard panels, and responsive styling.
 - `assets/css/dark-theme.css` – Overrides enabling a dark theme presentation for the control panel.
 - `assets/js/server-settings.js` – Client-side logic for updating server configuration, credentials, and map metadata from the settings panel.
