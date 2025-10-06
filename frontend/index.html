@@ -329,6 +329,7 @@
           <button type="button" class="menu-tab active" data-view="players" data-capability="players" aria-pressed="true">Players</button>
           <button type="button" class="menu-tab" data-view="map" data-capability="liveMap" aria-pressed="false">Map</button>
           <button type="button" class="menu-tab" data-view="settings" data-capability="manage" aria-pressed="false">Settings</button>
+          <button type="button" class="menu-tab" data-view="chat" data-capability="console" aria-pressed="false">Chat</button>
           <button type="button" class="menu-tab" data-view="console" data-capability="console" aria-pressed="false">Console</button>
           <button type="button" class="menu-tab" data-view="dashboard" data-capability="view" aria-pressed="false">Dashboard</button>
         </nav>
@@ -429,6 +430,25 @@
                     <p class="notice hidden discord-notice" id="discord-notice"></p>
                   </form>
                 </section>
+              </div>
+            </div>
+          </section>
+
+          <section id="workspaceViewChat" class="workspace-view" data-view="chat" data-capability="console" aria-hidden="true">
+            <div class="card chat-card">
+              <div class="card-header">
+                <h3>Chat</h3>
+                <div class="card-controls chat-filter" role="group" aria-label="Chat scope">
+                  <button type="button" class="chat-filter-btn active" data-channel="all" aria-pressed="true">All</button>
+                  <button type="button" class="chat-filter-btn" data-channel="global" aria-pressed="false">Global</button>
+                  <button type="button" class="chat-filter-btn" data-channel="team" aria-pressed="false">Team</button>
+                </div>
+              </div>
+              <div class="chat-body" id="workspaceChatBody">
+                <p id="workspaceChatLoading" class="chat-loading hidden">Loading chat…</p>
+                <p id="workspaceChatEmpty" class="chat-empty-state">Select a server to view chat.</p>
+                <p id="workspaceChatNotice" class="notice small hidden" role="alert"></p>
+                <ol id="workspaceChatList" class="chat-list" aria-live="polite" aria-relevant="additions"></ol>
               </div>
             </div>
           </section>

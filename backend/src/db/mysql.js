@@ -13,6 +13,29 @@ function createApi(pool, dialect) {
     return rows;
   }
   const escapeLike = (value) => String(value).replace(/[\\%_]/g, (match) => `\\${match}`);
+  const trimOrNull = (value) => {
+    if (value == null) return null;
+    const text = String(value).trim();
+    return text || null;
+  };
+  const normaliseDateTime = (value) => {
+    if (value == null) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.valueOf())) return null;
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+  };
+  const normaliseChannelForStore = (value) => {
+    const text = trimOrNull(value);
+    if (!text) return 'global';
+    const lower = text.toLowerCase();
+    return lower === 'team' ? 'team' : 'global';
+  };
+  const normaliseChannelFilter = (value) => {
+    const text = trimOrNull(value);
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    return lower === 'team' || lower === 'global' ? lower : null;
+  };
   return {
     dialect,
     async init() {
@@ -118,6 +141,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN joining INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN online TINYINT DEFAULT 1');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN fps FLOAT NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN color VARCHAR(32) NULL');
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -159,6 +183,20 @@ function createApi(pool, dialect) {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_maps FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS chat_messages(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        channel VARCHAR(16) NOT NULL DEFAULT 'global',
+        steamid VARCHAR(32) NULL,
+        username VARCHAR(190) NULL,
+        message TEXT NOT NULL,
+        raw TEXT NULL,
+        color VARCHAR(32) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_chat_server_time (server_id, created_at),
+        INDEX idx_chat_server_channel (server_id, channel),
+        CONSTRAINT fk_chat_messages_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INT PRIMARY KEY,
@@ -659,6 +697,77 @@ function createApi(pool, dialect) {
     },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
+    async recordChatMessage(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const messageText = trimOrNull(entry?.message);
+      if (!messageText) return null;
+      const truncated = messageText.length > 4000 ? messageText.slice(0, 4000) : messageText;
+      const channel = normaliseChannelForStore(entry?.channel);
+      const steamId = trimOrNull(entry?.steamid ?? entry?.steamId);
+      const usernameRaw = trimOrNull(entry?.username ?? entry?.name);
+      const username = usernameRaw ? usernameRaw.slice(0, 190) : null;
+      const raw = trimOrNull(entry?.raw);
+      const colorRaw = trimOrNull(entry?.color);
+      const color = colorRaw ? colorRaw.slice(0, 32) : null;
+      const createdAt = normaliseDateTime(entry?.created_at);
+      const columns = ['server_id', 'channel', 'steamid', 'username', 'message', 'raw', 'color'];
+      const params = [serverIdNum, channel, steamId || null, username, truncated, raw, color];
+      if (createdAt) {
+        columns.push('created_at');
+        params.push(createdAt);
+      }
+      const placeholders = columns.map(() => '?').join(', ');
+      const sql = `INSERT INTO chat_messages(${columns.join(', ')}) VALUES(${placeholders})`;
+      const result = await exec(sql, params);
+      const insertedId = result.insertId || null;
+      if (insertedId) {
+        const rows = await exec('SELECT id, server_id, channel, steamid, username, message, raw, color, created_at FROM chat_messages WHERE id=?', [insertedId]);
+        if (rows && rows.length) return rows[0];
+      }
+      return {
+        id: insertedId,
+        server_id: serverIdNum,
+        channel,
+        steamid: steamId || null,
+        username,
+        message: truncated,
+        raw,
+        color,
+        created_at: createdAt || null
+      };
+    },
+    async listChatMessages(serverId, { limit = 200, channel = null } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const conditions = ['server_id=?'];
+      const params = [serverIdNum];
+      const channelFilter = normaliseChannelFilter(channel);
+      if (channelFilter) {
+        conditions.push('channel=?');
+        params.push(channelFilter);
+      }
+      let sql = `SELECT id, server_id, channel, steamid, username, message, raw, color, created_at FROM chat_messages WHERE ${conditions.join(' AND ')} ORDER BY created_at ASC`;
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 500));
+      }
+      return await exec(sql, params);
+    },
+    async purgeChatMessages({ before, server_id } = {}) {
+      const cutoff = normaliseDateTime(before);
+      if (!cutoff) return 0;
+      const params = [cutoff];
+      let sql = 'DELETE FROM chat_messages WHERE created_at < ?';
+      const serverIdNum = Number(server_id);
+      if (Number.isFinite(serverIdNum)) {
+        sql += ' AND server_id=?';
+        params.push(serverIdNum);
+      }
+      const result = await exec(sql, params);
+      return result.affectedRows || 0;
+    },
     async getUserSettings(userId){
       const rows = await exec('SELECT `key`,value FROM user_settings WHERE user_id=?',[userId]);
       const out = {};

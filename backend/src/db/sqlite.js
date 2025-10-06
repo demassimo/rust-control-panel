@@ -11,6 +11,31 @@ export default {
 
 function createApi(dbh, dialect) {
   const escapeLike = (value) => String(value).replace(/[\\%_]/g, (match) => `\\${match}`);
+  const trimOrNull = (value) => {
+    if (value == null) return null;
+    const text = String(value).trim();
+    return text || null;
+  };
+  const normaliseIso = (value) => {
+    if (value == null) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  };
+  const normaliseChannelForStore = (value) => {
+    const text = trimOrNull(value);
+    if (!text) return 'global';
+    const lower = text.toLowerCase();
+    return lower === 'team' ? 'team' : 'global';
+  };
+  const normaliseChannelFilter = (value) => {
+    const text = trimOrNull(value);
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    return lower === 'team' || lower === 'global' ? lower : null;
+  };
   return {
     dialect,
     async init() {
@@ -131,6 +156,20 @@ function createApi(dbh, dialect) {
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS chat_messages(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'global',
+        steamid TEXT,
+        username TEXT,
+        message TEXT NOT NULL,
+        raw TEXT,
+        color TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_server_time ON chat_messages(server_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_channel ON chat_messages(server_id, channel, created_at);
       CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INTEGER PRIMARY KEY,
         bot_token TEXT,
@@ -153,6 +192,10 @@ function createApi(dbh, dialect) {
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
+      }
+      const chatCols = await dbh.all("PRAGMA table_info('chat_messages')");
+      if (!chatCols.some((c) => c.name === 'color')) {
+        await dbh.run("ALTER TABLE chat_messages ADD COLUMN color TEXT");
       }
       const serverCols = await dbh.all("PRAGMA table_info('servers')");
       if (!serverCols.some((c) => c.name === 'team_id')) {
@@ -731,6 +774,72 @@ function createApi(dbh, dialect) {
     },
     async addPlayerEvent(ev){ await dbh.run('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await dbh.all('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
+    async recordChatMessage(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const messageText = trimOrNull(entry?.message);
+      if (!messageText) return null;
+      const truncated = messageText.length > 4000 ? messageText.slice(0, 4000) : messageText;
+      const channel = normaliseChannelForStore(entry?.channel);
+      const steamId = trimOrNull(entry?.steamid ?? entry?.steamId);
+      const usernameRaw = trimOrNull(entry?.username ?? entry?.name);
+      const username = usernameRaw ? usernameRaw.slice(0, 190) : null;
+      const raw = trimOrNull(entry?.raw);
+      const colorRaw = trimOrNull(entry?.color);
+      const color = colorRaw ? colorRaw.slice(0, 32) : null;
+      const createdAt = normaliseIso(entry?.created_at) || new Date().toISOString();
+      const result = await dbh.run(
+        'INSERT INTO chat_messages(server_id, channel, steamid, username, message, raw, color, created_at) VALUES(?,?,?,?,?,?,?,?)',
+        [serverIdNum, channel, steamId || null, username, truncated, raw, color, createdAt]
+      );
+      return {
+        id: result.lastID,
+        server_id: serverIdNum,
+        channel,
+        steamid: steamId || null,
+        username,
+        message: truncated,
+        raw,
+        color,
+        created_at: createdAt
+      };
+    },
+    async listChatMessages(serverId, { limit = 200, channel = null } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const conditions = ['server_id=?'];
+      const params = [serverIdNum];
+      const channelFilter = normaliseChannelFilter(channel);
+      if (channelFilter) {
+        conditions.push('channel=?');
+        params.push(channelFilter);
+      }
+      let sql = `
+        SELECT id, server_id, channel, steamid, username, message, raw, color, created_at
+        FROM chat_messages
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at ASC
+      `;
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 500));
+      }
+      return await dbh.all(sql, params);
+    },
+    async purgeChatMessages({ before, server_id } = {}) {
+      const cutoff = normaliseIso(before);
+      if (!cutoff) return 0;
+      let sql = 'DELETE FROM chat_messages WHERE created_at < ?';
+      const params = [cutoff];
+      const serverIdNum = Number(server_id);
+      if (Number.isFinite(serverIdNum)) {
+        sql += ' AND server_id=?';
+        params.push(serverIdNum);
+      }
+      const result = await dbh.run(sql, params);
+      return result.changes || 0;
+    },
     async getUserSettings(userId){
       const rows = await dbh.all('SELECT key,value FROM user_settings WHERE user_id=?',[userId]);
       const out = {};
