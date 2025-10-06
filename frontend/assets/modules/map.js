@@ -730,6 +730,8 @@
         selectedTeam: null,
         selectedSolo: null,
         activePopupSteamId: null,
+        activeClusterId: null,
+        activeClusterMembers: null,
         lastUpdated: null,
         pollPreference: initialPollPreference,
         pollInterval: DEFAULT_POLL_INTERVAL,
@@ -804,7 +806,8 @@
         popup: {
           wrap: markerPopup,
           card: markerPopupCard,
-          arrow: markerPopupArrow
+          arrow: markerPopupArrow,
+          currentClusterId: null
         }
       };
 
@@ -2910,6 +2913,29 @@
         if (!event) return;
         event.stopPropagation();
         const marker = event.currentTarget;
+        if (!marker) return;
+
+        const clusterId = marker?.dataset?.clusterId;
+        if (clusterId) {
+          const steamIds = String(marker.dataset.clusterMembers || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean);
+          const players = steamIds
+            .map((id) => state.players.find((p) => resolveSteamId(p) === id))
+            .filter(Boolean);
+          if (players.length === 1) {
+            selectPlayer(players[0], { suppressPanel: true, showPopup: true });
+            return;
+          }
+          if (players.length === 0) return;
+          state.activeClusterId = clusterId;
+          state.activeClusterMembers = players.map((player) => resolveSteamId(player));
+          state.activePopupSteamId = null;
+          updateMarkerPopups();
+          return;
+        }
+
         const steamId = marker?.dataset?.steamid;
         if (!steamId) return;
         const player = state.players.find((p) => resolveSteamId(p) === steamId);
@@ -3082,52 +3108,159 @@
         const staleIds = new Set(markerStore.keys());
         const selectionEngaged = selectionActive();
 
+        const overlayRect = typeof overlayEl.getBoundingClientRect === 'function'
+          ? overlayEl.getBoundingClientRect()
+          : null;
+        const overlayWidth = Number.isFinite(overlayRect?.width) && overlayRect.width > 0
+          ? overlayRect.width
+          : null;
+        const overlayHeight = Number.isFinite(overlayRect?.height) && overlayRect.height > 0
+          ? overlayRect.height
+          : null;
+        const usePixelDistance = Number.isFinite(overlayWidth) && Number.isFinite(overlayHeight);
+        const CLUSTER_THRESHOLD_PX = 32;
+        const CLUSTER_THRESHOLD_PERCENT = 2.2;
+        const threshold = usePixelDistance
+          ? Math.max(CLUSTER_THRESHOLD_PX, Math.min(overlayWidth, overlayHeight) * 0.04)
+          : CLUSTER_THRESHOLD_PERCENT;
+
+        const clusters = [];
+        const removeKeys = [];
+
         for (const player of state.players) {
           const steamId = resolveSteamId(player);
           if (!steamId) continue;
           const position = projectPosition(player.position, axis);
           if (!position) {
-            const existing = markerStore.get(steamId);
-            if (existing) {
-              stopMarkerAnimation(existing);
-
-              existing.remove();
-              markerStore.delete(steamId);
-              staleIds.delete(steamId);
-            }
+            removeKeys.push(`player:${steamId}`);
             continue;
           }
 
-          let marker = markerStore.get(steamId);
+          const metricX = usePixelDistance && overlayWidth
+            ? (position.left / 100) * overlayWidth
+            : position.left;
+          const metricY = usePixelDistance && overlayHeight
+            ? (position.top / 100) * overlayHeight
+            : position.top;
+
+          let target = null;
+          for (const cluster of clusters) {
+            const dx = metricX - cluster.avgMetricX;
+            const dy = metricY - cluster.avgMetricY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance <= threshold) {
+              target = cluster;
+              break;
+            }
+          }
+
+          if (!target) {
+            target = {
+              players: [],
+              steamIds: [],
+              count: 0,
+              leftSum: 0,
+              topSum: 0,
+              metricXSum: 0,
+              metricYSum: 0,
+              avgMetricX: metricX,
+              avgMetricY: metricY
+            };
+            clusters.push(target);
+          }
+
+          target.players.push(player);
+          target.steamIds.push(steamId);
+          target.count += 1;
+          target.leftSum += position.left;
+          target.topSum += position.top;
+          target.metricXSum += metricX;
+          target.metricYSum += metricY;
+          target.avgMetricX = target.metricXSum / target.count;
+          target.avgMetricY = target.metricYSum / target.count;
+        }
+
+        let activeClusterStillVisible = false;
+
+        for (const key of removeKeys) {
+          staleIds.delete(key);
+          const marker = markerStore.get(key);
+          if (marker) {
+            stopMarkerAnimation(marker);
+            marker.remove();
+            markerStore.delete(key);
+          }
+        }
+
+        for (const cluster of clusters) {
+          const count = cluster.count;
+          if (!count) continue;
+          const left = cluster.leftSum / count;
+          const top = cluster.topSum / count;
+          const sortedSteamIds = [...cluster.steamIds].sort();
+          const datasetKey = sortedSteamIds.join('_');
+          const storeKey = count > 1 ? `cluster:${datasetKey}` : `player:${sortedSteamIds[0]}`;
+          let marker = markerStore.get(storeKey);
           if (!marker) {
             marker = viewport.doc.createElement('div');
             marker.className = 'map-marker';
-            marker.dataset.steamid = steamId;
             marker.addEventListener('click', handleMarkerClick);
-            setMarkerPosition(marker, position.left, position.top);
-            marker.style.backgroundColor = colorForPlayer(player);
-            marker.title = player.displayName || player.persona || steamId;
+            setMarkerPosition(marker, left, top);
             overlayEl.appendChild(marker);
-            markerStore.set(steamId, marker);
+            markerStore.set(storeKey, marker);
           }
 
-          animateMarkerTo(marker, position.left, position.top);
+          animateMarkerTo(marker, left, top);
 
-          marker.style.backgroundColor = colorForPlayer(player);
-          marker.title = player.displayName || player.persona || steamId;
-          const focused = isPlayerFocused(player);
-          marker.classList.toggle('active', focused);
-          marker.classList.toggle('dimmed', selectionEngaged && !focused);
-          staleIds.delete(steamId);
+          const hasFocus = cluster.players.some((p) => isPlayerFocused(p));
+          marker.classList.toggle('active', hasFocus);
+          marker.classList.toggle('dimmed', selectionEngaged && !hasFocus);
+
+          if (count > 1) {
+            marker.classList.add('map-marker-cluster');
+            marker.textContent = String(count);
+            marker.title = `${count} players nearby`;
+            marker.dataset.clusterId = datasetKey;
+            marker.dataset.clusterMembers = sortedSteamIds.join(',');
+            marker.dataset.clusterSize = String(count);
+            delete marker.dataset.steamid;
+            marker.style.removeProperty('backgroundColor');
+            if (state.activeClusterId === datasetKey) {
+              state.activeClusterMembers = [...sortedSteamIds];
+              activeClusterStillVisible = true;
+            }
+          } else {
+            const player = cluster.players[0];
+            const steamId = sortedSteamIds[0];
+            marker.classList.remove('map-marker-cluster');
+            marker.textContent = '';
+            marker.dataset.steamid = steamId;
+            marker.title = playerDisplayName(player);
+            marker.style.backgroundColor = colorForPlayer(player);
+            delete marker.dataset.clusterId;
+            delete marker.dataset.clusterMembers;
+            delete marker.dataset.clusterSize;
+            if (state.activeClusterId === datasetKey) {
+              state.activeClusterId = null;
+              state.activeClusterMembers = null;
+            }
+          }
+
+          staleIds.delete(storeKey);
         }
 
-        for (const steamId of staleIds) {
-          const marker = markerStore.get(steamId);
+        if (state.activeClusterId && !activeClusterStillVisible) {
+          state.activeClusterId = null;
+          state.activeClusterMembers = null;
+        }
+
+        for (const key of staleIds) {
+          const marker = markerStore.get(key);
           if (marker) {
             stopMarkerAnimation(marker);
             marker.remove();
           }
-          markerStore.delete(steamId);
+          markerStore.delete(key);
         }
       }
 
@@ -3178,6 +3311,8 @@
         }
         if (popup.card) popup.card.innerHTML = '';
         popup.currentSteamId = null;
+        if (popup.card) popup.card.classList.remove('map-marker-popup-cluster-mode');
+        popup.currentClusterId = null;
       }
 
       function hideAllMarkerPopups() {
@@ -3240,6 +3375,8 @@
         const doc = viewport.doc || document;
         popup.card.innerHTML = '';
         popup.currentSteamId = resolveSteamId(player);
+        popup.currentClusterId = null;
+        popup.card.classList.remove('map-marker-popup-cluster-mode');
 
         const header = doc.createElement('div');
         header.className = 'map-marker-popup-header';
@@ -3253,6 +3390,8 @@
           img.src = avatarUrl;
           img.alt = `${displayName} avatar`;
           img.loading = 'lazy';
+          img.decoding = 'async';
+          img.referrerPolicy = 'no-referrer';
           avatarWrap.appendChild(img);
         } else {
           avatarWrap.classList.add('placeholder');
@@ -3297,9 +3436,156 @@
         }
       }
 
+      function renderClusterPopupForViewport(viewport, marker, players) {
+        const popup = viewport?.popup;
+        if (!popup?.wrap || !popup.card) return;
+        if (!Array.isArray(players) || players.length < 2) return;
+        const doc = viewport.doc || document;
+        popup.card.innerHTML = '';
+        popup.currentSteamId = null;
+        popup.currentClusterId = marker?.dataset?.clusterId || null;
+        popup.card.classList.add('map-marker-popup-cluster-mode');
+
+        const header = doc.createElement('div');
+        header.className = 'map-marker-popup-header map-marker-popup-cluster-header';
+        const title = doc.createElement('div');
+        title.className = 'map-marker-popup-name';
+        title.textContent = `${players.length} players nearby`;
+        header.appendChild(title);
+        popup.card.appendChild(header);
+
+        const list = doc.createElement('div');
+        list.className = 'map-marker-popup-cluster-list';
+
+        players.forEach((player) => {
+          if (!player) return;
+          const steamId = resolveSteamId(player);
+          const displayName = playerDisplayName(player);
+          const item = doc.createElement('button');
+          item.type = 'button';
+          item.className = 'map-marker-popup-cluster-item';
+          item.dataset.steamid = steamId;
+          item.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            state.activeClusterId = null;
+            state.activeClusterMembers = null;
+            selectPlayer(player, { showPopup: true });
+          });
+
+          const avatarWrap = doc.createElement('span');
+          avatarWrap.className = 'map-marker-popup-cluster-avatar';
+          const avatarUrl = resolvePlayerAvatar(player);
+          if (avatarUrl) {
+            const img = doc.createElement('img');
+            img.src = avatarUrl;
+            img.alt = `${displayName} avatar`;
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.referrerPolicy = 'no-referrer';
+            avatarWrap.appendChild(img);
+          } else {
+            avatarWrap.classList.add('placeholder');
+            avatarWrap.textContent = avatarInitial(displayName);
+          }
+          item.appendChild(avatarWrap);
+
+          const info = doc.createElement('span');
+          info.className = 'map-marker-popup-cluster-info';
+
+          const nameEl = doc.createElement('span');
+          nameEl.className = 'map-marker-popup-cluster-name';
+          nameEl.textContent = displayName;
+          info.appendChild(nameEl);
+
+          const meta = doc.createElement('span');
+          meta.className = 'map-marker-popup-cluster-meta';
+
+          const colorDot = doc.createElement('span');
+          colorDot.className = 'map-marker-popup-cluster-dot';
+          colorDot.style.backgroundColor = colorForPlayer(player);
+          meta.appendChild(colorDot);
+
+          const metaParts = [];
+          const teamId = teamKey(player);
+          metaParts.push(teamId > 0 ? `Team ${teamId}` : 'Solo');
+          const healthValue = formatHealth(player.health ?? player.Health);
+          if (healthValue !== '—') metaParts.push(`${healthValue} hp`);
+          const pingValue = formatPing(player.ping ?? player.Ping);
+          if (pingValue !== '—') metaParts.push(pingValue);
+          if (metaParts.length > 0) {
+            const metaText = doc.createElement('span');
+            metaText.textContent = metaParts.join(' • ');
+            meta.appendChild(metaText);
+          }
+          info.appendChild(meta);
+
+          item.appendChild(info);
+          list.appendChild(item);
+        });
+
+        popup.card.appendChild(list);
+
+        const wasHidden = popup.wrap.classList.contains('hidden');
+        popup.wrap.classList.remove('hidden');
+        popup.wrap.style.visibility = 'hidden';
+        positionMarkerPopup(viewport, marker);
+        if (popup.wrap.style.visibility === 'hidden') {
+          popup.wrap.style.visibility = '';
+        }
+        if (wasHidden) {
+          popup.wrap.getBoundingClientRect();
+        }
+
+        if (Array.isArray(players)) {
+          state.activeClusterMembers = players.map((player) => resolveSteamId(player)).filter(Boolean);
+        }
+      }
+
       function updateMarkerPopups() {
+        if (!mapReady()) {
+          hideAllMarkerPopups();
+          state.activeClusterId = null;
+          state.activeClusterMembers = null;
+          return;
+        }
+        if (state.activeClusterId) {
+          const selector = `[data-cluster-id="${escapeSelector(state.activeClusterId)}"]`;
+          let rendered = false;
+          for (const viewport of getActiveViewports()) {
+            if (!viewport?.overlay) {
+              hideMarkerPopup(viewport);
+              continue;
+            }
+            const marker = viewport.overlay.querySelector(selector);
+            if (!marker) {
+              hideMarkerPopup(viewport);
+              continue;
+            }
+            const steamIds = String(marker.dataset.clusterMembers || '')
+              .split(',')
+              .map((value) => value.trim())
+              .filter(Boolean);
+            const players = steamIds
+              .map((id) => state.players.find((p) => resolveSteamId(p) === id))
+              .filter(Boolean);
+            if (players.length < 2) {
+              hideMarkerPopup(viewport);
+              continue;
+            }
+            renderClusterPopupForViewport(viewport, marker, players);
+            rendered = true;
+          }
+          if (!rendered) {
+            state.activeClusterId = null;
+            state.activeClusterMembers = null;
+            hideAllMarkerPopups();
+          }
+          return;
+        }
+
         const activeId = state.activePopupSteamId;
-        if (!activeId || !mapReady()) {
+        if (!activeId) {
           hideAllMarkerPopups();
           return;
         }
@@ -3810,6 +4096,14 @@
         if (state.activePopupSteamId && !state.players.some((p) => resolveSteamId(p) === state.activePopupSteamId)) {
           state.activePopupSteamId = null;
         }
+        if (state.activeClusterId) {
+          const members = Array.isArray(state.activeClusterMembers) ? state.activeClusterMembers : [];
+          const present = members.filter((id) => state.players.some((p) => resolveSteamId(p) === id));
+          if (present.length < 2) {
+            state.activeClusterId = null;
+            state.activeClusterMembers = null;
+          }
+        }
         ensureTeamColors(state.players);
         renderMarkers();
         renderPlayerList();
@@ -3821,6 +4115,14 @@
       function renderAll() {
         if (state.activePopupSteamId && !state.players.some((p) => resolveSteamId(p) === state.activePopupSteamId)) {
           state.activePopupSteamId = null;
+        }
+        if (state.activeClusterId) {
+          const members = Array.isArray(state.activeClusterMembers) ? state.activeClusterMembers : [];
+          const present = members.filter((id) => state.players.some((p) => resolveSteamId(p) === id));
+          if (present.length < 2) {
+            state.activeClusterId = null;
+            state.activeClusterMembers = null;
+          }
         }
         ensureTeamColors(state.players);
         const activeMeta = getActiveMapMeta();
@@ -3845,6 +4147,8 @@
         state.selectedTeam = null;
         state.selectedSolo = null;
         state.activePopupSteamId = null;
+        state.activeClusterId = null;
+        state.activeClusterMembers = null;
         hideAllMarkerPopups();
         renderPlayerSections();
         ctx.emit?.('live-players:highlight', { steamId: null });
@@ -3853,6 +4157,8 @@
 
       function selectPlayer(player, options = {}) {
         const { suppressPanel = false, showPopup = false } = options;
+        state.activeClusterId = null;
+        state.activeClusterMembers = null;
         const key = teamKey(player);
         const steamId = resolveSteamId(player);
         let highlightSteam = null;
@@ -4137,6 +4443,8 @@
         clearPendingRefresh();
         state.pendingGeneration = false;
         state.pendingRefresh = null;
+        state.activeClusterId = null;
+        state.activeClusterMembers = null;
         state.status = null;
         state.players = [];
         state.mapMeta = null;
@@ -4203,6 +4511,8 @@
           state.lastUpdated = null;
           state.pendingGeneration = false;
           state.pendingRefresh = null;
+          state.activeClusterId = null;
+          state.activeClusterMembers = null;
           state.status = null;
           state.projectionMode = null;
           state.horizontalAxis = null;
