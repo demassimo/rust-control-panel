@@ -99,11 +99,10 @@
         searchInput = document.createElement('input');
         searchInput.type = 'search';
         searchInput.placeholder = 'Search players, Steam ID or IP';
-        searchInput.autocomplete = 'search';
-        searchInput.name = 'players-search';
+        searchInput.autocomplete = 'off';
         searchInput.setAttribute('inputmode', 'search');
         searchInput.setAttribute('role', 'searchbox');
-        searchInput.setAttribute('autocomplete', 'search');
+        searchInput.setAttribute('autocomplete', 'off');
         searchInput.setAttribute('aria-label', 'Search players by name, Steam ID, or IP address');
         searchWrap.appendChild(searchInput);
         ctx.actions.appendChild(searchWrap);
