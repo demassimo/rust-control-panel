@@ -3013,7 +3013,22 @@ function monumentIconFromLabel(label, category) {
 function normaliseIconToken(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  return trimmed || null;
+  if (!trimmed) return null;
+
+  const lowered = trimmed.toLowerCase();
+  const segment = lowered.split(/[\\/]/).pop();
+  const withoutQuery = segment.split(/[?#]/)[0];
+  const withoutExt = withoutQuery.replace(/\.[a-z0-9]+$/, '');
+  const normalized = withoutExt
+    .replace(/[_\s]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  if (!normalized) return null;
+
+  const withoutSuffix = normalized.replace(/-\d+$/, '');
+  const cleaned = withoutSuffix.replace(/^(?:icon|monument|map)-/, '');
+  return cleaned || withoutSuffix || normalized;
 }
 
 function slugifyMonumentId(value, fallback) {
