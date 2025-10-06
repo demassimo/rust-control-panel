@@ -166,7 +166,9 @@
     cache: new Map(),
     lastFetched: new Map(),
     loading: false,
-    error: null
+    error: null,
+    profileCache: new Map(),
+    profileRequests: new Map()
   };
 
   function emitWorkspaceEvent(name, detail) {
@@ -312,16 +314,39 @@
     if (!payload) return null;
     const serverId = Number(payload?.serverId ?? payload?.server_id ?? fallbackServerId);
     if (!Number.isFinite(serverId)) return null;
-    const messageText = pickString(payload?.message, payload?.text, payload?.body);
+    const messageText = pickString(
+      payload?.message,
+      payload?.Message,
+      payload?.text,
+      payload?.Text,
+      payload?.body
+    );
     const trimmedMessage = messageText ? messageText.trim() : '';
     if (!trimmedMessage) return null;
-    let createdAt = pickString(payload?.createdAt, payload?.created_at, payload?.timestamp);
-    if (createdAt) {
-      const parsed = new Date(createdAt);
-      createdAt = Number.isNaN(parsed.valueOf()) ? null : parsed.toISOString();
+    const timestampCandidates = [
+      payload?.createdAt,
+      payload?.created_at,
+      payload?.timestamp,
+      payload?.Timestamp,
+      payload?.Time,
+      payload?.time
+    ];
+    let createdAt = null;
+    for (const candidate of timestampCandidates) {
+      const normalized = normalizeChatTimestamp(candidate);
+      if (normalized) {
+        createdAt = normalized;
+        break;
+      }
     }
     if (!createdAt) createdAt = new Date().toISOString();
-    const idValue = payload?.id ?? payload?.messageId ?? payload?.message_id ?? null;
+    const idValue = payload?.id
+      ?? payload?.Id
+      ?? payload?.messageId
+      ?? payload?.message_id
+      ?? payload?.MessageId
+      ?? payload?.MessageID
+      ?? null;
     let id = null;
     if (idValue != null) {
       const numeric = Number(idValue);
@@ -331,10 +356,36 @@
         id = trimmedId || null;
       }
     }
-    const channel = normalizeChatChannel(pickString(payload?.channel, payload?.scope, payload?.type));
-    const username = pickString(payload?.username, payload?.user, payload?.name, payload?.displayName);
-    const steamId = pickString(payload?.steamId, payload?.steamid, payload?.userId, payload?.userid, payload?.playerId);
-    const raw = pickString(payload?.raw);
+    const channel = normalizeChatChannel(pickString(
+      payload?.channel,
+      payload?.Channel,
+      payload?.scope,
+      payload?.Scope,
+      payload?.type,
+      payload?.Type
+    ));
+    const username = pickString(
+      payload?.username,
+      payload?.Username,
+      payload?.user,
+      payload?.User,
+      payload?.name,
+      payload?.Name,
+      payload?.displayName,
+      payload?.DisplayName
+    );
+    const steamId = pickString(
+      payload?.steamId,
+      payload?.SteamId,
+      payload?.steamid,
+      payload?.SteamID,
+      payload?.userId,
+      payload?.UserId,
+      payload?.userid,
+      payload?.playerId,
+      payload?.PlayerId
+    );
+    const raw = pickString(payload?.raw, payload?.Raw);
     const color = normalizeChatColor(pickString(payload?.color, payload?.Color));
     return {
       id,
@@ -346,6 +397,104 @@
       createdAt,
       raw: raw || null,
       color: color || null
+    };
+  }
+
+  function normalizeChatProfile(profile, steamId, fallbackName = null) {
+    const resolvedId = pickString(profile?.steamid, profile?.SteamId, steamId);
+    const displayName = pickString(
+      profile?.forced_display_name,
+      profile?.forcedDisplayName,
+      profile?.display_name,
+      profile?.displayName,
+      profile?.persona,
+      profile?.personaName,
+      profile?.personaname,
+      profile?.username,
+      fallbackName,
+      resolvedId
+    );
+    const avatar = pickString(
+      profile?.avatarfull,
+      profile?.avatarFull,
+      profile?.avatar,
+      profile?.avatar_medium,
+      profile?.avatarMedium,
+      profile?.avatar_url,
+      profile?.avatarUrl
+    );
+    const profileUrl = pickString(
+      profile?.profileurl,
+      profile?.profile_url,
+      profile?.profileUrl
+    );
+    return {
+      steamId: resolvedId || null,
+      displayName: displayName || null,
+      avatar: avatar || null,
+      profileUrl: profileUrl || null
+    };
+  }
+
+  function normalizeChatTimestamp(value) {
+    if (value == null) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      const ms = numeric > 1e12 ? numeric : numeric * 1000;
+      const fromNumber = new Date(ms);
+      if (!Number.isNaN(fromNumber.getTime())) return fromNumber.toISOString();
+    }
+    const text = String(value).trim();
+    if (!text) return null;
+    const parsed = new Date(text);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  function queueChatProfileFetch(steamId, { username } = {}) {
+    const key = String(steamId || '').trim();
+    if (!key || chatState.profileCache.has(key) || chatState.profileRequests.has(key)) return;
+    if (!state.TOKEN) return;
+    const request = (async () => {
+      try {
+        const data = await api(`/players/${encodeURIComponent(key)}`);
+        chatState.profileCache.set(key, normalizeChatProfile(data, key, username));
+      } catch (err) {
+        if (errorCode(err) === 'unauthorized') {
+          handleUnauthorized();
+        } else {
+          chatState.profileCache.set(key, normalizeChatProfile(null, key, username));
+        }
+      } finally {
+        chatState.profileRequests.delete(key);
+        renderChatMessages();
+      }
+    })();
+    chatState.profileRequests.set(key, request);
+  }
+
+  function chatAvatarInitial(name = '') {
+    const text = String(name || '').trim();
+    if (!text) return '?';
+    const code = text.codePointAt(0);
+    if (code == null) return '?';
+    return String.fromCodePoint(code).toUpperCase();
+  }
+
+  function formatChatTimestamp(value) {
+    if (!value) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const iso = date.toISOString();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return {
+      iso,
+      label: `${hours}:${minutes}:${seconds}`,
+      title: date.toLocaleString()
     };
   }
 
@@ -361,6 +510,9 @@
       if (seen.has(signature)) continue;
       list.push(normalized);
       seen.add(signature);
+      if (normalized.steamId) {
+        queueChatProfileFetch(normalized.steamId, { username: normalized.username });
+      }
     }
     list.sort((a, b) => {
       const aTime = new Date(a.createdAt).getTime();
@@ -416,32 +568,70 @@
       if (entry.channel === 'team') li.classList.add('team');
       if (entry.id != null) li.dataset.messageId = String(entry.id);
       li.dataset.channel = entry.channel;
+      if (entry.steamId) li.dataset.steamId = entry.steamId;
+      const channelNumber = entry.channel === 'team' ? 1 : 0;
+      li.dataset.channelNumber = String(channelNumber);
 
       const avatar = document.createElement('div');
       avatar.className = 'chat-entry-avatar';
-      const baseName = (entry.username || entry.steamId || 'Unknown').trim();
-      const initial = baseName.charAt(0) || '?';
-      const avatarLabel = document.createElement('span');
-      avatarLabel.className = 'chat-entry-avatar-label';
-      avatarLabel.textContent = initial.toUpperCase();
-      if (entry.color) {
-        avatar.style.backgroundColor = entry.color;
+      const profile = entry.steamId ? chatState.profileCache.get(entry.steamId) : null;
+      if (!profile && entry.steamId) queueChatProfileFetch(entry.steamId, { username: entry.username });
+      const displayName = (profile?.displayName || entry.username || entry.steamId || 'Unknown').trim();
+      const avatarUrl = profile?.avatar || null;
+      if (avatarUrl) {
+        avatar.classList.add('has-image');
+        const img = document.createElement('img');
+        img.src = avatarUrl;
+        img.alt = displayName ? `${displayName} avatar` : 'Player avatar';
+        avatar.appendChild(img);
+      } else {
+        const avatarLabel = document.createElement('span');
+        avatarLabel.className = 'chat-entry-avatar-label';
+        avatarLabel.textContent = chatAvatarInitial(displayName);
+        if (entry.color) {
+          avatar.style.backgroundColor = entry.color;
+        }
+        avatar.appendChild(avatarLabel);
       }
-      avatar.appendChild(avatarLabel);
 
       const content = document.createElement('div');
       content.className = 'chat-entry-content';
       const meta = document.createElement('div');
       meta.className = 'chat-entry-meta';
-      const nameEl = document.createElement('span');
+      const infoRow = document.createElement('div');
+      infoRow.className = 'chat-entry-info';
+      const nameEl = profile?.profileUrl ? document.createElement('a') : document.createElement('span');
       nameEl.className = 'chat-entry-name';
-      nameEl.textContent = baseName;
+      nameEl.textContent = displayName;
+      if (profile?.profileUrl) {
+        nameEl.href = profile.profileUrl;
+        nameEl.target = '_blank';
+        nameEl.rel = 'noopener noreferrer';
+      }
       nameEl.style.color = entry.color || '';
-      meta.appendChild(nameEl);
+      infoRow.appendChild(nameEl);
+
+      const channelEl = document.createElement('span');
+      channelEl.className = 'chat-entry-channel';
+      channelEl.dataset.channelNumber = String(channelNumber);
+      channelEl.textContent = channelNumber === 1 ? 'Team (1)' : 'Global (0)';
+      infoRow.appendChild(channelEl);
+
+      const timeInfo = formatChatTimestamp(entry.createdAt);
+      if (timeInfo) {
+        const timeEl = document.createElement('time');
+        timeEl.className = 'chat-entry-timestamp';
+        timeEl.dateTime = timeInfo.iso;
+        timeEl.textContent = timeInfo.label;
+        timeEl.title = timeInfo.title;
+        infoRow.appendChild(timeEl);
+      }
+
+      meta.appendChild(infoRow);
       if (entry.steamId) {
         const idEl = document.createElement('span');
         idEl.className = 'chat-entry-id';
-        idEl.textContent = entry.steamId;
+        idEl.textContent = `Steam ID: ${entry.steamId}`;
         meta.appendChild(idEl);
       }
 
@@ -2738,6 +2928,8 @@
     chatState.lastFetched.clear();
     chatState.loading = false;
     chatState.error = null;
+    chatState.profileCache.clear();
+    chatState.profileRequests.clear();
     renderChatMessages();
     ui.showLogin();
     loadPublicConfig();
