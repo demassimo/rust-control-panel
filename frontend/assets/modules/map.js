@@ -2204,7 +2204,7 @@
           return imageSize;
         }
         if (!allowEstimated) return null;
-        const estimate = estimateWorldSizeFromPlayers();
+        const estimate = estimateWorldSizeFromSamples();
         if (Number.isFinite(estimate) && estimate > 0) {
           const previous = Number(state.estimatedWorldSize);
           const next = Number.isFinite(previous) && previous > estimate ? previous : estimate;
@@ -2472,26 +2472,48 @@
         }
       }
 
-      function collectPlayerPositions() {
-        if (!Array.isArray(state.players) || state.players.length === 0) return [];
-        const positions = [];
-        for (const player of state.players) {
-          const pos = player?.position;
-          const x = toNumber(pos?.x);
-          const y = toNumber(pos?.y);
-          const z = toNumber(pos?.z);
-          if (x == null) continue;
-          const sample = { x };
-          if (y != null) sample.y = y;
-          if (z != null) sample.z = z;
-          if (sample.y == null && sample.z == null) continue;
-          positions.push(sample);
+      function collectPositionSamples(options = {}) {
+        const {
+          includePlayers = true,
+          includeWorldEntities = true
+        } = options;
+        const samples = [];
+        const addSample = (entry) => {
+          if (!entry) return;
+          const sample = vectorFromEntry(entry);
+          if (!sample) return;
+          samples.push(sample);
+        };
+
+        if (includePlayers && Array.isArray(state.players) && state.players.length) {
+          for (const player of state.players) {
+            addSample(player?.position || player);
+          }
         }
-        return positions;
+
+        if (includeWorldEntities && state.worldEntities) {
+          const { monuments, entities } = state.worldEntities;
+          if (Array.isArray(monuments) && monuments.length) {
+            for (const monument of monuments) {
+              addSample(monument?.position || monument);
+            }
+          }
+          if (Array.isArray(entities) && entities.length) {
+            for (const entity of entities) {
+              addSample(entity?.position || entity);
+            }
+          }
+        }
+
+        return samples;
       }
 
-      function estimateWorldSizeFromPlayers() {
-        const samples = collectPlayerPositions();
+      function collectPlayerPositions() {
+        return collectPositionSamples({ includeWorldEntities: false });
+      }
+
+      function estimateWorldSizeFromSamples() {
+        const samples = collectPositionSamples();
         if (!Array.isArray(samples) || samples.length === 0) return null;
         const axis = determineHorizontalAxis(samples);
         let minX = Infinity;
@@ -2588,7 +2610,7 @@
       function inferProjectionMode(samples, axis) {
         const size = resolveWorldSize();
         if (!Number.isFinite(size) || size <= 0) return state.projectionMode || 'centered';
-        const list = Array.isArray(samples) ? samples : collectPlayerPositions();
+        const list = Array.isArray(samples) ? samples : collectPositionSamples();
         if (list.length === 0) return state.projectionMode || 'centered';
         const chosenAxis = axis || determineHorizontalAxis(list);
 
@@ -2646,7 +2668,7 @@
       }
 
       function updateProjectionMode() {
-        const samples = collectPlayerPositions();
+        const samples = collectPositionSamples();
         const axis = determineHorizontalAxis(samples);
         if (axis && axis !== state.horizontalAxis) state.horizontalAxis = axis;
         const mode = inferProjectionMode(samples, axis);
@@ -2655,7 +2677,7 @@
 
       function resolveHorizontalAxis() {
         if (state.horizontalAxis) return state.horizontalAxis;
-        const samples = collectPlayerPositions();
+        const samples = collectPositionSamples();
         const axis = determineHorizontalAxis(samples);
         if (axis) state.horizontalAxis = axis;
         return state.horizontalAxis || 'z';
