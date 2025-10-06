@@ -636,11 +636,10 @@
       mapStage.appendChild(message);
 
       const interactionHint = document.createElement('div');
-      interactionHint.className = 'map-interaction-hint';
-      interactionHint.setAttribute('aria-hidden', 'true');
+      interactionHint.className = 'map-interaction-hint map-interaction-hint-visible';
       const interactionHintContent = document.createElement('div');
       interactionHintContent.className = 'map-interaction-hint-content';
-      interactionHintContent.textContent = 'Use Ctrl + scroll to zoom the map.';
+      interactionHintContent.textContent = 'Hold Ctrl and scroll to zoom the map.';
       interactionHint.appendChild(interactionHintContent);
       mapStage.appendChild(interactionHint);
       mapView.appendChild(mapStage);
@@ -834,12 +833,10 @@
       const zoomHintState = {
         attempts: 0,
         lastAttempt: 0,
-        timer: null,
-        visible: false
+        visible: true
       };
       const ZOOM_HINT_THRESHOLD = 3;
       const ZOOM_HINT_RESET_MS = 1200;
-      const ZOOM_HINT_DURATION_MS = 3500;
 
       let preventNextMapClick = false;
 
@@ -1185,26 +1182,17 @@
       }
 
       function hideInteractionHint() {
-        if (zoomHintState.timer) {
-          clearTimeout(zoomHintState.timer);
-          zoomHintState.timer = null;
-        }
-        if (!zoomHintState.visible || !interactionHint) return;
-        interactionHint.classList.remove('map-interaction-hint-visible');
-        interactionHint.setAttribute('aria-hidden', 'true');
-        zoomHintState.visible = false;
-      }
-
-      function showInteractionHint() {
-        if (!interactionHint || mapView.classList.contains('map-view-has-message')) return;
+        if (!interactionHint) return;
         interactionHint.classList.add('map-interaction-hint-visible');
         interactionHint.removeAttribute('aria-hidden');
         zoomHintState.visible = true;
-        if (zoomHintState.timer) clearTimeout(zoomHintState.timer);
-        zoomHintState.timer = setTimeout(() => {
-          zoomHintState.timer = null;
-          hideInteractionHint();
-        }, ZOOM_HINT_DURATION_MS);
+      }
+
+      function showInteractionHint() {
+        if (!interactionHint) return;
+        interactionHint.classList.add('map-interaction-hint-visible');
+        interactionHint.removeAttribute('aria-hidden');
+        zoomHintState.visible = true;
       }
 
       function updateMarkerScale() {
