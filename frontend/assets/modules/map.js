@@ -2,8 +2,9 @@
   if (typeof window.registerModule !== 'function') return;
 
   const COLOR_PALETTE = ['#f97316','#22d3ee','#a855f7','#84cc16','#ef4444','#facc15','#14b8a6','#e11d48','#3b82f6','#8b5cf6','#10b981','#fb7185'];
-  const DEFAULT_POLL_INTERVAL = 20000;
-  const MIN_POLL_INTERVAL = 5000;
+  const MANUAL_REFRESH_MIN_MS = 30000;
+  const DEFAULT_POLL_INTERVAL = MANUAL_REFRESH_MIN_MS;
+  const MIN_POLL_INTERVAL = MANUAL_REFRESH_MIN_MS;
   const MAX_POLL_INTERVAL = 120000;
   const PLAYER_REFRESH_INTERVAL = 60000;
   const WORLD_SYNC_THROTTLE = 15000;
@@ -350,6 +351,8 @@
         estimatedWorldSize: null,
         estimatedWorldSizeSource: null,
         customMapChecksFrozen: false,
+        manualCooldownUntil: 0,
+        manualCooldownMessage: null,
         worldDetails: {
           seed: null,
           size: null,
@@ -707,10 +710,26 @@
           ? 'at a custom interval'
           : description.toLowerCase();
         const suffix = state.serverId ? '.' : ' when live data is available.';
+        const manualLimitNote = ' Manual updates are limited to every 30 seconds due to performance thresholds.';
+        const now = Date.now();
+        const cooldownActive = Number.isFinite(state.manualCooldownUntil)
+          && state.manualCooldownUntil > now;
+        const cooldownMessage = cooldownActive
+          ? state.manualCooldownMessage
+          || 'Manual live map refresh is cooling down. Cached data is shown until the cooldown expires.'
+          : null;
+        const remainingSeconds = cooldownActive
+          ? Math.max(0, Math.ceil((state.manualCooldownUntil - now) / 1000))
+          : 0;
         for (const viewport of getActiveViewports()) {
           const target = viewport.refreshDisplay;
           if (!target) continue;
-          target.textContent = `Player positions refresh ${detail}${suffix}`;
+          let message = `Player positions refresh ${detail}${suffix}` + manualLimitNote;
+          if (cooldownMessage) {
+            const countdown = remainingSeconds > 0 ? ` (${remainingSeconds}s remaining)` : '';
+            message += ` ${cooldownMessage}${countdown}`;
+          }
+          target.textContent = message;
         }
       }
 
@@ -2514,6 +2533,10 @@
           const opt = viewport.doc.createElement('option');
           opt.value = String(option.value);
           opt.textContent = option.label;
+          if (option.value < MIN_POLL_INTERVAL) {
+            opt.disabled = true;
+            opt.title = 'Intervals below 30 seconds are disabled to protect performance.';
+          }
           if (!hasMatch && option.value === pollInterval) {
             opt.selected = true;
             hasMatch = true;
@@ -2910,6 +2933,8 @@
           state.serverInfo = data?.info || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
           state.status = data?.status || null;
+          state.manualCooldownUntil = 0;
+          state.manualCooldownMessage = null;
           updateProjectionMode();
           broadcastPlayers();
           const activeMeta = getActiveMapMeta();
@@ -2964,13 +2989,28 @@
             maybeSubmitWorldDetails('refresh').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
           }
         } catch (err) {
+          const code = ctx.errorCode?.(err);
+          if (code === 'manual_refresh_cooldown' || err?.status === 429) {
+            const description = ctx.describeError?.(err)
+              || 'Manual live map refresh is cooling down. Try again in a few seconds.';
+            state.manualCooldownUntil = Date.now() + MANUAL_REFRESH_MIN_MS;
+            state.manualCooldownMessage = `${description} Cached data is shown until the cooldown expires.`;
+            updateConfigPanel();
+            if (mapReady() || state.players.length > 0) {
+              clearMessage();
+            } else {
+              setMessage(description);
+            }
+            updateRefreshDisplays();
+            ctx.log?.('Manual refresh cooldown active; displaying cached live map data.');
+            return;
+          }
           state.status = null;
           if (state.pendingGeneration) {
             state.pendingGeneration = false;
             clearPendingRefresh();
           }
           updateConfigPanel();
-          const code = ctx.errorCode?.(err);
           if (code === 'unauthorized') {
             ctx.handleUnauthorized?.();
             return;
