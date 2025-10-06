@@ -4517,8 +4517,11 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       return res.status(502).json({ error: 'playerlist_failed' });
     }
     let players = parsePlayerListMessage(playerPayload);
+    const playerCount = Array.isArray(players) ? players.length : 0;
     const playerListHasTeamData = players.some((p) => Number(p?.teamId) > 0);
     const playerListHasPositionData = players.some((p) => hasValidPosition(p?.position));
+    const teamDataSource = playerListHasTeamData || playerCount === 0 ? 'playerlist' : 'teaminfo';
+    const positionDataSource = playerListHasPositionData || playerCount === 0 ? 'playerlist' : 'printpos';
 
     const teamPrep = await enrichPlayersWithTeamInfo(id, server, players, {
       logger,
@@ -4900,7 +4903,11 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       map: mapPayload,
       info,
       status,                    // <-- new
-      fetchedAt: new Date().toISOString()
+      fetchedAt: new Date().toISOString(),
+      playerDataSources: {
+        positions: positionDataSource,
+        teams: teamDataSource
+      }
     };
 
     res.json(responsePayload);
