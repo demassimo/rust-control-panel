@@ -55,6 +55,21 @@ function normaliseChatScope(value) {
   return null;
 }
 
+function normaliseChatChannel(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value === 1 ? 'team' : 'global';
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const lower = trimmed.toLowerCase();
+    if (lower === '1' || lower === 'team') return 'team';
+    if (lower === '0' || lower === 'global') return 'global';
+    return normaliseChatScope(trimmed);
+  }
+  return null;
+}
+
 function sanitiseSteamId(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const text = String(value).trim();
@@ -94,6 +109,23 @@ function normaliseChatColor(value) {
   return null;
 }
 
+function normaliseTimestamp(value) {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    const ms = numeric > 1e12 ? numeric : numeric * 1000;
+    const fromNumber = new Date(ms);
+    if (!Number.isNaN(fromNumber.getTime())) return fromNumber.toISOString();
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 function trimOrNull(value) {
   if (typeof value !== 'string') return null;
   const text = value.trim();
@@ -121,8 +153,32 @@ export function parseChatMessage(message, payload = {}) {
     ?? payload?.userid
     ?? payload?.playerId
   );
-  const fromPayloadScope = normaliseChatScope(payload?.Channel || payload?.channel || payload?.Scope || payload?.scope);
+  const fromPayloadScope = normaliseChatChannel(
+    payload?.Channel
+    ?? payload?.channel
+    ?? payload?.Scope
+    ?? payload?.scope
+  );
   const color = normaliseChatColor(payload?.Color || payload?.color);
+
+  const timestampCandidates = [
+    payload?.createdAt,
+    payload?.created_at,
+    payload?.timestamp,
+    payload?.Timestamp,
+    payload?.Time,
+    payload?.time,
+    payload?.Date,
+    payload?.date
+  ];
+  let timestamp = null;
+  for (const candidate of timestampCandidates) {
+    const normalised = normaliseTimestamp(candidate);
+    if (normalised) {
+      timestamp = normalised;
+      break;
+    }
+  }
 
   if (!raw && !fromPayloadName && !fromPayloadSteam) {
     return null;
@@ -131,6 +187,95 @@ export function parseChatMessage(message, payload = {}) {
   let working = stripRconTimestampPrefix(raw || '').trim();
   if (!working && typeof payloadMessage === 'string') {
     working = stripRconTimestampPrefix(stripAnsiSequences(payloadMessage)).trim();
+  }
+
+  if (working) {
+    const firstBrace = working.indexOf('{');
+    const lastBrace = working.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = working.slice(firstBrace, lastBrace + 1);
+      try {
+        const parsedJson = JSON.parse(candidate);
+        if (parsedJson && typeof parsedJson === 'object' && !Array.isArray(parsedJson)) {
+          if (!timestamp) {
+            const jsonTimestampSources = [
+              parsedJson.createdAt,
+              parsedJson.created_at,
+              parsedJson.timestamp,
+              parsedJson.Timestamp,
+              parsedJson.Time,
+              parsedJson.time,
+              parsedJson.Date,
+              parsedJson.date
+            ];
+            for (const candidateTs of jsonTimestampSources) {
+              const normalisedTs = normaliseTimestamp(candidateTs);
+              if (normalisedTs) {
+                timestamp = normalisedTs;
+                break;
+              }
+            }
+          }
+          const messageText = trimOrNull(
+            parsedJson.Message
+            ?? parsedJson.message
+            ?? parsedJson.Text
+            ?? parsedJson.text
+            ?? parsedJson.Body
+            ?? parsedJson.body
+          );
+          if (messageText) {
+            const username = trimOrNull(
+              parsedJson.Username
+              ?? parsedJson.User
+              ?? parsedJson.Name
+              ?? parsedJson.username
+              ?? parsedJson.user
+              ?? parsedJson.name
+              ?? fromPayloadName
+            );
+            const steamId = sanitiseSteamId(
+              parsedJson.UserId
+              ?? parsedJson.UserID
+              ?? parsedJson.userId
+              ?? parsedJson.userid
+              ?? parsedJson.playerId
+              ?? parsedJson.PlayerId
+              ?? parsedJson.SteamId
+              ?? parsedJson.steamid
+              ?? fromPayloadSteam
+            );
+            const scope = normaliseChatChannel(
+              parsedJson.Channel
+              ?? parsedJson.channel
+              ?? parsedJson.Scope
+              ?? parsedJson.scope
+              ?? parsedJson.Type
+              ?? parsedJson.type
+              ?? fromPayloadScope
+            ) || 'global';
+            const resolvedColor = normaliseChatColor(
+              parsedJson.Color
+              ?? parsedJson.color
+              ?? parsedJson.Colour
+              ?? parsedJson.colour
+              ?? color
+            );
+            return {
+              raw: raw || messageText,
+              message: messageText,
+              username: username || null,
+              steamId: steamId || null,
+              channel: scope,
+              color: resolvedColor || null,
+              timestamp: timestamp || null
+            };
+          }
+        }
+      } catch {
+        // not JSON, fall through to string parsing
+      }
+    }
   }
 
   if (!working) {
@@ -144,7 +289,7 @@ export function parseChatMessage(message, payload = {}) {
   let scope = fromPayloadScope;
   const scopeMatch = working.match(CHAT_SCOPE_PATTERN);
   if (scopeMatch) {
-    scope = scope || normaliseChatScope(scopeMatch[1] || scopeMatch[2]);
+    scope = scope || normaliseChatChannel(scopeMatch[1] || scopeMatch[2]);
     working = working.slice(scopeMatch[0].length).trim();
   }
 
@@ -159,7 +304,7 @@ export function parseChatMessage(message, payload = {}) {
   if (!scope) {
     const inlineScope = namePart.match(/\[(team|global)\]/i) || namePart.match(/\((team|global)\)/i);
     if (inlineScope) {
-      scope = normaliseChatScope(inlineScope[1]);
+      scope = normaliseChatChannel(inlineScope[1]);
       namePart = namePart.replace(inlineScope[0], '').trim();
     }
   }
@@ -188,7 +333,8 @@ export function parseChatMessage(message, payload = {}) {
     username: username || null,
     steamId: steamId || fromPayloadSteam || null,
     channel: scope || 'global',
-    color: color || null
+    color: color || null,
+    timestamp: timestamp || null
   };
 }
 
