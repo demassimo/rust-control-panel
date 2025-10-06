@@ -2342,13 +2342,24 @@ button.chat-filter-btn:focus-visible {
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.86) 100%);
   box-shadow: 0 32px 68px rgba(8, 13, 30, 0.55);
+  width: 100%;
   min-height: clamp(320px, 44vh, 520px);
-  aspect-ratio: 1 / 1;
   transition: background 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
+.map-view.map-view-dynamic {
+  --map-size: clamp(320px, 44vh, 520px);
+  width: min(100%, var(--map-size));
+  height: var(--map-size);
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: 1 / 1;
+}
+
 .map-view.map-view-has-message {
-  aspect-ratio: auto;
+  width: 100%;
+  min-height: clamp(280px, 48vh, 520px);
+  height: auto;
 }
 
 .map-view::before {

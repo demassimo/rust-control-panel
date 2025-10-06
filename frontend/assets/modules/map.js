@@ -452,6 +452,21 @@
       layout.appendChild(mapView);
       layout.appendChild(sidebar);
 
+      scheduleViewportSizeUpdate({ immediate: true });
+
+      const parentView = ctx.root?.closest?.('[data-view]');
+      let visibilityObserver = null;
+      if (parentView && typeof MutationObserver === 'function') {
+        try {
+          visibilityObserver = new MutationObserver(() => {
+            scheduleViewportSizeUpdate({ immediate: true });
+          });
+          visibilityObserver.observe(parentView, { attributes: true, attributeFilter: ['aria-hidden', 'class', 'style'] });
+        } catch (err) {
+          visibilityObserver = null;
+        }
+      }
+
       const initialPollPreference = loadRefreshPreference();
 
       const state = {
@@ -505,6 +520,19 @@
       let mapImageObjectUrl = null;
       let mapImageAbort = null;
       let mapImageLocked = false;
+
+      const MAP_SIZE_MIN = 260;
+      const MAP_SIZE_MAX = 720;
+      const MAP_SIZE_VERTICAL_MARGIN = 180;
+      const viewportSizeCache = new WeakMap();
+      let viewportSizeUpdateHandle = null;
+      let viewportSizeUpdateScheduled = false;
+      const scheduleViewportAnimationFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : (fn) => setTimeout(fn, 16);
+      const cancelViewportAnimationFrame = typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
+        ? window.cancelAnimationFrame.bind(window)
+        : (handle) => clearTimeout(handle);
 
       const mainViewport = {
         win: window,
@@ -565,15 +593,18 @@
         updateImageWorldSize();
         resetMapTransform();
         renderPlayerSections();
+        scheduleViewportSizeUpdate({ immediate: true });
       });
 
       mapImage.addEventListener('error', () => {
         mapView.classList.remove('map-view-has-image');
         state.imageWorldSize = null;
         renderPlayerSections();
+        scheduleViewportSizeUpdate({ immediate: true });
       });
 
       const handleResize = () => {
+        scheduleViewportSizeUpdate();
         applyMapTransform();
       };
 
@@ -597,6 +628,111 @@
 
       function getActiveViewports() {
         return [mainViewport];
+      }
+
+      function scheduleViewportSizeUpdate(options = {}) {
+        const { immediate = false } = options;
+        if (immediate) {
+          if (viewportSizeUpdateHandle != null) {
+            cancelViewportAnimationFrame(viewportSizeUpdateHandle);
+            viewportSizeUpdateHandle = null;
+          }
+          viewportSizeUpdateScheduled = false;
+          applyViewportSizeUpdates();
+          return;
+        }
+        if (viewportSizeUpdateScheduled) return;
+        viewportSizeUpdateScheduled = true;
+        viewportSizeUpdateHandle = scheduleViewportAnimationFrame(() => {
+          viewportSizeUpdateHandle = null;
+          viewportSizeUpdateScheduled = false;
+          applyViewportSizeUpdates();
+        });
+      }
+
+      function applyViewportSizeUpdates() {
+        const viewports = getActiveViewports();
+        for (const viewport of viewports) {
+          applyViewportSizeToViewport(viewport);
+        }
+      }
+
+      function applyViewportSizeToViewport(viewport) {
+        const mapElement = viewport?.mapView;
+        if (!mapElement) return;
+
+        if (mapElement.classList.contains('map-view-has-message')) {
+          viewportSizeCache.delete(mapElement);
+          mapElement.classList.remove('map-view-dynamic');
+          mapElement.style.removeProperty('--map-size');
+          return;
+        }
+
+        const previousSize = viewportSizeCache.get(mapElement);
+        const hadDynamicClass = mapElement.classList.contains('map-view-dynamic');
+        const previousInlineValue = mapElement.style.getPropertyValue('--map-size');
+
+        if (hadDynamicClass) {
+          mapElement.classList.remove('map-view-dynamic');
+        }
+        if (previousInlineValue) {
+          mapElement.style.removeProperty('--map-size');
+        }
+
+        const width = mapElement.offsetWidth;
+        if (!width || width <= 0) {
+          if (previousInlineValue) {
+            mapElement.style.setProperty('--map-size', previousInlineValue);
+          } else if (Number.isFinite(previousSize)) {
+            mapElement.style.setProperty('--map-size', `${previousSize}px`);
+          }
+          if (hadDynamicClass) {
+            mapElement.classList.add('map-view-dynamic');
+          }
+          return;
+        }
+
+        const heightLimit = computeViewportHeightLimit();
+        if (!Number.isFinite(heightLimit) || heightLimit <= 0) {
+          if (previousInlineValue) {
+            mapElement.style.setProperty('--map-size', previousInlineValue);
+            mapElement.classList.add('map-view-dynamic');
+          } else if (Number.isFinite(previousSize)) {
+            mapElement.style.setProperty('--map-size', `${previousSize}px`);
+            mapElement.classList.add('map-view-dynamic');
+          }
+          return;
+        }
+
+        let size = Math.min(width, heightLimit);
+        if (width >= MAP_SIZE_MIN && heightLimit >= MAP_SIZE_MIN) {
+          size = Math.max(size, MAP_SIZE_MIN);
+        }
+        size = Math.max(0, Math.round(size));
+        if (!size) {
+          viewportSizeCache.delete(mapElement);
+          mapElement.classList.remove('map-view-dynamic');
+          mapElement.style.removeProperty('--map-size');
+          return;
+        }
+
+        viewportSizeCache.set(mapElement, size);
+        mapElement.style.setProperty('--map-size', `${size}px`);
+        mapElement.classList.add('map-view-dynamic');
+      }
+
+      function computeViewportHeightLimit() {
+        const viewportHeight = typeof window !== 'undefined' ? Number(window.innerHeight) : NaN;
+        let limit = Number.isFinite(viewportHeight) ? viewportHeight : MAP_SIZE_MAX;
+        const layoutRect = typeof layout?.getBoundingClientRect === 'function' ? layout.getBoundingClientRect() : null;
+        if (layoutRect && Number.isFinite(layoutRect.top)) {
+          limit -= layoutRect.top;
+        }
+        limit -= MAP_SIZE_VERTICAL_MARGIN;
+        if (!Number.isFinite(limit)) {
+          return MAP_SIZE_MAX;
+        }
+        return Math.min(MAP_SIZE_MAX, Math.max(0, limit));
       }
 
       function getViewportMarkerStore(viewport) {
@@ -822,6 +958,7 @@
           target.appendChild(paragraph);
         }
         viewport.mapView.classList.add('map-view-has-message');
+        scheduleViewportSizeUpdate({ immediate: true });
       }
 
       function setMessage(content, options = {}) {
@@ -841,6 +978,7 @@
           viewport.message.innerHTML = '';
           viewport.mapView.classList.remove('map-view-has-message');
         }
+        scheduleViewportSizeUpdate({ immediate: true });
       }
 
       function stopPolling() {
@@ -3507,6 +3645,18 @@
           catch { /* ignore */ }
           mapImageObjectUrl = null;
         }
+      });
+      ctx.onCleanup?.(() => {
+        if (viewportSizeUpdateHandle != null) {
+          cancelViewportAnimationFrame(viewportSizeUpdateHandle);
+          viewportSizeUpdateHandle = null;
+        }
+        viewportSizeUpdateScheduled = false;
+        viewportSizeCache.delete(mapView);
+        visibilityObserver?.disconnect?.();
+        visibilityObserver = null;
+        mapView.classList.remove('map-view-dynamic');
+        mapView.style.removeProperty('--map-size');
       });
 
       const initialStatus = loadPersistentStatusMessage();
