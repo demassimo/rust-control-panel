@@ -2,8 +2,11 @@
   if (typeof window.registerModule !== 'function') return;
 
   const COLOR_PALETTE = ['#f97316','#22d3ee','#a855f7','#84cc16','#ef4444','#facc15','#14b8a6','#e11d48','#3b82f6','#8b5cf6','#10b981','#fb7185'];
-  const DEFAULT_POLL_INTERVAL = 20000;
-  const MIN_POLL_INTERVAL = 5000;
+  const CUSTOM_POLL_MIN_MS = 30000;
+  const STANDARD_POLL_MIN_MS = 5000;
+  const DEFAULT_POLL_INTERVAL = CUSTOM_POLL_MIN_MS;
+  let effectivePollMin = CUSTOM_POLL_MIN_MS;
+  let manualRefreshMinMs = CUSTOM_POLL_MIN_MS;
   const MAX_POLL_INTERVAL = 120000;
   const PLAYER_REFRESH_INTERVAL = 60000;
   const WORLD_SYNC_THROTTLE = 15000;
@@ -223,18 +226,33 @@
     );
   }
 
-  function normaliseRefreshInterval(value) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric <= 0) return DEFAULT_POLL_INTERVAL;
-    return clamp(numeric, MIN_POLL_INTERVAL, MAX_POLL_INTERVAL);
+  function getMinimumPollInterval() {
+    return effectivePollMin;
   }
 
-  function loadRefreshInterval() {
+  function getManualRefreshMinimum() {
+    return manualRefreshMinMs;
+  }
+
+  function normaliseRefreshPreference(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return DEFAULT_POLL_INTERVAL;
+    return clamp(numeric, STANDARD_POLL_MIN_MS, MAX_POLL_INTERVAL);
+  }
+
+  function normaliseRefreshInterval(value) {
+    const numeric = Number(value);
+    const minimum = getMinimumPollInterval();
+    if (!Number.isFinite(numeric) || numeric <= 0) return minimum;
+    return clamp(numeric, minimum, MAX_POLL_INTERVAL);
+  }
+
+  function loadRefreshPreference() {
     if (typeof window === 'undefined') return DEFAULT_POLL_INTERVAL;
     try {
       const stored = window.localStorage?.getItem?.(REFRESH_STORAGE_KEY);
       if (stored == null) return DEFAULT_POLL_INTERVAL;
-      return normaliseRefreshInterval(stored);
+      return normaliseRefreshPreference(stored);
     } catch (err) {
       return DEFAULT_POLL_INTERVAL;
     }
@@ -243,8 +261,8 @@
   function persistRefreshInterval(value) {
     if (typeof window === 'undefined') return;
     try {
-      const interval = normaliseRefreshInterval(value);
-      window.localStorage?.setItem?.(REFRESH_STORAGE_KEY, String(interval));
+      const preference = normaliseRefreshPreference(value);
+      window.localStorage?.setItem?.(REFRESH_STORAGE_KEY, String(preference));
     } catch (err) {
       // Ignore storage errors
     }
@@ -434,19 +452,23 @@
       layout.appendChild(mapView);
       layout.appendChild(sidebar);
 
+      const initialPollPreference = loadRefreshPreference();
+
       const state = {
         serverId: null,
         players: [],
         mapMeta: null,
         mapMetaServerId: null,
         serverInfo: null,
+        playerDataSources: null,
         imageWorldSize: null,
         teamColors: new Map(),
         selectedTeam: null,
         selectedSolo: null,
         activePopupSteamId: null,
         lastUpdated: null,
-        pollInterval: loadRefreshInterval(),
+        pollPreference: initialPollPreference,
+        pollInterval: DEFAULT_POLL_INTERVAL,
         pollTimer: null,
         playerReloadTimer: null,
         pendingGeneration: false,
@@ -457,6 +479,8 @@
         estimatedWorldSize: null,
         estimatedWorldSizeSource: null,
         customMapChecksFrozen: false,
+        manualCooldownUntil: 0,
+        manualCooldownMessage: null,
         worldDetails: {
           seed: null,
           size: null,
@@ -470,6 +494,8 @@
           syncError: null
         }
       };
+
+      state.pollInterval = normaliseRefreshInterval(state.pollPreference);
 
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
@@ -829,9 +855,11 @@
       }
 
       function getPollInterval() {
-        const interval = normaliseRefreshInterval(state.pollInterval);
-        state.pollInterval = interval;
-        return interval;
+        const interval = normaliseRefreshInterval(state.pollPreference);
+        if (interval !== state.pollInterval) {
+          state.pollInterval = interval;
+        }
+        return state.pollInterval;
       }
 
       function updateRefreshDisplays() {
@@ -841,10 +869,28 @@
           ? 'at a custom interval'
           : description.toLowerCase();
         const suffix = state.serverId ? '.' : ' when live data is available.';
+        const manualMinSeconds = Math.max(1, Math.round(getManualRefreshMinimum() / 1000));
+        const manualUnit = manualMinSeconds === 1 ? 'second' : 'seconds';
+        const manualLimitNote = ` Manual updates are limited to every ${manualMinSeconds} ${manualUnit} due to performance thresholds.`;
+        const now = Date.now();
+        const cooldownActive = Number.isFinite(state.manualCooldownUntil)
+          && state.manualCooldownUntil > now;
+        const cooldownMessage = cooldownActive
+          ? state.manualCooldownMessage
+          || 'Manual live map refresh is cooling down. Cached data is shown until the cooldown expires.'
+          : null;
+        const remainingSeconds = cooldownActive
+          ? Math.max(0, Math.ceil((state.manualCooldownUntil - now) / 1000))
+          : 0;
         for (const viewport of getActiveViewports()) {
           const target = viewport.refreshDisplay;
           if (!target) continue;
-          target.textContent = `Player positions refresh ${detail}${suffix}`;
+          let message = `Player positions refresh ${detail}${suffix}` + manualLimitNote;
+          if (cooldownMessage) {
+            const countdown = remainingSeconds > 0 ? ` (${remainingSeconds}s remaining)` : '';
+            message += ` ${cooldownMessage}${countdown}`;
+          }
+          target.textContent = message;
         }
       }
 
@@ -862,6 +908,62 @@
           refreshData('player-reload').catch((err) => ctx.log?.('Map refresh failed: ' + (err?.message || err)));
         }, PLAYER_REFRESH_INTERVAL);
         updateRefreshDisplays();
+      }
+
+      function setMinimumPollInterval(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) {
+          return false;
+        }
+        const nextMin = clamp(numeric, STANDARD_POLL_MIN_MS, CUSTOM_POLL_MIN_MS);
+        const minChanged = nextMin !== effectivePollMin;
+        effectivePollMin = nextMin;
+        const applied = normaliseRefreshInterval(state.pollPreference);
+        const intervalChanged = applied !== state.pollInterval;
+        state.pollInterval = applied;
+        return minChanged || intervalChanged;
+      }
+
+      function setManualRefreshMinimum(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) {
+          return false;
+        }
+        const nextMin = clamp(numeric, STANDARD_POLL_MIN_MS, CUSTOM_POLL_MIN_MS);
+        if (nextMin === manualRefreshMinMs) {
+          return false;
+        }
+        manualRefreshMinMs = nextMin;
+        const now = Date.now();
+        if (state.manualCooldownUntil > now) {
+          state.manualCooldownUntil = now + manualRefreshMinMs;
+        }
+        return true;
+      }
+
+      function updateRefreshPolicy({ isCustomMap, playerDataSources }) {
+        const usingPlayerListPositions = playerDataSources?.positions === 'playerlist';
+        const usingPlayerListTeams = playerDataSources?.teams === 'playerlist';
+        const usesOnlyPlayerList = usingPlayerListPositions && usingPlayerListTeams;
+        const targetMin = (isCustomMap || !usesOnlyPlayerList) ? CUSTOM_POLL_MIN_MS : STANDARD_POLL_MIN_MS;
+        const pollChanged = setMinimumPollInterval(targetMin);
+        const manualChanged = setManualRefreshMinimum(targetMin);
+        if (pollChanged) {
+          schedulePolling();
+        } else if (manualChanged) {
+          updateRefreshDisplays();
+        }
+      }
+
+      function resetRefreshPolicy() {
+        state.playerDataSources = null;
+        const pollChanged = setMinimumPollInterval(CUSTOM_POLL_MIN_MS);
+        const manualChanged = setManualRefreshMinimum(CUSTOM_POLL_MIN_MS);
+        if (pollChanged) {
+          schedulePolling();
+        } else if (manualChanged) {
+          updateRefreshDisplays();
+        }
       }
 
       function teamKey(player) {
@@ -2267,6 +2369,7 @@
             const existing = markerStore.get(steamId);
             if (existing) {
               stopMarkerAnimation(existing);
+
               existing.remove();
               markerStore.delete(steamId);
               staleIds.delete(steamId);
@@ -2288,6 +2391,7 @@
           }
 
           animateMarkerTo(marker, position.left, position.top);
+
           marker.style.backgroundColor = colorForPlayer(player);
           marker.title = player.displayName || player.persona || steamId;
           const focused = isPlayerFocused(player);
@@ -2616,18 +2720,19 @@
             event.target.value = String(getPollInterval());
             return;
           }
-          const normalised = normaliseRefreshInterval(nextValue);
+          const preference = normaliseRefreshPreference(nextValue);
+          const applied = normaliseRefreshInterval(preference);
           const current = getPollInterval();
-          if (normalised === current) {
-            event.target.value = String(current);
+          const changed = preference !== state.pollPreference || applied !== current;
+          state.pollPreference = preference;
+          state.pollInterval = applied;
+          persistRefreshInterval(preference);
+          event.target.value = String(applied);
+          if (changed) {
+            schedulePolling();
+          } else {
             updateRefreshDisplays();
-            return;
           }
-          state.pollInterval = normalised;
-          persistRefreshInterval(normalised);
-          event.target.value = String(normalised);
-          schedulePolling();
-          updateRefreshDisplays();
         });
       }
 
@@ -2691,10 +2796,17 @@
         const refreshSelect = viewport.doc.createElement('select');
         refreshSelect.className = 'map-refresh-select';
         let hasMatch = false;
+        const minimumInterval = getMinimumPollInterval();
+        const minimumSeconds = Math.max(1, Math.round(minimumInterval / 1000));
+        const minimumUnit = minimumSeconds === 1 ? 'second' : 'seconds';
         for (const option of REFRESH_OPTIONS) {
           const opt = viewport.doc.createElement('option');
           opt.value = String(option.value);
           opt.textContent = option.label;
+          if (option.value < minimumInterval) {
+            opt.disabled = true;
+            opt.title = `Intervals below ${minimumSeconds} ${minimumUnit} are disabled to protect performance.`;
+          }
           if (!hasMatch && option.value === pollInterval) {
             opt.selected = true;
             hasMatch = true;
@@ -2993,6 +3105,7 @@
           const custom = !!(payload?.custom || mapMeta?.custom);
           const hasImage = !!(payload?.hasImage || hasMapImage(mapMeta));
           const locked = !!(payload?.locked || (custom && !hasImage));
+          updateRefreshPolicy({ isCustomMap: custom, playerDataSources: state.playerDataSources });
           if (locked) {
             customMapFreezeCache.add(state.serverId);
             state.customMapChecksFrozen = true;
@@ -3089,13 +3202,17 @@
             }
           }
           state.serverInfo = data?.info || null;
+          state.playerDataSources = data?.playerDataSources || null;
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
           state.status = data?.status || null;
+          state.manualCooldownUntil = 0;
+          state.manualCooldownMessage = null;
           updateProjectionMode();
           broadcastPlayers();
           const activeMeta = getActiveMapMeta();
           const hasImage = hasMapImage(activeMeta);
           const isCustomMap = mapIsCustom(activeMeta, state.serverInfo);
+          updateRefreshPolicy({ isCustomMap, playerDataSources: state.playerDataSources });
           if (state.serverId) {
             if (isCustomMap && !hasImage) {
               customMapFreezeCache.add(state.serverId);
@@ -3145,13 +3262,28 @@
             maybeSubmitWorldDetails('refresh').catch((err) => ctx.log?.('World detail sync failed: ' + (err?.message || err)));
           }
         } catch (err) {
+          const code = ctx.errorCode?.(err);
+          if (code === 'manual_refresh_cooldown' || err?.status === 429) {
+            const description = ctx.describeError?.(err)
+              || 'Manual live map refresh is cooling down. Try again in a few seconds.';
+            state.manualCooldownUntil = Date.now() + getManualRefreshMinimum();
+            state.manualCooldownMessage = `${description} Cached data is shown until the cooldown expires.`;
+            updateConfigPanel();
+            if (mapReady() || state.players.length > 0) {
+              clearMessage();
+            } else {
+              setMessage(description);
+            }
+            updateRefreshDisplays();
+            ctx.log?.('Manual refresh cooldown active; displaying cached live map data.');
+            return;
+          }
           state.status = null;
           if (state.pendingGeneration) {
             state.pendingGeneration = false;
             clearPendingRefresh();
           }
           updateConfigPanel();
-          const code = ctx.errorCode?.(err);
           if (code === 'unauthorized') {
             ctx.handleUnauthorized?.();
             return;
@@ -3197,6 +3329,7 @@
         state.mapMeta = null;
         state.mapMetaServerId = null;
         state.serverInfo = null;
+        state.playerDataSources = null;
         state.lastUpdated = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
@@ -3248,6 +3381,7 @@
           state.mapMeta = null;
           state.mapMetaServerId = null;
           state.serverInfo = null;
+          state.playerDataSources = null;
           state.lastUpdated = null;
           state.pendingGeneration = false;
           state.pendingRefresh = null;
@@ -3282,6 +3416,7 @@
           hideUploadNotice();
           broadcastPlayers();
           setMessage('Connect to a server to load the live map.');
+          resetRefreshPolicy();
         }
       });
 
@@ -3295,6 +3430,7 @@
         state.mapMeta = null;
         state.mapMetaServerId = null;
         state.serverInfo = null;
+        state.playerDataSources = null;
         state.lastUpdated = null;
         state.pendingGeneration = false;
         state.pendingRefresh = null;
@@ -3329,6 +3465,7 @@
         hideUploadNotice();
         broadcastPlayers();
         setMessage('Sign in and connect to a server to view the live map.');
+        resetRefreshPolicy();
       });
 
       const offFocus = ctx.on?.('live-players:focus', ({ steamId }) => {
@@ -3357,6 +3494,10 @@
       ctx.onCleanup?.(() => offSettingsUpdate?.());
       ctx.onCleanup?.(() => offFocus?.());
       ctx.onCleanup?.(() => stopPolling());
+      ctx.onCleanup?.(() => {
+        state.serverId = null;
+        resetRefreshPolicy();
+      });
       ctx.onCleanup?.(() => clearPendingRefresh());
       ctx.onCleanup?.(() => closeFullscreenWindow());
       ctx.onCleanup?.(() => {

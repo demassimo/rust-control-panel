@@ -2485,6 +2485,7 @@ button.chat-filter-btn:focus-visible {
   box-shadow: 0 6px clamp(10px, calc(18px * var(--marker-scale)), 18px) rgba(15, 23, 42, 0.22);
   transform: translate(-50%, -50%);
   transition: none;
+  /* transition: left 0.45s ease, top 0.45s ease; */
   will-change: left, top;
   pointer-events: auto;
 }
