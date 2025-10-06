@@ -2564,6 +2564,62 @@ button.chat-filter-btn:focus-visible {
   pointer-events: auto;
 }
 
+.map-overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-overlay-layer .map-icon {
+  pointer-events: auto;
+}
+
+.map-overlay .map-icon {
+  position: absolute;
+  width: clamp(10px, calc(18px * var(--marker-scale)), 22px);
+  height: clamp(10px, calc(18px * var(--marker-scale)), 22px);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  font-size: clamp(8px, calc(13px * var(--marker-scale)), 18px);
+  line-height: 1;
+  background: rgba(15, 23, 42, 0.8);
+  border: clamp(1px, calc(1.5px * var(--marker-scale)), 2px) solid rgba(248, 250, 252, 0.65);
+  box-shadow: 0 6px clamp(10px, calc(18px * var(--marker-scale)), 18px) rgba(15, 23, 42, 0.25);
+  color: var(--icon-color, #facc15);
+  font-weight: 600;
+}
+
+.map-overlay .map-icon::before {
+  content: attr(data-symbol);
+}
+
+.map-overlay .map-icon.map-icon-graphic {
+  font-size: 0;
+}
+
+.map-overlay .map-icon.map-icon-graphic::before {
+  content: '';
+  width: 70%;
+  height: 70%;
+  background: currentColor;
+  mask: var(--icon-mask) center/contain no-repeat;
+  -webkit-mask: var(--icon-mask) center/contain no-repeat;
+}
+
+.map-overlay .map-icon-monument {
+  background: rgba(30, 41, 59, 0.85);
+  color: var(--icon-color, #fbbf24);
+}
+
+.map-overlay .map-icon-event {
+  background: rgba(30, 64, 175, 0.85);
+  color: var(--icon-color, #bfdbfe);
+  border-color: rgba(191, 219, 254, 0.75);
+}
+
 .map-overlay .map-marker.active { box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.4); }
 .map-overlay .map-marker.dimmed { opacity: 0.4; }
 

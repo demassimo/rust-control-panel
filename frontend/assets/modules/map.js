@@ -24,6 +24,179 @@
 
   const markerAnimationStates = new Map();
 
+  function svgDataUri(svg) {
+    const source = typeof svg === 'string' ? svg.trim() : '';
+    return `url("data:image/svg+xml,${encodeURIComponent(source)}")`;
+  }
+
+  const MAP_ICON_ASSETS = {
+    'map-pin': {
+      id: 'map-pin',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M12 2a6 6 0 0 0-6 6c0 4.24 4.05 9.32 5.53 11.01.26.3.68.3.94 0C13.95 17.32 18 12.24 18 8a6 6 0 0 0-6-6Zm0 8.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5Z"/></svg>'),
+      color: '#facc15'
+    },
+    'oil-rig': {
+      id: 'oil-rig',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M11 2h2l2 6h3l-6 10-6-10h3l2-6Zm-6 18h14v2H5z"/></svg>'),
+      color: '#f97316'
+    },
+    'sphere-tank': {
+      id: 'sphere-tank',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4a8 8 0 0 1 8 8v5H4v-5a8 8 0 0 1 8-8Zm0 11a5 5 0 0 1-5-5h10a5 5 0 0 1-5 5Zm-5 3h10v2H7z"/></svg>'),
+      color: '#fb923c'
+    },
+    lighthouse: {
+      id: 'lighthouse',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2 9 4.5 12 7l3-2.5L12 2Zm-2 7h4l2 11H8l2-11Zm-3 11h10v2H7z"/></svg>'),
+      color: '#60a5fa'
+    },
+    harbor: {
+      id: 'harbor',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M11 2h2v3.17a2.5 2.5 0 1 1-2 0V2Zm1 7.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm7.5 2.5H18a6 6 0 0 1-4 5.65V14h2v-2h-4v2h2v3.65A6 6 0 0 1 6 12H4.5A7.5 7.5 0 0 0 12 19.5 7.5 7.5 0 0 0 19.5 12Z"/></svg>'),
+      color: '#38bdf8'
+    },
+    rocket: {
+      id: 'rocket',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2c2.84 0 5.5 1.13 7.07 3.07L14 10l-2 5-2-5-5.07-4.93A9.27 9.27 0 0 1 12 2Zm-7 13.5L9.5 12l1.5 4-3 3-3 .75.75-3ZM19 15.5 14.5 12 13 16l3 3 .75 3 .75-3Z"/></svg>'),
+      color: '#f87171'
+    },
+    airfield: {
+      id: 'airfield',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2 21 9v2l-7 2v7l-2 2-2-2v-7l-7-2V9l9-7Z"/></svg>'),
+      color: '#93c5fd'
+    },
+    'train-yard': {
+      id: 'train-yard',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M7 3h10a3 3 0 0 1 3 3v6a4 4 0 0 1-4 4l2 3v1h-2l-2-3h-4l-2 3H6v-1l2-3a4 4 0 0 1-4-4V6a3 3 0 0 1 3-3Zm-1 5h4V6H6v2Zm8 0h4V6h-4v2Zm-5 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm6 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/></svg>'),
+      color: '#c084fc'
+    },
+    'train-station': {
+      id: 'train-station',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M5 9V7l7-5 7 5v2h2v11h-4v-5H7v5H3V9h2Zm7-4-4 3h8l-4-3Zm5 7v7h2v-7h-2Zm-12 0v7h2v-7H5Zm5 3h4v6h-4v-6Z"/></svg>'),
+      color: '#a855f7'
+    },
+    'power-plant': {
+      id: 'power-plant',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2 7 13h4l-2 9 7-12h-4l2-8Z"/></svg>'),
+      color: '#fde047'
+    },
+    military: {
+      id: 'military',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2 4 5v6c0 5 3.5 8.74 8 11 4.5-2.26 8-6 8-11V5l-8-3Zm0 6 1.76 3.38 3.74.54-2.7 2.64.64 3.72L12 16.5l-3.44 1.78.64-3.72-2.7-2.64 3.74-.54L12 8Z"/></svg>'),
+      color: '#f87171'
+    },
+    bandit: {
+      id: 'bandit',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M11 2h2v3.05A7 7 0 0 1 18.95 11H22v2h-3.05A7 7 0 0 1 13 18.95V22h-2v-3.05A7 7 0 0 1 5.05 13H2v-2h3.05A7 7 0 0 1 11 5.05V2Zm1 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/></svg>'),
+      color: '#f97316'
+    },
+    satellite: {
+      id: 'satellite',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M5 3 3 5l6 6-2 2-3-3-2 2 6 6 2-2-3-3 2-2 6 6 2-2-2-2 3-3 2 2 2-2-6-6-2 2 2 2-3 3-6-6ZM18.5 2a3.5 3.5 0 0 1 3.5 3.5h-2a1.5 1.5 0 0 0-1.5-1.5V2Zm3.5 7h-2a4.5 4.5 0 0 0-4.5-4.5V3a6.5 6.5 0 0 1 6.5 6.5Z"/></svg>'),
+      color: '#22d3ee'
+    },
+    junkyard: {
+      id: 'junkyard',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M11 2h2l.4 2.4a7 7 0 0 1 2.2.9l2.1-1.2 1.4 1.4-1.2 2.1c.4.7.7 1.5.9 2.2L22 11v2l-2.4.4a7 7 0 0 1-.9 2.2l1.2 2.1-1.4 1.4-2.1-1.2a7 7 0 0 1-2.2.9L13 22h-2l-.4-2.4a7 7 0 0 1-2.2-.9l-2.1 1.2-1.4-1.4 1.2-2.1a7 7 0 0 1-.9-2.2L2 13v-2l2.4-.4a7 7 0 0 1 .9-2.2L4.1 6.3 5.5 4.9l2.1 1.2a7 7 0 0 1 2.2-.9L11 2Zm1 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>'),
+      color: '#facc15'
+    },
+    ranch: {
+      id: 'ranch',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3 5 8v11h4v-4h6v4h4V8l-7-5Zm0 3.2 4 2.8v.5H8v-.5l4-2.8Zm-2 9.8v4H8v-4h2Zm6 0v4h-2v-4h2Z"/></svg>'),
+      color: '#fcd34d'
+    },
+    fishing: {
+      id: 'fishing',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M4 12c2.5-3.5 6-6 10-6a6 6 0 0 1 6 6 6 6 0 0 1-6 6c-4 0-7.5-2.5-10-6Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm-8.5-3 2 1.5-2 1.5a11 11 0 0 1 0-3Zm14-6.5a2.5 2.5 0 0 1 0 5v-5Z"/></svg>'),
+      color: '#38bdf8'
+    },
+    'gas-station': {
+      id: 'gas-station',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M5 3h9a2 2 0 0 1 2 2v14h1a2 2 0 0 0 2-2v-5.59l.3.3a2 2 0 0 0 1.4.58H22V10h-1l-1-1V5a2 2 0 0 0-2-2h-1V1h-2v4H5v16H3V8a5 5 0 0 1 2-5Zm2 6h7V6H7v3Zm0 3h7v8H7v-8Z"/></svg>'),
+      color: '#f97316'
+    },
+    store: {
+      id: 'store',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M4 5h16l1 4a3 3 0 0 1-3 3 3 3 0 0 1-2-1 3 3 0 0 1-4 0 3 3 0 0 1-4 0 3 3 0 0 1-2 1 3 3 0 0 1-3-3l1-4Zm2 12v-4a3 3 0 0 0 2 1 3 3 0 0 0 2-1 3 3 0 0 0 4 0 3 3 0 0 0 4 0 3 3 0 0 0 2 1v4h-4v4H10v-4H6Z"/></svg>'),
+      color: '#facc15'
+    },
+    excavator: {
+      id: 'excavator',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M3 14h2l3-6h3l2 4h3l-1.5-3H21l1 2-2 1 2 4v2h-4a3 3 0 1 1-6 0H9a3 3 0 1 1-6 0H2v-3l1-1Zm3.5 5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0Zm9 0a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0Z"/></svg>'),
+      color: '#f97316'
+    },
+    'cargo-ship': {
+      id: 'cargo-ship',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M3 10h4l2-4h6l2 4h4v5a6 6 0 0 1-6 6H9a6 6 0 0 1-6-6v-5Zm2 2v3a4 4 0 0 0 4 4h6a4 4 0 0 0 4-4v-3h-2l-2-4h-4l-2 4H5Z"/></svg>'),
+      color: '#38bdf8'
+    },
+    'patrol-helicopter': {
+      id: 'patrol-helicopter',
+      mask: svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M3 4h18v2h-8l3 4h5v2h-3v3a4 4 0 0 1-4 4h-2l-1 2h-2l-1-2H8a4 4 0 0 1-4-4v-3H3v-2h11l-3-4H3V4Zm5 9a2 2 0 1 0 0 4h8a2 2 0 1 0 0-4H8Z"/></svg>'),
+      color: '#f87171'
+    }
+  };
+
+  const MAP_ICON_ALIAS = {
+    oilrig: 'oil-rig',
+    oilrigs: 'oil-rig',
+    harbour: 'harbor',
+    dome: 'sphere-tank',
+    spheretank: 'sphere-tank',
+    launchsite: 'rocket',
+    launchpad: 'rocket',
+    airstrip: 'airfield',
+    trainyard: 'train-yard',
+    trainstation: 'train-station',
+    powerplant: 'power-plant',
+    militarytunnel: 'military',
+    outpost: 'military',
+    banditcamp: 'bandit',
+    satellitearray: 'satellite',
+    disharray: 'satellite',
+    junkyard: 'junkyard',
+    ranch: 'ranch',
+    fishingvillage: 'fishing',
+    gasstation: 'gas-station',
+    supermarket: 'store',
+    shop: 'store',
+    excavator: 'excavator',
+    cargoship: 'cargo-ship',
+    'cargo-ship': 'cargo-ship',
+    patrolhelicopter: 'patrol-helicopter',
+    'patrol-helicopter': 'patrol-helicopter',
+    pin: 'map-pin'
+  };
+
+  function applyMarkerIcon(marker, iconValue, fallbackSymbol = '📍') {
+    if (!marker) return;
+    const raw = typeof iconValue === 'string' ? iconValue.trim() : '';
+    const normalized = raw ? raw.toLowerCase().replace(/[_\s]+/g, '-') : '';
+    const cleaned = normalized.replace(/[^a-z0-9-]/g, '');
+    const aliasKey = cleaned.replace(/-/g, '');
+    const resolvedKey = (cleaned && MAP_ICON_ASSETS[cleaned])
+      ? cleaned
+      : (aliasKey && MAP_ICON_ALIAS[aliasKey]) || (cleaned && MAP_ICON_ALIAS[cleaned]) || '';
+    const asset = resolvedKey ? MAP_ICON_ASSETS[resolvedKey] : null;
+
+    if (asset) {
+      marker.classList.add('map-icon-graphic');
+      marker.dataset.icon = asset.id;
+      marker.dataset.symbol = '';
+      marker.style.setProperty('--icon-mask', asset.mask);
+      if (asset.color) marker.style.setProperty('--icon-color', asset.color);
+      else marker.style.removeProperty('--icon-color');
+      return;
+    }
+
+    marker.classList.remove('map-icon-graphic');
+    delete marker.dataset.icon;
+    const symbol = raw || fallbackSymbol || '';
+    marker.dataset.symbol = symbol;
+    marker.style.removeProperty('--icon-mask');
+    marker.style.removeProperty('--icon-color');
+  }
+
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), max);
   }
@@ -268,6 +441,63 @@
     }
   }
 
+  function vectorFromEntry(value) {
+    if (!value || typeof value !== 'object') return null;
+    if (value.position && typeof value.position === 'object') {
+      const nested = vectorFromEntry(value.position);
+      if (nested) return nested;
+    }
+    const x = toNumber(value.x ?? value.X ?? value.positionX ?? value.worldX ?? value[0]);
+    const y = toNumber(value.y ?? value.Y ?? value.positionY ?? value.worldY ?? value[1]);
+    const z = toNumber(value.z ?? value.Z ?? value.positionZ ?? value.worldZ ?? value[2]);
+    if (x == null) return null;
+    const result = { x };
+    if (y != null) result.y = y;
+    if (z != null) result.z = z;
+    if (result.y == null && result.z == null) return null;
+    return result;
+  }
+
+  function normaliseWorldEntities(payload) {
+    const result = {
+      fetchedAt: null,
+      monuments: [],
+      entities: []
+    };
+    if (!payload || typeof payload !== 'object') return result;
+    if (payload.fetchedAt != null) {
+      const stamp = String(payload.fetchedAt).trim();
+      result.fetchedAt = stamp || null;
+    }
+    if (Array.isArray(payload.monuments)) {
+      payload.monuments.forEach((entry, index) => {
+        if (!entry || typeof entry !== 'object') return;
+        const position = vectorFromEntry(entry.position || entry.location || entry.coords || entry);
+        if (!position) return;
+        const id = entry.id != null ? String(entry.id) : `mon-${index}`;
+        const label = entry.label || entry.name || entry.displayName || entry.shortName || 'Monument';
+        const shortName = entry.shortName || entry.token || entry.name || entry.displayName || label;
+        const icon = entry.icon || null;
+        const category = entry.category || entry.type || entry.kind || null;
+        result.monuments.push({ id, label, shortName, icon, category, position });
+      });
+    }
+    if (Array.isArray(payload.entities)) {
+      payload.entities.forEach((entry, index) => {
+        if (!entry || typeof entry !== 'object') return;
+        const position = vectorFromEntry(entry.position || entry.coords || entry);
+        if (!position) return;
+        const id = entry.id != null ? String(entry.id) : `${entry.type || 'entity'}-${index}`;
+        const label = entry.label || entry.name || entry.type || 'Entity';
+        const icon = entry.icon || null;
+        const type = entry.type || null;
+        const status = entry.status || null;
+        result.entities.push({ id, label, icon, type, status, position });
+      });
+    }
+    return result;
+  }
+
   let cachedStatusMessage = null;
 
   function loadPersistentStatusMessage() {
@@ -389,6 +619,15 @@
       const overlay = document.createElement('div');
       overlay.className = 'map-overlay';
       overlay.style.setProperty('--marker-scale', '1');
+      const overlayLayers = {
+        monuments: document.createElement('div'),
+        events: document.createElement('div'),
+        players: document.createElement('div')
+      };
+      for (const [key, layer] of Object.entries(overlayLayers)) {
+        layer.className = `map-overlay-layer map-layer-${key}`;
+        overlay.appendChild(layer);
+      }
       const message = document.createElement('div');
       message.className = 'map-placeholder';
       mapCanvas.appendChild(mapImage);
@@ -498,6 +737,11 @@
         customMapChecksFrozen: false,
         manualCooldownUntil: 0,
         manualCooldownMessage: null,
+        worldEntities: {
+          fetchedAt: null,
+          monuments: [],
+          entities: []
+        },
         worldDetails: {
           seed: null,
           size: null,
@@ -541,6 +785,7 @@
         mapImage,
         overlay,
         markers: new Map(),
+        layers: overlayLayers,
         message,
         summary,
         teamInfo,
@@ -554,6 +799,8 @@
           arrow: markerPopupArrow
         }
       };
+
+      ensureViewportLayers(mainViewport);
 
       const mapInteractions = {
         minScale: 1,
@@ -742,16 +989,79 @@
         return viewport.markers;
       }
 
+      function getViewportEntityStore(viewport) {
+        if (!viewport) return null;
+        if (!viewport.entityMarkers || !(viewport.entityMarkers instanceof Map)) {
+          viewport.entityMarkers = new Map();
+        }
+        return viewport.entityMarkers;
+      }
+
+      function getViewportMonumentStore(viewport) {
+        if (!viewport) return null;
+        if (!viewport.monumentMarkers || !(viewport.monumentMarkers instanceof Map)) {
+          viewport.monumentMarkers = new Map();
+        }
+        return viewport.monumentMarkers;
+      }
+
+      function ensureViewportLayers(viewport) {
+        if (!viewport || !viewport.overlay) return null;
+        if (!viewport.layers || typeof viewport.layers !== 'object') {
+          viewport.layers = {};
+        }
+        const container = viewport.overlay;
+        const doc = viewport.doc || document;
+        const keys = ['monuments', 'events', 'players'];
+        for (const key of keys) {
+          let layer = viewport.layers[key];
+          if (!layer || layer.nodeType !== 1) {
+            layer = doc.createElement('div');
+            viewport.layers[key] = layer;
+          }
+          layer.className = `map-overlay-layer map-layer-${key}`;
+          if (layer.parentNode !== container) {
+            container.appendChild(layer);
+          }
+        }
+        return viewport.layers;
+      }
+
+      function getViewportLayer(viewport, key) {
+        const layers = ensureViewportLayers(viewport);
+        return layers ? layers[key] || viewport.overlay : viewport.overlay;
+      }
+
       function clearViewportMarkers(viewport) {
         if (!viewport || !viewport.overlay) return;
-        const store = getViewportMarkerStore(viewport);
-        if (store?.size) {
-          for (const marker of store.values()) {
+        const playerStore = getViewportMarkerStore(viewport);
+        if (playerStore?.size) {
+          for (const marker of playerStore.values()) {
             stopMarkerAnimation(marker);
           }
-          store.clear();
+          playerStore.clear();
+        }
+        const entityStore = getViewportEntityStore(viewport);
+        if (entityStore?.size) {
+          for (const marker of entityStore.values()) {
+            stopMarkerAnimation(marker);
+          }
+          entityStore.clear();
+        }
+        const monumentStore = getViewportMonumentStore(viewport);
+        if (monumentStore?.size) {
+          for (const marker of monumentStore.values()) {
+            stopMarkerAnimation(marker);
+          }
+          monumentStore.clear();
         }
         viewport.overlay.innerHTML = '';
+        const layers = ensureViewportLayers(viewport);
+        if (layers) {
+          for (const layer of Object.values(layers)) {
+            if (layer) layer.innerHTML = '';
+          }
+        }
       }
 
       function clearAllViewportMarkers() {
@@ -2533,9 +2843,158 @@
         selectPlayer(player, { suppressPanel: true, showPopup: true });
       }
 
+      function clearViewportIconLayer(layer) {
+        if (!layer) return;
+        while (layer.firstChild) {
+          const child = layer.firstChild;
+          stopMarkerAnimation(child);
+          layer.removeChild(child);
+        }
+      }
+
+      function renderMonumentsInViewport(viewport) {
+        if (!viewport || !viewport.overlay) return;
+        const layer = getViewportLayer(viewport, 'monuments');
+        const store = getViewportMonumentStore(viewport);
+        if (!mapReady()) {
+          if (store?.size) {
+            for (const marker of store.values()) {
+              stopMarkerAnimation(marker);
+              marker.remove();
+            }
+            store.clear();
+          }
+          if (layer) clearViewportIconLayer(layer);
+          return;
+        }
+
+        const monuments = Array.isArray(state.worldEntities?.monuments)
+          ? state.worldEntities.monuments
+          : [];
+        const axis = resolveHorizontalAxis();
+        const staleIds = new Set(store.keys());
+
+        monuments.forEach((monument, index) => {
+          if (!monument) return;
+          const baseId = monument.id != null ? String(monument.id) : null;
+          const key = baseId || `monument-${index}`;
+          const position = projectPosition(monument.position, axis);
+          let marker = store.get(key);
+          if (!position) {
+            if (marker) {
+              stopMarkerAnimation(marker);
+              marker.remove();
+              store.delete(key);
+            }
+            staleIds.delete(key);
+            return;
+          }
+
+          if (!marker) {
+            marker = viewport.doc.createElement('div');
+            marker.className = 'map-icon map-icon-monument';
+            marker.dataset.kind = 'monument';
+            store.set(key, marker);
+            layer.appendChild(marker);
+          }
+
+          const iconValue = typeof monument.icon === 'string' && monument.icon
+            ? monument.icon
+            : 'map-pin';
+          applyMarkerIcon(marker, iconValue, '📍');
+          marker.dataset.category = monument.category || '';
+          marker.title = monument.label || monument.shortName || 'Monument';
+          setMarkerPosition(marker, position.left, position.top);
+          staleIds.delete(key);
+        });
+
+        for (const key of staleIds) {
+          const marker = store.get(key);
+          if (marker) {
+            stopMarkerAnimation(marker);
+            marker.remove();
+          }
+          store.delete(key);
+        }
+      }
+
+      function renderWorldEntitiesInViewport(viewport) {
+        if (!viewport || !viewport.overlay) return;
+        const layer = getViewportLayer(viewport, 'events');
+        const store = getViewportEntityStore(viewport);
+        if (!mapReady()) {
+          if (store?.size) {
+            for (const marker of store.values()) {
+              stopMarkerAnimation(marker);
+              marker.remove();
+            }
+            store.clear();
+          }
+          if (layer) clearViewportIconLayer(layer);
+          return;
+        }
+
+        const entries = Array.isArray(state.worldEntities?.entities)
+          ? state.worldEntities.entities
+          : [];
+        const axis = resolveHorizontalAxis();
+        const staleIds = new Set(store.keys());
+
+        entries.forEach((entity, index) => {
+          if (!entity) return;
+          const baseId = entity.id != null ? String(entity.id) : null;
+          const key = baseId || `${entity.type || 'entity'}-${index}`;
+          const position = projectPosition(entity.position, axis);
+          let marker = store.get(key);
+          if (!position) {
+            if (marker) {
+              stopMarkerAnimation(marker);
+              marker.remove();
+              store.delete(key);
+            }
+            staleIds.delete(key);
+            return;
+          }
+
+          if (!marker) {
+            marker = viewport.doc.createElement('div');
+            marker.className = 'map-icon map-icon-event';
+            marker.dataset.kind = 'event';
+            marker.dataset.type = entity.type || 'entity';
+            store.set(key, marker);
+            layer.appendChild(marker);
+          }
+
+          const fallbackIcon = (() => {
+            if (entity.type === 'cargo_ship') return { key: 'cargo-ship', symbol: '🚢' };
+            if (entity.type === 'patrol_helicopter' || entity.type === 'patrol-helicopter') {
+              return { key: 'patrol-helicopter', symbol: '🚁' };
+            }
+            return { key: 'map-pin', symbol: '📍' };
+          })();
+          const iconValue = typeof entity.icon === 'string' && entity.icon
+            ? entity.icon
+            : fallbackIcon.key;
+          applyMarkerIcon(marker, iconValue, fallbackIcon.symbol);
+          marker.dataset.type = entity.type || 'entity';
+          marker.title = entity.label || entity.type || 'Entity';
+          animateMarkerTo(marker, position.left, position.top);
+          staleIds.delete(key);
+        });
+
+        for (const key of staleIds) {
+          const marker = store.get(key);
+          if (marker) {
+            stopMarkerAnimation(marker);
+            marker.remove();
+          }
+          store.delete(key);
+        }
+      }
+
       function renderMarkersInViewport(viewport) {
         if (!viewport || !viewport.overlay) return;
-        const overlayEl = viewport.overlay;
+        const overlayEl = getViewportLayer(viewport, 'players');
         const markerStore = getViewportMarkerStore(viewport);
 
         if (!mapReady()) {
@@ -2604,6 +3063,8 @@
           console.log('[live-map] Rendering player markers:', state.players.length);
         }
         for (const viewport of getActiveViewports()) {
+          renderMonumentsInViewport(viewport);
+          renderWorldEntitiesInViewport(viewport);
           renderMarkersInViewport(viewport);
         }
       }
@@ -3338,6 +3799,7 @@
           }
           const data = await ctx.api(liveMapUrl);
           state.players = Array.isArray(data?.players) ? data.players : [];
+          state.worldEntities = normaliseWorldEntities(data?.entities);
           const previousMeta = getActiveMapMeta();
           const previousKey = previousMeta?.mapKey ?? null;
           const previousImage = previousMeta?.imageUrl ?? null;
@@ -3533,6 +3995,11 @@
         state.estimatedWorldSize = null;
         state.estimatedWorldSizeSource = null;
         state.customMapChecksFrozen = customMapFreezeCache.has(serverId);
+        state.worldEntities = {
+          fetchedAt: null,
+          monuments: [],
+          entities: []
+        };
         if (state.worldDetails) {
           state.worldDetails.seed = null;
           state.worldDetails.size = null;
@@ -3588,6 +4055,11 @@
           state.estimatedWorldSize = null;
           state.estimatedWorldSizeSource = null;
           state.customMapChecksFrozen = false;
+          state.worldEntities = {
+            fetchedAt: null,
+            monuments: [],
+            entities: []
+          };
           if (state.worldDetails) {
             state.worldDetails.seed = null;
             state.worldDetails.size = null;
@@ -3637,6 +4109,11 @@
         state.estimatedWorldSize = null;
         state.estimatedWorldSizeSource = null;
         state.customMapChecksFrozen = false;
+        state.worldEntities = {
+          fetchedAt: null,
+          monuments: [],
+          entities: []
+        };
         if (state.worldDetails) {
           state.worldDetails.seed = null;
           state.worldDetails.size = null;
