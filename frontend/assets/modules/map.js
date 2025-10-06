@@ -768,7 +768,7 @@
       let mapImageLocked = false;
 
       const MAP_SIZE_MIN = 260;
-      const MAP_SIZE_MAX = 1400;
+      const MAP_SIZE_MAX = 1600;
       const MAP_SIZE_VERTICAL_MARGIN = 96;
       const scheduleViewportAnimationFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
         ? window.requestAnimationFrame.bind(window)
@@ -936,17 +936,7 @@
           return;
         }
 
-        const heightLimit = computeViewportHeightLimit();
-        if (!Number.isFinite(heightLimit) || heightLimit <= 0) {
-          if (previousInlineValue) {
-            mapElement.style.setProperty('--map-size', previousInlineValue);
-            mapElement.classList.add('map-view-dynamic');
-          } else if (Number.isFinite(previousSize)) {
-            mapElement.style.setProperty('--map-size', `${previousSize}px`);
-            mapElement.classList.add('map-view-dynamic');
-          }
-          return;
-        }
+        const heightLimit = computeViewportHeightLimit(width);
 
         let size = Math.min(width, heightLimit);
         if (width >= MAP_SIZE_MIN && heightLimit >= MAP_SIZE_MIN) {
@@ -967,7 +957,7 @@
         }
       }
 
-      function computeViewportHeightLimit() {
+      function computeViewportHeightLimit(desiredWidth) {
         const viewportHeight = typeof window !== 'undefined' ? Number(window.innerHeight) : NaN;
         let limit = Number.isFinite(viewportHeight) ? viewportHeight : MAP_SIZE_MAX;
         const layoutRect = typeof layout?.getBoundingClientRect === 'function' ? layout.getBoundingClientRect() : null;
@@ -975,6 +965,9 @@
           limit -= layoutRect.top;
         }
         limit -= MAP_SIZE_VERTICAL_MARGIN;
+        if (Number.isFinite(desiredWidth) && desiredWidth > 0) {
+          limit = Math.max(limit, desiredWidth);
+        }
         if (!Number.isFinite(limit)) {
           return MAP_SIZE_MAX;
         }
