@@ -1077,6 +1077,80 @@ function parseVector3(value) {
   return null;
 }
 
+function extractTeamIdentifier(value, depth = 0) {
+  if (value == null || depth > 6) return null;
+
+  const toPositiveInt = (input) => {
+    if (input == null) return null;
+    const numeric = Number(input);
+    if (!Number.isFinite(numeric)) return null;
+    const truncated = Math.trunc(numeric);
+    return truncated > 0 ? truncated : null;
+  };
+
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return toPositiveInt(value);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed) {
+      const stripped = trimmed
+        .replace(/\u001b\[[0-9;]*m/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\[[^\]]*\]/g, ' ')
+        .replace(/#[0-9a-f]{3,8}\b/gi, ' ');
+      const parts = stripped.match(/\d+/g);
+      if (parts) {
+        for (const part of parts) {
+          const candidate = toPositiveInt(part);
+          if (candidate != null) return candidate;
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractTeamIdentifier(entry, depth + 1);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    const priorityKeys = [
+      'team',
+      'Team',
+      'teamId',
+      'TeamId',
+      'teamID',
+      'TeamID',
+      'groupId',
+      'GroupId',
+      'groupID',
+      'GroupID',
+      'value',
+      'Value',
+      'id',
+      'Id'
+    ];
+    for (const key of priorityKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const nested = extractTeamIdentifier(value[key], depth + 1);
+        if (nested != null) return nested;
+      }
+    }
+    for (const nested of Object.values(value)) {
+      const resolved = extractTeamIdentifier(nested, depth + 1);
+      if (resolved != null) return resolved;
+    }
+  }
+
+  const extracted = extractNumericValue(value, depth + 1);
+  return toPositiveInt(extracted);
+}
+
 function parseLegacyPlayerList(message) {
   if (!message || typeof message !== 'string') return [];
 
@@ -1175,8 +1249,17 @@ function parseLegacyPlayerList(message) {
         ?? 0
       ) || 0;
       const health = Number(data.health ?? 0) || 0;
-      const teamCandidate = Number(data.teamid ?? data.team ?? 0);
-      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0 ? teamCandidate : 0;
+      const rawTeamCandidate = (
+        data.teamid
+        ?? data.team
+        ?? original.Team
+        ?? original.team
+        ?? null
+      );
+      const teamCandidate = extractTeamIdentifier(rawTeamCandidate);
+      const teamId = Number.isFinite(teamCandidate) && teamCandidate > 0
+        ? Math.trunc(teamCandidate)
+        : 0;
       const positionSource = (
         original.Position
         ?? original.position
@@ -1281,7 +1364,11 @@ function parseLegacyPlayerList(message) {
     const currentLevel = pickInt() ?? 0;
     const health = pickFloat() ?? 0;
     let teamId = 0;
-    if (numericTail.length > 0) {
+    const teamMatch = line.match(/(?:team|group|party|squad)\s*(?:[:=]\s*|id\s*)?([^,]+)/i);
+    const matchedTeam = teamMatch ? extractTeamIdentifier(teamMatch[1]) : null;
+    if (Number.isFinite(matchedTeam) && matchedTeam > 0) {
+      teamId = Math.trunc(matchedTeam);
+    } else if (numericTail.length > 0) {
       const candidateTeam = pickInt();
       if (Number.isFinite(candidateTeam) && candidateTeam > 0) {
         teamId = candidateTeam;
@@ -1364,6 +1451,11 @@ function findNestedTeamId(value, depth = 0) {
     }
     return null;
   }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
+    const numeric = extractTeamIdentifier(value);
+    if (Number.isFinite(numeric) && numeric > 0) return Math.trunc(numeric);
+    return null;
+  }
   if (typeof value !== 'object') return null;
 
   const directKeys = [
@@ -1398,7 +1490,7 @@ function findNestedTeamId(value, depth = 0) {
 
   for (const key of directKeys) {
     if (Object.prototype.hasOwnProperty.call(value, key)) {
-      const numeric = extractNumericValue(value[key], depth + 1);
+      const numeric = extractTeamIdentifier(value[key]);
       if (numeric != null && numeric > 0) return numeric;
     }
   }
@@ -1421,6 +1513,176 @@ function findNestedTeamId(value, depth = 0) {
   }
 
   return null;
+}
+
+function interpretBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return false;
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  }
+  return false;
+}
+
+function resolveSteamIdFromEntry(entry, depth = 0) {
+  if (!entry || typeof entry !== 'object' || depth > 3) return null;
+  const keys = [
+    'SteamID',
+    'SteamId',
+    'steamID',
+    'steamId',
+    'steamid',
+    'UserId',
+    'userId',
+    'userid',
+    'Id',
+    'ID',
+    'PlayerId',
+    'playerId',
+    'playerID',
+    'player_id',
+    'Steam',
+    'steam'
+  ];
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+    const raw = entry[key];
+    if (raw == null) continue;
+    const text = typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'bigint'
+      ? String(raw).trim()
+      : '';
+    if (text && STEAM_ID_REGEX.test(text)) return text;
+  }
+  for (const [key, value] of Object.entries(entry)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    if (/(steam|player|user|identity|id)$/i.test(key)) {
+      const nested = resolveSteamIdFromEntry(value, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function hasPositionIndicator(entry, depth = 0) {
+  if (!entry || typeof entry !== 'object' || depth > 3) return false;
+  const axisKeys = [
+    'X', 'x',
+    'Y', 'y',
+    'Z', 'z',
+    'PosX', 'posX', 'POSX',
+    'PosY', 'posY', 'POSY',
+    'PosZ', 'posZ', 'POSZ',
+    'PositionX', 'positionX',
+    'PositionY', 'positionY',
+    'PositionZ', 'positionZ'
+  ];
+  for (const key of axisKeys) {
+    if (Object.prototype.hasOwnProperty.call(entry, key) && entry[key] != null) return true;
+  }
+  const candidateKeys = [
+    'Position',
+    'position',
+    'Pos',
+    'pos',
+    'Coordinates',
+    'coordinates',
+    'Location',
+    'location',
+    'WorldPosition',
+    'worldPosition',
+    'LocalPosition',
+    'localPosition'
+  ];
+  for (const key of candidateKeys) {
+    if (Object.prototype.hasOwnProperty.call(entry, key) && entry[key] != null) return true;
+  }
+  for (const [key, value] of Object.entries(entry)) {
+    if (!value || typeof value !== 'object') continue;
+    if (!/(position|pos|coord|transform|location)/i.test(key)) continue;
+    if (hasPositionIndicator(value, depth + 1)) return true;
+  }
+  return false;
+}
+
+function isSamplePlayerEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const booleanKeys = [
+    'isSample',
+    'IsSample',
+    'is_sample',
+    'sample',
+    'Sample',
+    'samplePlayer',
+    'SamplePlayer',
+    'isSamplePlayer',
+    'IsSamplePlayer',
+    'isDummy',
+    'IsDummy',
+    'dummy'
+  ];
+  for (const key of booleanKeys) {
+    if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+    if (interpretBoolean(entry[key])) return true;
+    if (typeof entry[key] === 'string' && /sample|dummy|bot|fake/i.test(entry[key])) return true;
+  }
+  const descriptorKeys = ['type', 'Type', 'category', 'Category', 'role', 'Role', 'kind', 'Kind'];
+  for (const key of descriptorKeys) {
+    if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
+    const value = entry[key];
+    if (typeof value === 'string' && /sample|dummy|bot|fake|example/i.test(value)) return true;
+  }
+  return false;
+}
+
+function collectPlayerArrayCandidates(value, path = [], depth = 0, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || depth > 6) return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  const results = [];
+  if (Array.isArray(value)) {
+    results.push({ array: value, path });
+    for (let index = 0; index < value.length; index += 1) {
+      const entry = value[index];
+      if (!entry || typeof entry !== 'object') continue;
+      const nestedPath = path.concat(String(index));
+      results.push(...collectPlayerArrayCandidates(entry, nestedPath, depth + 1, seen));
+    }
+    return results;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const nextPath = path.concat(String(key));
+    results.push(...collectPlayerArrayCandidates(nested, nextPath, depth + 1, seen));
+  }
+  return results;
+}
+
+function scorePlayerArrayCandidate(candidate) {
+  if (!candidate || !Array.isArray(candidate.array)) return Number.NEGATIVE_INFINITY;
+  const { array, path } = candidate;
+  let valid = 0;
+  let sample = 0;
+  let withPosition = 0;
+  let considered = 0;
+  for (const entry of array) {
+    if (!entry || typeof entry !== 'object') continue;
+    considered += 1;
+    const steamId = resolveSteamIdFromEntry(entry);
+    if (steamId) valid += 1;
+    if (isSamplePlayerEntry(entry)) sample += 1;
+    if (hasPositionIndicator(entry)) withPosition += 1;
+  }
+  if (valid === 0) return Number.NEGATIVE_INFINITY;
+  let score = (valid * 10) + (withPosition * 2);
+  if (sample > 0) score -= sample * 6;
+  if (considered > 0 && valid / considered < 0.3) score -= 5;
+  if (Array.isArray(path) && path.some((segment) => /sample|dummy|example|test/i.test(segment))) {
+    score -= 20;
+  }
+  return score;
 }
 
 function parsePlayerListMessage(message) {
@@ -1459,16 +1721,38 @@ function parsePlayerListMessage(message) {
       }
     }
   }
+
+  if (!Array.isArray(payload) && payload && typeof payload === 'object') {
+    const candidates = collectPlayerArrayCandidates(payload, [], 0, new WeakSet());
+    const scored = candidates
+      .map((candidate) => ({ ...candidate, score: scorePlayerArrayCandidate(candidate) }))
+      .filter((candidate) => Number.isFinite(candidate.score));
+    if (scored.length > 0) {
+      scored.sort((a, b) => b.score - a.score);
+      const best = scored[0];
+      if (best && best.score > 0) {
+        payload = best.array;
+      }
+    }
+  }
+
   if (!Array.isArray(payload)) {
     return parseLegacyPlayerList(message);
   }
 
   const result = [];
   for (const entry of payload) {
-    const steamIdRaw = entry && typeof entry === 'object'
-      ? (entry.SteamID ?? entry.steamId ?? entry.steamid ?? '')
-      : '';
-    const steamId = String(steamIdRaw || '').trim();
+    if (!entry || typeof entry !== 'object') continue;
+    if (isSamplePlayerEntry(entry)) continue;
+    let steamId = '';
+    const steamIdRaw = entry.SteamID ?? entry.SteamId ?? entry.steamID ?? entry.steamId ?? entry.steamid ?? '';
+    if (steamIdRaw != null) {
+      steamId = String(steamIdRaw).trim();
+    }
+    if (!STEAM_ID_REGEX.test(steamId)) {
+      const nestedSteamId = resolveSteamIdFromEntry(entry);
+      steamId = nestedSteamId ? String(nestedSteamId).trim() : '';
+    }
     if (!STEAM_ID_REGEX.test(steamId)) continue;
 
     let rawPosition = entry.Position ?? entry.position ?? null;
@@ -1543,22 +1827,44 @@ function parsePlayerListMessage(message) {
     ];
     let teamId = null;
     for (const candidate of directTeamCandidates) {
-      const parsed = extractNumericValue(candidate);
+      const parsed = extractTeamIdentifier(candidate);
       if (parsed != null && parsed > 0) {
-        teamId = parsed;
+        teamId = Math.trunc(parsed);
         break;
       }
     }
     if (teamId == null || teamId <= 0) {
       const nestedTeam = findNestedTeamId(entry);
       if (nestedTeam != null && nestedTeam > 0) {
-        teamId = nestedTeam;
+        teamId = Math.trunc(nestedTeam);
+      }
+    }
+
+    const ownerSources = [
+      entry.OwnerSteamID,
+      entry.ownerSteamId,
+      entry.ownerSteamID,
+      entry.OwnerID,
+      entry.ownerID,
+      entry.ownerId,
+      entry.Owner,
+      entry.owner
+    ];
+    let ownerSteamId = null;
+    for (const candidate of ownerSources) {
+      if (!candidate) continue;
+      if (typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'bigint') {
+        const text = String(candidate).trim();
+        if (text && STEAM_ID_REGEX.test(text)) { ownerSteamId = text; break; }
+      } else if (typeof candidate === 'object') {
+        const nested = resolveSteamIdFromEntry(candidate);
+        if (nested && STEAM_ID_REGEX.test(nested)) { ownerSteamId = nested; break; }
       }
     }
 
     result.push({
       steamId,
-      ownerSteamId: entry.OwnerSteamID || entry.ownerSteamId || entry.ownerSteamID || null,
+      ownerSteamId,
       displayName: entry.DisplayName || entry.displayName || '',
       ping: Number(entry.Ping ?? entry.ping ?? 0) || 0,
       address: entry.Address || entry.address || '',
@@ -1566,7 +1872,7 @@ function parsePlayerListMessage(message) {
       violationLevel: Number(entry.VoiationLevel ?? entry.ViolationLevel ?? entry.violationLevel ?? 0) || 0,
       health: Number(entry.Health ?? entry.health ?? 0) || 0,
       position,
-      teamId: Number.isFinite(teamId) && teamId > 0 ? teamId : 0,
+      teamId: Number.isFinite(teamId) && teamId > 0 ? Math.trunc(teamId) : 0,
       networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
     });
   }
