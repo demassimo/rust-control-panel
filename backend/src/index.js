@@ -1785,6 +1785,7 @@ function parsePlayerListMessage(message) {
   }
 
   const result = [];
+  let detectedTeamField = false;
   for (const entry of payload) {
     if (!entry || typeof entry !== 'object') continue;
     if (isSamplePlayerEntry(entry)) continue;
@@ -1870,6 +1871,12 @@ function parsePlayerListMessage(message) {
       entry.activeTeam
     ];
     let teamId = null;
+    const hasDirectTeamCandidate = directTeamCandidates.some((candidate) => {
+      if (candidate == null) return false;
+      if (typeof candidate === 'string') return candidate.trim().length > 0;
+      return true;
+    });
+    detectedTeamField = detectedTeamField || hasDirectTeamCandidate;
     for (const candidate of directTeamCandidates) {
       const parsed = extractTeamIdentifier(candidate);
       if (parsed != null && parsed > 0) {
@@ -1881,6 +1888,7 @@ function parsePlayerListMessage(message) {
       const nestedTeam = findNestedTeamId(entry);
       if (nestedTeam != null && nestedTeam > 0) {
         teamId = Math.trunc(nestedTeam);
+        detectedTeamField = true;
       }
     }
 
@@ -1920,6 +1928,12 @@ function parsePlayerListMessage(message) {
       networkId: Number(entry.NetworkId ?? entry.networkId ?? 0) || null
     });
   }
+  Object.defineProperty(result, '_hasPlayerListTeamField', {
+    value: detectedTeamField,
+    enumerable: false,
+    configurable: true,
+    writable: true
+  });
   return result;
 }
 
@@ -4545,8 +4559,10 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
     }
     let players = parsePlayerListMessage(playerPayload);
     const playerCount = Array.isArray(players) ? players.length : 0;
-    const playerListHasTeamData = players.some((p) => Number(p?.teamId) > 0);
-    const playerListHasPositionData = players.some((p) => hasValidPosition(p?.position));
+    const playerArray = Array.isArray(players) ? players : [];
+    const playerListHasTeamData = Boolean(playerArray._hasPlayerListTeamField)
+      || playerArray.some((p) => Number(p?.teamId) > 0);
+    const playerListHasPositionData = playerArray.some((p) => hasValidPosition(p?.position));
     const teamDataSource = playerListHasTeamData || playerCount === 0 ? 'playerlist' : 'teaminfo';
     const positionDataSource = playerListHasPositionData || playerCount === 0 ? 'playerlist' : 'printpos';
 

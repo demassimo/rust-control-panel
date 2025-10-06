@@ -941,6 +941,51 @@
         return true;
       }
 
+      const PLAYER_DATA_SOURCE_COMMANDS = {
+        playerlist: 'playerlist',
+        teaminfo: 'teaminfo',
+        printpos: 'printpos'
+      };
+
+      let lastLoggedPlayerDataSourcesSignature = null;
+
+      function normalisePlayerDataSourceSignature(sources) {
+        if (!sources || typeof sources !== 'object') {
+          return 'null';
+        }
+        return JSON.stringify({
+          positions: sources.positions || null,
+          teams: sources.teams || null
+        });
+      }
+
+      function describePlayerDataSource(kind, source) {
+        if (!source) {
+          return `${kind} unavailable (no command executed)`;
+        }
+        const command = PLAYER_DATA_SOURCE_COMMANDS[source] || source;
+        return `${kind} from ${source} (command: ${command})`;
+      }
+
+      function logPlayerDataSources(sources) {
+        const signature = normalisePlayerDataSourceSignature(sources);
+        if (signature === lastLoggedPlayerDataSourcesSignature) {
+          return;
+        }
+        lastLoggedPlayerDataSourcesSignature = signature;
+        if (!sources || typeof sources !== 'object') {
+          return;
+        }
+        const teamInfo = describePlayerDataSource('team data', sources.teams);
+        const positionInfo = describePlayerDataSource('position data', sources.positions);
+        ctx.log?.(`Live map player data sources — ${teamInfo}; ${positionInfo}.`);
+      }
+
+      function clearPlayerDataSources() {
+        state.playerDataSources = null;
+        logPlayerDataSources(state.playerDataSources);
+      }
+
       function updateRefreshPolicy({ isCustomMap, playerDataSources }) {
         const usingPlayerListPositions = playerDataSources?.positions === 'playerlist';
         const usingPlayerListTeams = playerDataSources?.teams === 'playerlist';
@@ -956,7 +1001,7 @@
       }
 
       function resetRefreshPolicy() {
-        state.playerDataSources = null;
+        clearPlayerDataSources();
         const pollChanged = setMinimumPollInterval(CUSTOM_POLL_MIN_MS);
         const manualChanged = setManualRefreshMinimum(CUSTOM_POLL_MIN_MS);
         if (pollChanged) {
@@ -3202,7 +3247,15 @@
             }
           }
           state.serverInfo = data?.info || null;
-          state.playerDataSources = data?.playerDataSources || null;
+          const playerDataSources = (data?.playerDataSources && typeof data.playerDataSources === 'object')
+            ? data.playerDataSources
+            : null;
+          if (playerDataSources) {
+            state.playerDataSources = playerDataSources;
+            logPlayerDataSources(state.playerDataSources);
+          } else {
+            clearPlayerDataSources();
+          }
           state.lastUpdated = data?.fetchedAt || new Date().toISOString();
           state.status = data?.status || null;
           state.manualCooldownUntil = 0;
@@ -3329,7 +3382,7 @@
         state.mapMeta = null;
         state.mapMetaServerId = null;
         state.serverInfo = null;
-        state.playerDataSources = null;
+        clearPlayerDataSources();
         state.lastUpdated = null;
         state.projectionMode = null;
         state.horizontalAxis = null;
@@ -3381,7 +3434,7 @@
           state.mapMeta = null;
           state.mapMetaServerId = null;
           state.serverInfo = null;
-          state.playerDataSources = null;
+          clearPlayerDataSources();
           state.lastUpdated = null;
           state.pendingGeneration = false;
           state.pendingRefresh = null;
@@ -3430,7 +3483,7 @@
         state.mapMeta = null;
         state.mapMetaServerId = null;
         state.serverInfo = null;
-        state.playerDataSources = null;
+        clearPlayerDataSources();
         state.lastUpdated = null;
         state.pendingGeneration = false;
         state.pendingRefresh = null;
