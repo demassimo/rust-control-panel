@@ -416,23 +416,41 @@
       if (entry.channel === 'team') li.classList.add('team');
       if (entry.id != null) li.dataset.messageId = String(entry.id);
       li.dataset.channel = entry.channel;
-      const header = document.createElement('div');
-      header.className = 'chat-entry-header';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'chat-entry-avatar';
+      const baseName = (entry.username || entry.steamId || 'Unknown').trim();
+      const initial = baseName.charAt(0) || '?';
+      const avatarLabel = document.createElement('span');
+      avatarLabel.className = 'chat-entry-avatar-label';
+      avatarLabel.textContent = initial.toUpperCase();
+      if (entry.color) {
+        avatar.style.backgroundColor = entry.color;
+      }
+      avatar.appendChild(avatarLabel);
+
+      const content = document.createElement('div');
+      content.className = 'chat-entry-content';
+      const meta = document.createElement('div');
+      meta.className = 'chat-entry-meta';
       const nameEl = document.createElement('span');
       nameEl.className = 'chat-entry-name';
-      nameEl.textContent = entry.username || entry.steamId || 'Unknown';
+      nameEl.textContent = baseName;
       nameEl.style.color = entry.color || '';
-      header.appendChild(nameEl);
+      meta.appendChild(nameEl);
       if (entry.steamId) {
         const idEl = document.createElement('span');
         idEl.className = 'chat-entry-id';
         idEl.textContent = entry.steamId;
-        header.appendChild(idEl);
+        meta.appendChild(idEl);
       }
+
       const messageEl = document.createElement('p');
       messageEl.className = 'chat-entry-message';
       messageEl.textContent = entry.message;
-      li.append(header, messageEl);
+
+      content.append(meta, messageEl);
+      li.append(avatar, content);
       workspaceChatList.appendChild(li);
     });
   }
