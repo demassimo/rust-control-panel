@@ -1174,6 +1174,7 @@
         } else {
           applyMapTransform();
         }
+        renderMarkers();
       }
 
       function handleWheel(event) {
