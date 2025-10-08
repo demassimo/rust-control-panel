@@ -321,8 +321,13 @@ label.inline input[type="checkbox"]:focus-visible,
   height: 56px;
   border-radius: 18px;
   background: linear-gradient(135deg, rgba(244, 63, 94, 0.35), rgba(244, 63, 94, 0.12));
-  font-size: 1.6rem;
   box-shadow: 0 14px 28px rgba(244, 63, 94, 0.25);
+}
+
+.brand-icon img {
+  width: 32px;
+  height: 32px;
+  display: block;
 }
 
 .brand-meta { display: flex; flex-direction: column; gap: 10px; }
