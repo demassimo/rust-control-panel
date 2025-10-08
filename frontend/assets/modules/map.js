@@ -3120,9 +3120,14 @@
         const usePixelDistance = Number.isFinite(overlayWidth) && Number.isFinite(overlayHeight);
         const CLUSTER_THRESHOLD_PX = 32;
         const CLUSTER_THRESHOLD_PERCENT = 2.2;
-        const threshold = usePixelDistance
+        const CLUSTER_DISABLE_SCALE = 1.75;
+        const zoomScale = Math.max(1, mapInteractions.scale || 1);
+        const baseThreshold = usePixelDistance
           ? Math.max(CLUSTER_THRESHOLD_PX, Math.min(overlayWidth, overlayHeight) * 0.04)
           : CLUSTER_THRESHOLD_PERCENT;
+        const threshold = zoomScale >= CLUSTER_DISABLE_SCALE
+          ? -1
+          : baseThreshold / zoomScale;
 
         const clusters = [];
         const removeKeys = [];
