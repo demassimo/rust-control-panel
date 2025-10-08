@@ -843,8 +843,7 @@ function ensureRconBinding(row) {
         handlePlayerConnectionLine(key, cleanLine);
         handleF7ReportLine(key, cleanLine).catch((err) => {
           console.warn('f7 report dispatch failed', err);
-      if (cleanLine) handlePlayerConnectionLine(key, cleanLine);
-      if (cleanLine) {
+        });
         handleKillFeedLine(key, cleanLine).catch((err) => {
           console.warn('kill feed dispatch failed', err);
         });

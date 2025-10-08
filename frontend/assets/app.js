@@ -3167,6 +3167,7 @@
     });
     socket.on('f7-report', (payload) => {
       handleIncomingF7Report(payload);
+    });
     socket.on('kill', (payload) => {
       handleIncomingKill(payload);
     });
@@ -3673,6 +3674,7 @@
       moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
     }
     clearChatRefreshTimer();
+    clearKillFeedRefreshTimer();
     state.currentServerId = numericId;
     prepareF7ForServer(numericId);
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
@@ -3680,17 +3682,12 @@
     highlightSelectedServer();
     ui.clearConsole();
     renderChatMessages();
-    moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
-  }
-  clearChatRefreshTimer();
-  clearKillFeedRefreshTimer();
-  state.currentServerId = numericId;
-  if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
-  emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
-  highlightSelectedServer();
-  ui.clearConsole();
-  renderChatMessages();
-  renderKillFeed();
+    renderKillFeed();
+    refreshChatForServer(numericId, { force: true }).catch(() => {});
+    scheduleChatRefresh(numericId);
+    refreshKillFeedForServer(numericId, { force: true }).catch(() => {});
+    scheduleKillFeedRefresh(numericId);
+
     const name = entry?.data?.name || `Server #${numericId}`;
     const consoleAccess = hasServerCapability('console');
     ui.log(`${consoleAccess ? 'Connecting to' : 'Opening'} ${name}...`);
@@ -3701,11 +3698,7 @@
     showWorkspaceForServer(numericId);
     moduleBus.emit('server:connected', { serverId: numericId, server: entry?.data || null });
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
-  refreshChatForServer(numericId, { force: true }).catch(() => {});
-  scheduleChatRefresh(numericId);
-  refreshKillFeedForServer(numericId, { force: true }).catch(() => {});
-  scheduleKillFeedRefresh(numericId);
-}
+  }
 
   const ui = {
     showLogin() {
