@@ -810,12 +810,12 @@ function createApi(pool, dialect) {
           server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
         ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
-          reporter_steamid = VALUES(reporter_steamid),
-          reporter_name = VALUES(reporter_name),
-          target_steamid = VALUES(target_steamid),
-          target_name = VALUES(target_name),
-          category = VALUES(category),
-          message = VALUES(message),
+          reporter_steamid = COALESCE(VALUES(reporter_steamid), reporter_steamid),
+          reporter_name = COALESCE(VALUES(reporter_name), reporter_name),
+          target_steamid = COALESCE(VALUES(target_steamid), target_steamid),
+          target_name = COALESCE(VALUES(target_name), target_name),
+          category = COALESCE(VALUES(category), category),
+          message = COALESCE(VALUES(message), message),
           raw = VALUES(raw),
           created_at = LEAST(created_at, VALUES(created_at)),
           updated_at = VALUES(updated_at)

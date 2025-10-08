@@ -197,7 +197,9 @@
     loading: false,
     error: null,
     activeId: null,
-    detailCache: new Map()
+    detailCache: new Map(),
+    listRequestToken: null,
+    detailRequests: new Map()
   };
 
   function emitWorkspaceEvent(name, detail) {
@@ -1084,6 +1086,8 @@
     }
     if (f7State.loading && !force) return;
     f7State.loading = true;
+    const requestToken = Symbol('f7ListRequest');
+    f7State.listRequestToken = requestToken;
     renderF7Reports();
     const params = new URLSearchParams();
     params.set('scope', f7State.scope);
@@ -1091,19 +1095,29 @@
     try {
       const data = await api(`/servers/${serverId}/f7-reports?${params.toString()}`);
       const list = Array.isArray(data?.reports) ? data.reports.map((item) => normalizeF7Report(item)).filter(Boolean) : [];
-      f7State.list = list;
-      if (list.length && (f7State.activeId == null || !list.some((item) => item.id === f7State.activeId))) {
-        f7State.activeId = list[0]?.id ?? null;
+      if (f7State.listRequestToken === requestToken && Number(f7State.serverId) === serverId) {
+        f7State.list = list;
+        if (list.length && (f7State.activeId == null || !list.some((item) => item.id === f7State.activeId))) {
+          f7State.activeId = list[0]?.id ?? null;
+        }
+        f7State.error = null;
       }
-      f7State.error = null;
     } catch (err) {
-      f7State.error = describeError(err);
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      if (f7State.listRequestToken === requestToken && Number(f7State.serverId) === serverId) {
+        f7State.error = describeError(err);
+      }
     } finally {
+      if (f7State.listRequestToken !== requestToken || Number(f7State.serverId) !== serverId) {
+        return;
+      }
       f7State.loading = false;
       renderF7Reports();
       if (f7State.activeId != null) {
         loadF7ReportDetail(f7State.activeId).catch(() => {});
+      }
+      if (f7State.listRequestToken === requestToken) {
+        f7State.listRequestToken = null;
       }
     }
   }
@@ -1117,8 +1131,13 @@
       renderF7ReportDetail(f7State.detailCache.get(numericId));
       return;
     }
+    const requestToken = Symbol('f7DetailRequest');
+    f7State.detailRequests.set(numericId, requestToken);
     try {
       const data = await api(`/servers/${serverId}/f7-reports/${numericId}`);
+      if (f7State.detailRequests.get(numericId) !== requestToken || Number(f7State.serverId) !== serverId) {
+        return;
+      }
       const detail = {
         ...normalizeF7Report(data?.report),
         recentForTarget: Array.isArray(data?.recentForTarget)
@@ -1130,7 +1149,12 @@
         renderF7ReportDetail(detail);
       }
     } catch (err) {
-      ui.log('Failed to load report details: ' + describeError(err));
+      if (f7State.detailRequests.get(numericId) === requestToken && Number(f7State.serverId) === serverId) {
+        ui.log('Failed to load report details: ' + describeError(err));
+      }
+    }
+    if (f7State.detailRequests.get(numericId) === requestToken) {
+      f7State.detailRequests.delete(numericId);
     }
   }
 
@@ -1150,6 +1174,8 @@
     f7State.activeId = null;
     f7State.error = null;
     f7State.loading = false;
+    f7State.listRequestToken = null;
+    f7State.detailRequests.clear();
     f7State.scope = 'new';
     updateF7ScopeButtons();
     renderF7Reports();
@@ -1166,6 +1192,8 @@
     f7State.activeId = null;
     f7State.error = null;
     f7State.loading = false;
+    f7State.listRequestToken = null;
+    f7State.detailRequests.clear();
     updateF7ScopeButtons();
     renderF7Reports();
   }
