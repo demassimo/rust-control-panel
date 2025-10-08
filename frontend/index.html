@@ -330,6 +330,7 @@
           <button type="button" class="menu-tab" data-view="map" data-capability="liveMap" aria-pressed="false">Map</button>
           <button type="button" class="menu-tab" data-view="settings" data-capability="manage" aria-pressed="false">Settings</button>
           <button type="button" class="menu-tab" data-view="chat" data-capability="console" aria-pressed="false">Chat</button>
+          <button type="button" class="menu-tab" data-view="kills" data-capability="console" aria-pressed="false">Kill Feed</button>
           <button type="button" class="menu-tab" data-view="console" data-capability="console" aria-pressed="false">Console</button>
           <button type="button" class="menu-tab" data-view="dashboard" data-capability="view" aria-pressed="false">Dashboard</button>
         </nav>
@@ -449,6 +450,23 @@
                 <p id="workspaceChatEmpty" class="chat-empty-state">Select a server to view chat.</p>
                 <p id="workspaceChatNotice" class="notice small hidden" role="alert"></p>
                 <ol id="workspaceChatList" class="chat-list" aria-live="polite" aria-relevant="additions"></ol>
+              </div>
+            </div>
+          </section>
+
+          <section id="workspaceViewKills" class="workspace-view" data-view="kills" data-capability="console" aria-hidden="true">
+            <div class="card kill-feed-card">
+              <div class="card-header">
+                <div>
+                  <h3>Kill Feed</h3>
+                  <p class="muted small">Player kills from the last 24 hours. NPC deaths are ignored.</p>
+                </div>
+              </div>
+              <div class="kill-feed-body" id="killFeedBody">
+                <p id="killFeedLoading" class="kill-feed-loading hidden">Loading kill feed…</p>
+                <p id="killFeedEmpty" class="kill-feed-empty">Select a server to view the kill feed.</p>
+                <p id="killFeedNotice" class="notice small hidden" role="alert"></p>
+                <ol id="killFeedList" class="kill-feed-list" aria-live="polite" aria-relevant="additions"></ol>
               </div>
             </div>
           </section>

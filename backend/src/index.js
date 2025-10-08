@@ -724,6 +724,15 @@ const CHAT_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 const chatCleanupSchedule = new Map();
 let globalChatCleanupPromise = null;
 
+const KILL_FEED_RETENTION_MS = 24 * 60 * 60 * 1000;
+const KILL_FEED_PURGE_INTERVAL_MS = 15 * 60 * 1000;
+const KILL_FEED_MAX_CACHE = 300;
+const killFeedCache = new Map();
+const killFeedCleanupSchedule = new Map();
+let killFeedGlobalCleanupPromise = null;
+const recentKillLines = new Map();
+const KILL_FEED_DEDUPE_MS = 1500;
+
 const steamProfileCache = new Map();
 const TEAM_INFO_CACHE_TTL = 30 * 1000;
 const TEAM_INFO_ERROR_RETRY_INTERVAL_MS = 10 * 1000;
@@ -805,6 +814,11 @@ function ensureRconBinding(row) {
     console: (line) => {
       const cleanLine = typeof line === 'string' ? line.replace(ANSI_COLOR_REGEX, '') : '';
       if (cleanLine) handlePlayerConnectionLine(key, cleanLine);
+      if (cleanLine) {
+        handleKillFeedLine(key, cleanLine).catch((err) => {
+          console.warn('kill feed dispatch failed', err);
+        });
+      }
     },
     chat: (line, payload) => {
       handleChatMessage(key, line, payload).catch((err) => {
@@ -970,6 +984,73 @@ function maybeCleanupChatHistory(serverId) {
     console.warn(`Failed to purge chat history for server ${key}`, err);
   });
   runGlobalChatCleanup();
+}
+
+async function handleKillFeedLine(serverId, line) {
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const parsed = parseKillLogLine(line);
+  if (!parsed) return;
+  if (!shouldProcessKillLine(key, parsed.normalized)) return;
+
+  const record = {
+    server_id: key,
+    occurred_at: parsed.occurredAt,
+    killer_steamid: parsed.killerSteamId,
+    killer_name: parsed.killerName,
+    killer_clan: parsed.killerClan,
+    victim_steamid: parsed.victimSteamId,
+    victim_name: parsed.victimName,
+    victim_clan: parsed.victimClan,
+    weapon: parsed.weapon,
+    distance: parsed.distance,
+    pos_x: parsed.position?.x ?? null,
+    pos_y: parsed.position?.y ?? null,
+    pos_z: parsed.position?.z ?? null,
+    raw: parsed.normalized,
+    created_at: parsed.occurredAt
+  };
+
+  let combatLog = null;
+  let combatLogError = null;
+  if (parsed.victimSteamId) {
+    try {
+      const serverRow = await getMonitoredServerRow(key);
+      if (serverRow) {
+        const reply = await sendRconCommand(serverRow, `combatlog ${parsed.victimSteamId}`, {
+          silent: true,
+          timeoutMs: 15000
+        });
+        combatLog = normaliseCombatLogReply(reply);
+      }
+    } catch (err) {
+      combatLogError = err?.message || String(err);
+    }
+  }
+
+  if (combatLog) record.combat_log = combatLog;
+  if (combatLogError) record.combat_log_error = combatLogError;
+
+  let stored = null;
+  if (typeof db?.recordKillEvent === 'function') {
+    try {
+      stored = await db.recordKillEvent(record);
+    } catch (err) {
+      console.warn('Failed to record kill event', err);
+    }
+  }
+
+  const fallback = stored || {
+    ...record,
+    combat_log: combatLog ? JSON.stringify(combatLog) : null,
+    id: null
+  };
+  const normalized = normaliseKillEventRow(fallback);
+  if (!normalized) return;
+
+  cacheKillEvent(key, normalized);
+  io.to(`srv:${key}`).emit('kill', { serverId: key, event: normalized });
+  maybeCleanupKillFeed(key);
 }
 
 function parseStatusMessage(message) {
@@ -2837,6 +2918,249 @@ function cacheTeamInfoForServer(serverId, info, now = Date.now()) {
   }
 }
 
+function shouldProcessKillLine(serverId, normalized) {
+  const text = typeof normalized === 'string' ? normalized.trim() : '';
+  if (!text) return false;
+  const key = `${serverId}:${text}`;
+  const now = Date.now();
+  const last = recentKillLines.get(key) || 0;
+  if (now - last < KILL_FEED_DEDUPE_MS) return false;
+  recentKillLines.set(key, now);
+  if (recentKillLines.size > 2000) {
+    const cutoff = now - KILL_FEED_DEDUPE_MS;
+    for (const [entryKey, ts] of recentKillLines.entries()) {
+      if (ts < cutoff) recentKillLines.delete(entryKey);
+    }
+  }
+  return true;
+}
+
+function extractNameAndClan(segment) {
+  if (typeof segment !== 'string') {
+    const name = typeof segment === 'undefined' || segment === null ? '' : String(segment);
+    return { name: name.trim() || null, clan: null };
+  }
+  let working = segment.trim();
+  const clans = [];
+  while (true) {
+    const match = working.match(/^\s*\[([^\]]+)\]\s*/);
+    if (!match) break;
+    const value = match[1].trim();
+    if (value) clans.push(value);
+    working = working.slice(match[0].length);
+  }
+  const name = working.trim();
+  return {
+    name: name || null,
+    clan: clans.length ? clans.join(' | ') : null
+  };
+}
+
+const KILL_FEED_STEAM_PREFIX = '7656';
+
+function parseKillLogLine(line) {
+  if (!line) return null;
+  const withoutAnsi = stripAnsiSequences(line) || '';
+  const trimmed = withoutAnsi.trim();
+  if (!trimmed) return null;
+  const withoutTimestamp = stripRconTimestampPrefix(trimmed).trim();
+  if (!withoutTimestamp) return null;
+  if (!withoutTimestamp.toLowerCase().includes('was killed by')) return null;
+  const match = withoutTimestamp.match(/^(?<victimPart>.+?)\[(?<victimId>\d{17})\]\s+was killed by\s+(?<killerPart>.+?)\[(?<killerId>\d{17})\](?<rest>.*)$/i);
+  if (!match || !match.groups) return null;
+
+  const killerId = match.groups.killerId;
+  const victimId = match.groups.victimId;
+  if (!STEAM_ID_REGEX.test(killerId) || !STEAM_ID_REGEX.test(victimId)) return null;
+  if (!killerId.startsWith(KILL_FEED_STEAM_PREFIX) || !victimId.startsWith(KILL_FEED_STEAM_PREFIX)) return null;
+
+  const victimInfo = extractNameAndClan(match.groups.victimPart);
+  const killerInfo = extractNameAndClan(match.groups.killerPart);
+  const rest = match.groups.rest || '';
+
+  const weaponMatch = rest.match(/using\s+(.+?)(?:\s+from\s+|\s+at\s+\(|$)/i);
+  const distanceMatch = rest.match(/from\s+(-?\d+(?:\.\d+)?)\s*m/i);
+  const positionMatch = rest.match(/\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/);
+
+  const distance = distanceMatch ? Number(distanceMatch[1]) : null;
+  const posX = positionMatch ? Number(positionMatch[1]) : null;
+  const posY = positionMatch ? Number(positionMatch[2]) : null;
+  const posZ = positionMatch ? Number(positionMatch[3]) : null;
+
+  return {
+    raw: line,
+    normalized: withoutTimestamp,
+    occurredAt: new Date().toISOString(),
+    killerSteamId: match.groups.killerId,
+    killerName: killerInfo.name,
+    killerClan: killerInfo.clan,
+    victimSteamId: match.groups.victimId,
+    victimName: victimInfo.name,
+    victimClan: victimInfo.clan,
+    weapon: weaponMatch ? weaponMatch[1].trim() : null,
+    distance: Number.isFinite(distance) ? distance : null,
+    position: Number.isFinite(posX) && Number.isFinite(posY) && Number.isFinite(posZ)
+      ? { x: posX, y: posY, z: posZ }
+      : null
+  };
+}
+
+function normaliseKillCombatLog(value) {
+  if (!value) return null;
+  let payload = value;
+  if (typeof value === 'string') {
+    const cleaned = stripAnsiSequences(value).replace(/\r/g, '');
+    const lines = cleaned.split('\n').map((line) => line.replace(/\s+$/g, '')).filter((line) => line);
+    return {
+      text: lines.join('\n'),
+      lines: lines.slice(0, 120),
+      fetchedAt: new Date().toISOString()
+    };
+  }
+  if (typeof value === 'object') {
+    payload = { ...value };
+    if (Array.isArray(payload.lines)) {
+      payload.lines = payload.lines
+        .map((line) => (typeof line === 'string' ? stripAnsiSequences(line) : String(line ?? '')))
+        .map((line) => line.replace(/\r/g, '').replace(/\s+$/g, ''))
+        .filter((line) => line)
+        .slice(0, 120);
+    } else if (typeof payload.text === 'string') {
+      const cleaned = stripAnsiSequences(payload.text).replace(/\r/g, '');
+      payload.lines = cleaned.split('\n').map((line) => line.replace(/\s+$/g, '')).filter((line) => line).slice(0, 120);
+    } else {
+      payload.lines = [];
+    }
+    if (typeof payload.text !== 'string') {
+      payload.text = payload.lines.join('\n');
+    } else {
+      payload.text = stripAnsiSequences(payload.text).replace(/\r/g, '');
+    }
+    if (!payload.fetchedAt) payload.fetchedAt = new Date().toISOString();
+    return payload;
+  }
+  return null;
+}
+
+function normaliseKillEventRow(row) {
+  if (!row) return null;
+  const serverId = Number(row?.server_id ?? row?.serverId);
+  if (!Number.isFinite(serverId)) return null;
+  const occurredRaw = row?.occurred_at ?? row?.occurredAt ?? row?.created_at ?? row?.createdAt;
+  let occurredAt = occurredRaw ? new Date(occurredRaw) : new Date();
+  if (Number.isNaN(occurredAt.getTime())) occurredAt = new Date();
+  const parseNum = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  };
+  let combatLog = row?.combat_log ?? row?.combatLog ?? row?.combat_log_json ?? row?.combatLogJson ?? null;
+  if (typeof combatLog === 'string') {
+    try {
+      const parsed = JSON.parse(combatLog);
+      combatLog = parsed;
+    } catch {
+      combatLog = normaliseKillCombatLog(combatLog);
+    }
+  }
+  if (combatLog) {
+    combatLog = normaliseKillCombatLog(combatLog);
+  }
+
+  return {
+    id: row?.id ?? null,
+    serverId,
+    occurredAt: occurredAt.toISOString(),
+    killerSteamId: row?.killer_steamid ?? row?.killerSteamId ?? null,
+    killerName: row?.killer_name ?? row?.killerName ?? null,
+    killerClan: row?.killer_clan ?? row?.killerClan ?? null,
+    victimSteamId: row?.victim_steamid ?? row?.victimSteamId ?? null,
+    victimName: row?.victim_name ?? row?.victimName ?? null,
+    victimClan: row?.victim_clan ?? row?.victimClan ?? null,
+    weapon: row?.weapon ?? null,
+    distance: parseNum(row?.distance),
+    position: {
+      x: parseNum(row?.pos_x ?? row?.posX ?? row?.position_x ?? row?.positionX),
+      y: parseNum(row?.pos_y ?? row?.posY ?? row?.position_y ?? row?.positionY),
+      z: parseNum(row?.pos_z ?? row?.posZ ?? row?.position_z ?? row?.positionZ)
+    },
+    raw: row?.raw ?? null,
+    combatLog,
+    combatLogError: row?.combat_log_error ?? row?.combatLogError ?? null,
+    createdAt: (row?.created_at ?? row?.createdAt ?? occurredAt.toISOString())
+  };
+}
+
+function cacheKillEvent(serverId, event) {
+  if (!event) return;
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const existing = killFeedCache.get(key) || [];
+  const signatures = new Set(existing.map((entry) => `${entry.occurredAt}:${entry.killerSteamId}:${entry.victimSteamId}:${entry.raw ?? ''}`));
+  const next = [...existing];
+  const signature = `${event.occurredAt}:${event.killerSteamId}:${event.victimSteamId}:${event.raw ?? ''}`;
+  if (!signatures.has(signature)) {
+    next.push(event);
+  }
+  next.sort((a, b) => {
+    const aTime = Date.parse(a.occurredAt || a.createdAt || '');
+    const bTime = Date.parse(b.occurredAt || b.createdAt || '');
+    if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
+    return 0;
+  });
+  const cutoff = Date.now() - KILL_FEED_RETENTION_MS;
+  const filtered = next.filter((entry) => {
+    const ts = Date.parse(entry.occurredAt || entry.createdAt || '');
+    return Number.isFinite(ts) ? ts >= cutoff : true;
+  }).slice(0, KILL_FEED_MAX_CACHE);
+  killFeedCache.set(key, filtered);
+}
+
+function normaliseCombatLogReply(reply) {
+  const message = typeof reply?.Message === 'string'
+    ? reply.Message
+    : (typeof reply === 'string' ? reply : '');
+  if (!message) return null;
+  const cleaned = stripAnsiSequences(message).replace(/\r/g, '');
+  const lines = cleaned.split('\n').map((line) => line.replace(/\s+$/g, '')).filter((line) => line);
+  if (lines.length === 0) return null;
+  return {
+    text: lines.slice(0, 120).join('\n'),
+    lines: lines.slice(0, 120),
+    fetchedAt: new Date().toISOString()
+  };
+}
+
+function maybeCleanupKillFeed(serverId) {
+  if (typeof db?.purgeKillEvents !== 'function') return;
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const now = Date.now();
+  const last = killFeedCleanupSchedule.get(key) || 0;
+  if (now - last < KILL_FEED_PURGE_INTERVAL_MS) return;
+  killFeedCleanupSchedule.set(key, now);
+  const cutoffIso = new Date(now - KILL_FEED_RETENTION_MS).toISOString();
+  db.purgeKillEvents({ before: cutoffIso, server_id: key }).catch((err) => {
+    console.warn(`Failed to purge kill feed for server ${key}`, err);
+  });
+  runKillFeedGlobalCleanup();
+}
+
+function runKillFeedGlobalCleanup() {
+  if (typeof db?.purgeKillEvents !== 'function') return null;
+  if (killFeedGlobalCleanupPromise) return killFeedGlobalCleanupPromise;
+  const cutoffIso = new Date(Date.now() - KILL_FEED_RETENTION_MS).toISOString();
+  killFeedGlobalCleanupPromise = (async () => {
+    try {
+      await db.purgeKillEvents({ before: cutoffIso });
+    } catch (err) {
+      console.warn('Failed to purge kill feed globally', err);
+    } finally {
+      killFeedGlobalCleanupPromise = null;
+    }
+  })();
+  return killFeedGlobalCleanupPromise;
+}
+
 function cacheTeamInfoMiss(serverId, steamId, now = Date.now()) {
   const numeric = Number(serverId);
   if (!Number.isFinite(numeric) || !steamId) return;
@@ -4153,6 +4477,12 @@ async function refreshMonitoredServers() {
         const numeric = Number(serverId);
         if (Number.isFinite(numeric) && !seen.has(numeric)) recentPlayerConnections.delete(entryKey);
       }
+      for (const key of [...killFeedCache.keys()]) {
+        if (!seen.has(key)) killFeedCache.delete(key);
+      }
+      for (const key of [...killFeedCleanupSchedule.keys()]) {
+        if (!seen.has(key)) killFeedCleanupSchedule.delete(key);
+      }
       for (const [serverId] of [...offlineSnapshotTimestamps.entries()]) {
         if (!seen.has(serverId)) offlineSnapshotTimestamps.delete(serverId);
       }
@@ -4185,6 +4515,12 @@ const chatPurgeHandle = setInterval(() => {
 }, CHAT_PURGE_INTERVAL_MS);
 if (chatPurgeHandle.unref) chatPurgeHandle.unref();
 await runGlobalChatCleanup();
+
+const killFeedPurgeHandle = setInterval(() => {
+  runKillFeedGlobalCleanup();
+}, KILL_FEED_PURGE_INTERVAL_MS);
+if (killFeedPurgeHandle.unref) killFeedPurgeHandle.unref();
+await runKillFeedGlobalCleanup();
 
 const mapPurgeHandle = setInterval(() => {
   purgeExpiredMapCaches().catch((err) => console.error('scheduled map purge error', err));
@@ -5728,6 +6064,36 @@ app.get('/api/servers/:id/chat', auth, async (req, res) => {
   } catch (err) {
     console.error('chat history fetch failed', err);
     res.status(500).json({ error: 'chat_history_failed' });
+  }
+});
+
+app.get('/api/servers/:id/kills', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'console');
+  if (id == null) return;
+  const limitValue = Number(req.query.limit);
+  const limit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(Math.floor(limitValue), 500) : 200;
+  const sinceParam = req.query.since;
+  const sinceTs = parseTimestamp(sinceParam);
+  const defaultSince = Date.now() - KILL_FEED_RETENTION_MS;
+  const sinceIso = Number.isFinite(sinceTs) ? new Date(sinceTs).toISOString() : new Date(defaultSince).toISOString();
+  try {
+    let rows = [];
+    if (typeof db.listKillEvents === 'function') {
+      rows = await db.listKillEvents(id, { limit, since: sinceIso });
+    }
+    let events = Array.isArray(rows) ? rows.map((row) => normaliseKillEventRow(row)).filter(Boolean) : [];
+    if (!events.length) {
+      const cached = killFeedCache.get(id);
+      if (cached && cached.length) {
+        events = cached.slice(0, limit);
+      }
+    } else {
+      killFeedCache.set(id, events.slice(0, KILL_FEED_MAX_CACHE));
+    }
+    res.json({ events });
+  } catch (err) {
+    console.error('kill feed history fetch failed', err);
+    res.status(500).json({ error: 'kill_feed_failed' });
   }
 });
 
