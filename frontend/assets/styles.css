@@ -1745,6 +1745,45 @@ button.chat-filter-btn:focus-visible {
   overflow: auto;
 }
 
+.kill-feed-combatlog-table-wrap {
+  overflow-x: auto;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem;
+}
+
+.kill-feed-combatlog-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.kill-feed-combatlog-table thead th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  color: var(--muted-strong);
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+
+.kill-feed-combatlog-table tbody td {
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+
+.kill-feed-combatlog-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.kill-feed-combatlog-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .summary-card {
   padding: 16px;
   border-radius: var(--radius-md);

@@ -832,6 +832,134 @@
     }
   }
 
+  function pickString(...values) {
+    for (const value of values) {
+      if (value == null) continue;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+      } else if (typeof value === 'number' && Number.isFinite(value)) {
+        return String(value);
+      }
+    }
+    return null;
+  }
+
+  const COMBAT_LOG_HEADER_REGEX = /^\s*time\s+attacker\s+id\s+target\s+id\s+weapon\s+ammo\s+area\s+distance\s+old_hp\s+new_hp\s+info\s+hits\s+integrity\s+travel\s+mismatch\s+desync\s*$/i;
+  const COMBAT_LOG_ENTRY_REGEX = /^(?<time>-?\d+(?:\.\d+)?)s\s+(?<attacker>\S+)\s+(?<attackerId>-?\d+)\s+(?<target>\S+)\s+(?<targetId>-?\d+)\s+(?<weapon>\S+)\s+(?<ammo>\S+)\s+(?<area>\S+)\s+(?<distance>-?\d+(?:\.\d+)?)(?<distanceUnit>m)?\s+(?<oldHp>-?\d+(?:\.\d+)?)\s+(?<newHp>-?\d+(?:\.\d+)?)\s+(?<info>\S+)\s+(?<hits>-?\d+)\s+(?<integrity>-?\d+(?:\.\d+)?)\s+(?<travel>-?\d+(?:\.\d+)?)(?<travelUnit>s|m)?\s+(?<mismatch>-?\d+(?:\.\d+)?)(?<mismatchUnit>m|s)?\s+(?<desync>-?\d+(?:\.\d+)?)\s*$/i;
+
+  function parseKillRawLog(raw) {
+    if (typeof raw !== 'string') return null;
+    const text = raw.trim();
+    if (!text) return null;
+
+    const pattern = /^(?:\[(?<victimClan>[^\]]+)\]\s*)?(?<victimName>[^\[]+?)\[(?<victimSteamId>\d+)\]\s+was killed by\s+(?:\[(?<killerClan>[^\]]+)\]\s*)?(?<killerName>[^\[]+?)\[(?<killerSteamId>\d+)\](?<rest>.*)$/i;
+    const match = text.match(pattern);
+    if (!match || !match.groups) return null;
+
+    const result = {
+      victimName: match.groups.victimName?.trim() || null,
+      victimClan: match.groups.victimClan?.trim() || null,
+      victimSteamId: match.groups.victimSteamId || null,
+      killerName: match.groups.killerName?.trim() || null,
+      killerClan: match.groups.killerClan?.trim() || null,
+      killerSteamId: match.groups.killerSteamId || null
+    };
+
+    const rest = match.groups.rest || '';
+
+    const weaponPattern = /\b(?:using|with)\s+(?<weapon>[^@]+?)(?:\s+from\b|\s+at\b|\s*$)/i;
+    const weaponMatch = rest.match(weaponPattern);
+    if (weaponMatch?.groups?.weapon) {
+      const weapon = weaponMatch.groups.weapon.trim();
+      if (weapon) result.weapon = weapon;
+    }
+
+    const distancePattern = /\bfrom\s+(?<distance>-?\d+(?:\.\d+)?)\s*m\b/i;
+    const distanceMatch = rest.match(distancePattern);
+    if (distanceMatch?.groups?.distance) {
+      const parsed = Number(distanceMatch.groups.distance);
+      if (Number.isFinite(parsed)) result.distance = parsed;
+    }
+
+    const locationPattern = /\bat\s*\(\s*(?<x>-?\d+(?:\.\d+)?),\s*(?<y>-?\d+(?:\.\d+)?),\s*(?<z>-?\d+(?:\.\d+)?)\s*\)/i;
+    const locationMatch = rest.match(locationPattern);
+    if (locationMatch?.groups) {
+      result.position = {
+        x: Number(locationMatch.groups.x),
+        y: Number(locationMatch.groups.y),
+        z: Number(locationMatch.groups.z)
+      };
+    }
+
+    return result;
+  }
+
+  function parseCombatLogEntries(lines) {
+    const records = [];
+    if (!Array.isArray(lines) || !lines.length) {
+      return { header: [], records };
+    }
+
+    const normalized = lines
+      .map((line) => (typeof line === 'string' ? line : String(line ?? '')))
+      .map((line) => line.replace(/\r/g, ''))
+      .map((line) => line.trimEnd())
+      .filter((line) => line);
+
+    if (!normalized.length) {
+      return { header: [], records };
+    }
+
+    let startIndex = 0;
+    const headerLine = normalized[0].trim();
+    const header = COMBAT_LOG_HEADER_REGEX.test(headerLine) ? headerLine.trim().split(/\s+/) : [];
+    if (header.length) {
+      startIndex = 1;
+    }
+
+    const toNumber = (value) => {
+      if (value == null || value === '') return null;
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    for (let i = startIndex; i < normalized.length; i += 1) {
+      const rawLine = normalized[i].trim();
+      if (!rawLine || rawLine.startsWith('+')) continue;
+      const match = rawLine.match(COMBAT_LOG_ENTRY_REGEX);
+      if (!match || !match.groups) continue;
+      const groups = match.groups;
+      const record = {
+        raw: rawLine,
+        timeSeconds: toNumber(groups.time),
+        timeRaw: groups.time ? `${groups.time}s` : null,
+        attacker: groups.attacker || null,
+        attackerId: groups.attackerId || null,
+        target: groups.target || null,
+        targetId: groups.targetId || null,
+        weapon: groups.weapon || null,
+        ammo: groups.ammo || null,
+        area: groups.area || null,
+        distanceMeters: toNumber(groups.distance),
+        distanceRaw: groups.distance ? `${groups.distance}${groups.distanceUnit || ''}` : null,
+        oldHp: toNumber(groups.oldHp),
+        newHp: toNumber(groups.newHp),
+        info: groups.info || null,
+        hits: toNumber(groups.hits),
+        integrity: toNumber(groups.integrity),
+        travelSeconds: toNumber(groups.travel),
+        travelRaw: groups.travel ? `${groups.travel}${groups.travelUnit || ''}` : null,
+        mismatchMeters: toNumber(groups.mismatch),
+        mismatchRaw: groups.mismatch ? `${groups.mismatch}${groups.mismatchUnit || ''}` : null,
+        desync: toNumber(groups.desync)
+      };
+      records.push(record);
+    }
+
+    return { header, records };
+  }
+
   function normalizeKillEvent(raw, serverId) {
     if (!raw) return null;
     const resolvedServerId = Number(raw?.serverId ?? raw?.server_id ?? serverId);
@@ -844,6 +972,9 @@
       const num = Number(value);
       return Number.isFinite(num) ? num : null;
     };
+
+    const rawLog = raw?.raw ?? raw?.raw_log ?? raw?.rawLog ?? null;
+    const parsedRaw = parseKillRawLog(rawLog);
 
     let combatLog = raw?.combatLog ?? raw?.combat_log ?? raw?.combat_log_json ?? null;
     if (typeof combatLog === 'string') {
@@ -868,6 +999,11 @@
         lines: lines.slice(0, 200),
         fetchedAt: combatLog.fetchedAt || new Date().toISOString()
       };
+      const parsedCombat = parseCombatLogEntries(combatLog.lines);
+      if (parsedCombat.records.length) {
+        combatLog.records = parsedCombat.records.slice(0, 200);
+        combatLog.header = parsedCombat.header;
+      }
     } else {
       combatLog = null;
     }
@@ -877,22 +1013,41 @@
       y: toNumber(raw?.position?.y ?? raw?.pos_y ?? raw?.posY),
       z: toNumber(raw?.position?.z ?? raw?.pos_z ?? raw?.posZ)
     };
-    const hasPosition = position.x != null || position.y != null || position.z != null;
+    let hasPosition = position.x != null || position.y != null || position.z != null;
+    if (!hasPosition && parsedRaw?.position) {
+      position.x = toNumber(parsedRaw.position.x);
+      position.y = toNumber(parsedRaw.position.y);
+      position.z = toNumber(parsedRaw.position.z);
+      hasPosition = position.x != null || position.y != null || position.z != null;
+    }
+
+    let distanceValue = toNumber(raw?.distance);
+    if (distanceValue == null && parsedRaw?.distance != null) {
+      distanceValue = toNumber(parsedRaw.distance);
+    }
+
+    const killerSteamId = pickString(raw?.killerSteamId, raw?.killer_steamid, parsedRaw?.killerSteamId);
+    const killerName = pickString(raw?.killerName, raw?.killer_name, parsedRaw?.killerName);
+    const killerClan = pickString(raw?.killerClan, raw?.killer_clan, parsedRaw?.killerClan);
+    const victimSteamId = pickString(raw?.victimSteamId, raw?.victim_steamid, parsedRaw?.victimSteamId);
+    const victimName = pickString(raw?.victimName, raw?.victim_name, parsedRaw?.victimName);
+    const victimClan = pickString(raw?.victimClan, raw?.victim_clan, parsedRaw?.victimClan);
+    const weapon = pickString(raw?.weapon, parsedRaw?.weapon);
 
     return {
       id: raw?.id ?? null,
       serverId: resolvedServerId,
       occurredAt: occurredDate.toISOString(),
-      killerSteamId: raw?.killerSteamId ?? raw?.killer_steamid ?? null,
-      killerName: raw?.killerName ?? raw?.killer_name ?? null,
-      killerClan: raw?.killerClan ?? raw?.killer_clan ?? null,
-      victimSteamId: raw?.victimSteamId ?? raw?.victim_steamid ?? null,
-      victimName: raw?.victimName ?? raw?.victim_name ?? null,
-      victimClan: raw?.victimClan ?? raw?.victim_clan ?? null,
-      weapon: raw?.weapon ?? null,
-      distance: toNumber(raw?.distance),
+      killerSteamId,
+      killerName,
+      killerClan,
+      victimSteamId,
+      victimName,
+      victimClan,
+      weapon,
+      distance: distanceValue,
       position: hasPosition ? position : null,
-      raw: raw?.raw ?? null,
+      raw: rawLog,
       combatLog,
       combatLogError: raw?.combatLogError ?? raw?.combat_log_error ?? null,
       createdAt: raw?.createdAt ?? raw?.created_at ?? occurredDate.toISOString()
@@ -923,6 +1078,68 @@
     if (coords.every((value) => value === '—')) return null;
     return `(${coords.join(', ')})`;
   }
+
+  const COMBAT_LOG_TABLE_COLUMNS = [
+    {
+      key: 'timeSeconds',
+      label: 'Time',
+      render: (record) => (Number.isFinite(record.timeSeconds) ? `${record.timeSeconds.toFixed(2)} s` : record.timeRaw || '—')
+    },
+    { key: 'attacker', label: 'Attacker', render: (record) => record.attacker || '—' },
+    { key: 'attackerId', label: 'Attacker ID', render: (record) => record.attackerId || '—' },
+    { key: 'target', label: 'Target', render: (record) => record.target || '—' },
+    { key: 'targetId', label: 'Target ID', render: (record) => record.targetId || '—' },
+    { key: 'weapon', label: 'Weapon', render: (record) => record.weapon || '—' },
+    { key: 'ammo', label: 'Ammo', render: (record) => record.ammo || '—' },
+    { key: 'area', label: 'Area', render: (record) => record.area || '—' },
+    {
+      key: 'distanceMeters',
+      label: 'Distance',
+      render: (record) => (Number.isFinite(record.distanceMeters)
+        ? `${record.distanceMeters.toFixed(1)} m`
+        : record.distanceRaw || '—')
+    },
+    {
+      key: 'oldHp',
+      label: 'Old HP',
+      render: (record) => (Number.isFinite(record.oldHp) ? record.oldHp.toFixed(1) : '—')
+    },
+    {
+      key: 'newHp',
+      label: 'New HP',
+      render: (record) => (Number.isFinite(record.newHp) ? record.newHp.toFixed(1) : '—')
+    },
+    { key: 'info', label: 'Info', render: (record) => record.info || '—' },
+    {
+      key: 'hits',
+      label: 'Hits',
+      render: (record) => (Number.isFinite(record.hits) ? String(record.hits) : '—')
+    },
+    {
+      key: 'integrity',
+      label: 'Integrity',
+      render: (record) => (Number.isFinite(record.integrity) ? record.integrity.toFixed(2) : '—')
+    },
+    {
+      key: 'travelSeconds',
+      label: 'Travel',
+      render: (record) => (Number.isFinite(record.travelSeconds)
+        ? `${record.travelSeconds.toFixed(2)} s`
+        : record.travelRaw || '—')
+    },
+    {
+      key: 'mismatchMeters',
+      label: 'Mismatch',
+      render: (record) => (Number.isFinite(record.mismatchMeters)
+        ? `${record.mismatchMeters.toFixed(2)} m`
+        : record.mismatchRaw || '—')
+    },
+    {
+      key: 'desync',
+      label: 'Desync',
+      render: (record) => (Number.isFinite(record.desync) ? String(record.desync) : '—')
+    }
+  ];
 
   function storeKillEvents(serverId, entries, { replace = false } = {}) {
     const numeric = Number(serverId);
@@ -1089,12 +1306,50 @@
         logWrap.className = 'kill-feed-combatlog';
         const heading = document.createElement('h4');
         heading.textContent = 'Combat log';
-        const pre = document.createElement('pre');
-        const lines = Array.isArray(entry.combatLog.lines) && entry.combatLog.lines.length
-          ? entry.combatLog.lines.join('\n')
-          : (entry.combatLog.text || 'No combat log entries.');
-        pre.textContent = lines;
-        logWrap.append(heading, pre);
+        logWrap.appendChild(heading);
+
+        if (Array.isArray(entry.combatLog.records) && entry.combatLog.records.length) {
+          const tableWrap = document.createElement('div');
+          tableWrap.className = 'kill-feed-combatlog-table-wrap';
+          const table = document.createElement('table');
+          table.className = 'kill-feed-combatlog-table';
+
+          const thead = document.createElement('thead');
+          const headerRow = document.createElement('tr');
+          COMBAT_LOG_TABLE_COLUMNS.forEach((column) => {
+            const th = document.createElement('th');
+            th.textContent = column.label;
+            headerRow.appendChild(th);
+          });
+          thead.appendChild(headerRow);
+          table.appendChild(thead);
+
+          const tbody = document.createElement('tbody');
+          entry.combatLog.records.forEach((record) => {
+            const row = document.createElement('tr');
+            COMBAT_LOG_TABLE_COLUMNS.forEach((column) => {
+              const td = document.createElement('td');
+              try {
+                td.textContent = column.render(record);
+              } catch {
+                td.textContent = '—';
+              }
+              row.appendChild(td);
+            });
+            tbody.appendChild(row);
+          });
+          table.appendChild(tbody);
+          tableWrap.appendChild(table);
+          logWrap.appendChild(tableWrap);
+        } else {
+          const pre = document.createElement('pre');
+          const lines = Array.isArray(entry.combatLog.lines) && entry.combatLog.lines.length
+            ? entry.combatLog.lines.join('\n')
+            : (entry.combatLog.text || 'No combat log entries.');
+          pre.textContent = lines;
+          logWrap.appendChild(pre);
+        }
+
         detailBody.appendChild(logWrap);
       } else if (entry.combatLogError) {
         const logWrap = document.createElement('div');
