@@ -995,6 +995,14 @@ function createApi(dbh, dialect) {
         FROM f7_reports
         WHERE ${conditions.join(' AND ')}
         ORDER BY created_at DESC, id DESC
+      `;
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 200));
+      }
+      return await dbh.all(sql, params);
+    },
     async recordKillEvent(entry = {}) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
       if (!Number.isFinite(serverIdNum)) return null;
@@ -1142,9 +1150,6 @@ function createApi(dbh, dialect) {
       if (Number.isFinite(limitNum) && limitNum > 0) {
         sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 50));
-      }
-      return await dbh.all(sql, params);
-        params.push(Math.min(Math.floor(limitNum), 500));
       }
       return await dbh.all(sql, params);
     },
