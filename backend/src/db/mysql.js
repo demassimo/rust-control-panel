@@ -215,6 +215,27 @@ function createApi(pool, dialect) {
         INDEX idx_f7_server_time (server_id, created_at),
         INDEX idx_f7_target (server_id, target_steamid, created_at),
         CONSTRAINT fk_f7_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      await exec(`CREATE TABLE IF NOT EXISTS kill_events(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        occurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        killer_steamid VARCHAR(32) NULL,
+        killer_name VARCHAR(190) NULL,
+        killer_clan VARCHAR(120) NULL,
+        victim_steamid VARCHAR(32) NULL,
+        victim_name VARCHAR(190) NULL,
+        victim_clan VARCHAR(120) NULL,
+        weapon VARCHAR(190) NULL,
+        distance DOUBLE NULL,
+        pos_x DOUBLE NULL,
+        pos_y DOUBLE NULL,
+        pos_z DOUBLE NULL,
+        raw TEXT NULL,
+        combat_log TEXT NULL,
+        combat_log_error VARCHAR(500) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_kill_events_server_time (server_id, occurred_at),
+        CONSTRAINT fk_kill_events_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INT PRIMARY KEY,
@@ -923,6 +944,132 @@ function createApi(pool, dialect) {
         params.push(Math.min(Math.floor(limitNum), 50));
       }
       return await exec(sql, params);
+    async recordKillEvent(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const occurredAt = normaliseDateTime(entry?.occurred_at ?? entry?.occurredAt) || normaliseDateTime(new Date());
+      const killerSteamId = trimOrNull(entry?.killer_steamid ?? entry?.killerSteamId);
+      const victimSteamId = trimOrNull(entry?.victim_steamid ?? entry?.victimSteamId);
+      const killerNameRaw = trimOrNull(entry?.killer_name ?? entry?.killerName);
+      const victimNameRaw = trimOrNull(entry?.victim_name ?? entry?.victimName);
+      const killerName = killerNameRaw ? killerNameRaw.slice(0, 190) : null;
+      const victimName = victimNameRaw ? victimNameRaw.slice(0, 190) : null;
+      const killerClanRaw = trimOrNull(entry?.killer_clan ?? entry?.killerClan);
+      const victimClanRaw = trimOrNull(entry?.victim_clan ?? entry?.victimClan);
+      const killerClan = killerClanRaw ? killerClanRaw.slice(0, 120) : null;
+      const victimClan = victimClanRaw ? victimClanRaw.slice(0, 120) : null;
+      const weaponRaw = trimOrNull(entry?.weapon);
+      const weapon = weaponRaw ? weaponRaw.slice(0, 190) : null;
+      const distanceRaw = Number(entry?.distance);
+      const distance = Number.isFinite(distanceRaw) ? distanceRaw : null;
+      const posXRaw = Number(entry?.pos_x ?? entry?.posX ?? entry?.position_x ?? entry?.positionX);
+      const posYRaw = Number(entry?.pos_y ?? entry?.posY ?? entry?.position_y ?? entry?.positionY);
+      const posZRaw = Number(entry?.pos_z ?? entry?.posZ ?? entry?.position_z ?? entry?.positionZ);
+      const posX = Number.isFinite(posXRaw) ? posXRaw : null;
+      const posY = Number.isFinite(posYRaw) ? posYRaw : null;
+      const posZ = Number.isFinite(posZRaw) ? posZRaw : null;
+      const rawLine = trimOrNull(entry?.raw);
+      let combatLogSerialized = null;
+      const combatPayload = entry?.combat_log ?? entry?.combatLog ?? entry?.combat_log_json ?? entry?.combatLogJson;
+      if (combatPayload != null) {
+        if (typeof combatPayload === 'string') {
+          combatLogSerialized = combatPayload.length > 8000 ? combatPayload.slice(0, 8000) : combatPayload;
+        } else {
+          try {
+            const json = JSON.stringify(combatPayload);
+            combatLogSerialized = json.length > 8000 ? json.slice(0, 8000) : json;
+          } catch {
+            combatLogSerialized = null;
+          }
+        }
+      }
+      const combatErrorRaw = trimOrNull(entry?.combat_log_error ?? entry?.combatLogError);
+      const combatLogError = combatErrorRaw ? combatErrorRaw.slice(0, 500) : null;
+      const createdAt = normaliseDateTime(entry?.created_at ?? entry?.createdAt) || normaliseDateTime(new Date());
+
+      const result = await exec(
+        `INSERT INTO kill_events(
+          server_id, occurred_at, killer_steamid, killer_name, killer_clan,
+          victim_steamid, victim_name, victim_clan, weapon, distance,
+          pos_x, pos_y, pos_z, raw, combat_log, combat_log_error, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          serverIdNum,
+          occurredAt,
+          killerSteamId || null,
+          killerName,
+          killerClan,
+          victimSteamId || null,
+          victimName,
+          victimClan,
+          weapon,
+          distance,
+          posX,
+          posY,
+          posZ,
+          rawLine,
+          combatLogSerialized,
+          combatLogError,
+          createdAt
+        ]
+      );
+
+      return {
+        id: result?.insertId ?? null,
+        server_id: serverIdNum,
+        occurred_at: occurredAt,
+        killer_steamid: killerSteamId || null,
+        killer_name: killerName,
+        killer_clan: killerClan,
+        victim_steamid: victimSteamId || null,
+        victim_name: victimName,
+        victim_clan: victimClan,
+        weapon,
+        distance,
+        pos_x: posX,
+        pos_y: posY,
+        pos_z: posZ,
+        raw: rawLine,
+        combat_log: combatLogSerialized,
+        combat_log_error: combatLogError,
+        created_at: createdAt
+      };
+    },
+    async listKillEvents(serverId, { limit = 200, since = null } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const params = [serverIdNum];
+      const conditions = ['server_id=?'];
+      const sinceDt = normaliseDateTime(since);
+      if (sinceDt) {
+        conditions.push('occurred_at >= ?');
+        params.push(sinceDt);
+      }
+      let sql = `SELECT id, server_id, occurred_at, killer_steamid, killer_name, killer_clan,
+                        victim_steamid, victim_name, victim_clan, weapon, distance,
+                        pos_x, pos_y, pos_z, raw, combat_log, combat_log_error, created_at
+                 FROM kill_events
+                 WHERE ${conditions.join(' AND ')}
+                 ORDER BY occurred_at DESC, id DESC`;
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 500));
+      }
+      return await exec(sql, params);
+    },
+    async purgeKillEvents({ before, server_id } = {}) {
+      const cutoff = normaliseDateTime(before);
+      if (!cutoff) return 0;
+      const params = [cutoff];
+      let sql = 'DELETE FROM kill_events WHERE occurred_at < ?';
+      const serverIdNum = Number(server_id);
+      if (Number.isFinite(serverIdNum)) {
+        sql += ' AND server_id=?';
+        params.push(serverIdNum);
+      }
+      const result = await exec(sql, params);
+      return result.affectedRows || 0;
     },
     async getUserSettings(userId){
       const rows = await exec('SELECT `key`,value FROM user_settings WHERE user_id=?',[userId]);

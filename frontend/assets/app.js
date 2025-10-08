@@ -141,6 +141,10 @@
   const f7ReportHistoryList = $('#f7ReportHistoryList');
   const f7ReportShowAll = $('#f7ReportShowAll');
   const f7ScopeButtons = Array.from(document.querySelectorAll('.reports-scope-btn'));
+  const killFeedList = $('#killFeedList');
+  const killFeedEmpty = $('#killFeedEmpty');
+  const killFeedLoading = $('#killFeedLoading');
+  const killFeedNotice = $('#killFeedNotice');
   const btnBackToDashboard = $('#btnBackToDashboard');
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
@@ -176,6 +180,8 @@
   const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
   const chatFilterButtons = Array.from(document.querySelectorAll('.chat-filter-btn'));
   const CHAT_REFRESH_INTERVAL_MS = 5000;
+  const KILL_FEED_REFRESH_INTERVAL_MS = 30000;
+  const KILL_FEED_RETENTION_MS = 24 * 60 * 60 * 1000;
   const DEFAULT_TEAM_CHAT_COLOR = '#3b82f6';
   const workspaceViewDefault = 'players';
   let activeWorkspaceView = workspaceViewDefault;
@@ -189,6 +195,13 @@
     profileRequests: new Map(),
     teamColors: new Map()
   };
+  const killFeedState = {
+    cache: new Map(),
+    lastFetched: new Map(),
+    loading: false,
+    error: null
+  };
+  let killFeedRefreshTimer = null;
 
   const f7State = {
     serverId: null,
@@ -861,6 +874,365 @@
       storeChatMessages(serverId, payload);
     } else {
       storeChatMessages(serverId, [payload]);
+    }
+  }
+
+  function normalizeKillEvent(raw, serverId) {
+    if (!raw) return null;
+    const resolvedServerId = Number(raw?.serverId ?? raw?.server_id ?? serverId);
+    if (!Number.isFinite(resolvedServerId)) return null;
+    const occurredRaw = raw?.occurredAt ?? raw?.occurred_at ?? raw?.createdAt ?? raw?.created_at;
+    const occurredDate = occurredRaw ? new Date(occurredRaw) : new Date();
+    if (Number.isNaN(occurredDate.getTime())) return null;
+
+    const toNumber = (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    let combatLog = raw?.combatLog ?? raw?.combat_log ?? raw?.combat_log_json ?? null;
+    if (typeof combatLog === 'string') {
+      try {
+        combatLog = JSON.parse(combatLog);
+      } catch {
+        const cleaned = combatLog.replace(/\r/g, '');
+        combatLog = {
+          text: cleaned,
+          lines: cleaned.split('\n').map((line) => line.trimEnd()).filter((line) => line)
+        };
+      }
+    }
+    if (combatLog && typeof combatLog === 'object') {
+      const lines = Array.isArray(combatLog.lines)
+        ? combatLog.lines.map((line) => String(line ?? '')).map((line) => line.replace(/\r/g, '')).filter((line) => line)
+        : typeof combatLog.text === 'string'
+          ? combatLog.text.replace(/\r/g, '').split('\n').map((line) => line.trimEnd()).filter((line) => line)
+          : [];
+      combatLog = {
+        text: typeof combatLog.text === 'string' ? combatLog.text : lines.join('\n'),
+        lines: lines.slice(0, 200),
+        fetchedAt: combatLog.fetchedAt || new Date().toISOString()
+      };
+    } else {
+      combatLog = null;
+    }
+
+    const position = {
+      x: toNumber(raw?.position?.x ?? raw?.pos_x ?? raw?.posX),
+      y: toNumber(raw?.position?.y ?? raw?.pos_y ?? raw?.posY),
+      z: toNumber(raw?.position?.z ?? raw?.pos_z ?? raw?.posZ)
+    };
+    const hasPosition = position.x != null || position.y != null || position.z != null;
+
+    return {
+      id: raw?.id ?? null,
+      serverId: resolvedServerId,
+      occurredAt: occurredDate.toISOString(),
+      killerSteamId: raw?.killerSteamId ?? raw?.killer_steamid ?? null,
+      killerName: raw?.killerName ?? raw?.killer_name ?? null,
+      killerClan: raw?.killerClan ?? raw?.killer_clan ?? null,
+      victimSteamId: raw?.victimSteamId ?? raw?.victim_steamid ?? null,
+      victimName: raw?.victimName ?? raw?.victim_name ?? null,
+      victimClan: raw?.victimClan ?? raw?.victim_clan ?? null,
+      weapon: raw?.weapon ?? null,
+      distance: toNumber(raw?.distance),
+      position: hasPosition ? position : null,
+      raw: raw?.raw ?? null,
+      combatLog,
+      combatLogError: raw?.combatLogError ?? raw?.combat_log_error ?? null,
+      createdAt: raw?.createdAt ?? raw?.created_at ?? occurredDate.toISOString()
+    };
+  }
+
+  function killEventSignature(entry) {
+    return [
+      entry.occurredAt,
+      entry.killerSteamId || '',
+      entry.victimSteamId || '',
+      entry.weapon || '',
+      entry.raw || ''
+    ].join('::');
+  }
+
+  function formatKillPlayerName(name, clan, fallbackId) {
+    const baseName = typeof name === 'string' && name.trim() ? name.trim() : (fallbackId ? `Steam ${fallbackId}` : 'Unknown');
+    return clan && clan.trim() ? `[${clan.trim()}] ${baseName}` : baseName;
+  }
+
+  function formatKillPosition(position) {
+    if (!position) return null;
+    const coords = ['x', 'y', 'z'].map((axis) => {
+      const value = position[axis];
+      return Number.isFinite(value) ? Number(value).toFixed(1) : '—';
+    });
+    if (coords.every((value) => value === '—')) return null;
+    return `(${coords.join(', ')})`;
+  }
+
+  function storeKillEvents(serverId, entries, { replace = false } = {}) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return;
+    const previous = killFeedState.cache.get(numeric) || [];
+    const list = replace ? [] : [...previous];
+    const seen = new Set(list.map((entry) => killEventSignature(entry)));
+    for (const raw of Array.isArray(entries) ? entries : []) {
+      const normalized = normalizeKillEvent(raw, numeric);
+      if (!normalized) continue;
+      const signature = killEventSignature(normalized);
+      if (seen.has(signature)) continue;
+      list.push(normalized);
+      seen.add(signature);
+    }
+    list.sort((a, b) => {
+      const aTime = Date.parse(a.occurredAt || a.createdAt || '');
+      const bTime = Date.parse(b.occurredAt || b.createdAt || '');
+      if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
+      return 0;
+    });
+    const cutoff = Date.now() - KILL_FEED_RETENTION_MS;
+    const filtered = list.filter((entry) => {
+      const ts = Date.parse(entry.occurredAt || entry.createdAt || '');
+      return Number.isFinite(ts) ? ts >= cutoff : true;
+    }).slice(0, 300);
+    killFeedState.cache.set(numeric, filtered);
+    killFeedState.lastFetched.set(numeric, Date.now());
+    if (numeric === state.currentServerId) renderKillFeed();
+  }
+
+  function renderKillFeed() {
+    if (!killFeedList) return;
+    const serverId = state.currentServerId;
+    const hasServer = Number.isFinite(serverId);
+    const records = hasServer ? (killFeedState.cache.get(serverId) || []) : [];
+    const loadingVisible = killFeedState.loading && hasServer;
+    if (killFeedLoading) killFeedLoading.classList.toggle('hidden', !loadingVisible);
+    if (killFeedNotice) {
+      if (killFeedState.error && hasServer) {
+        showNotice(killFeedNotice, killFeedState.error, 'error');
+      } else {
+        hideNotice(killFeedNotice);
+      }
+    }
+    if (!records.length) {
+      if (killFeedList) {
+        killFeedList.innerHTML = '';
+        killFeedList.classList.add('hidden');
+      }
+      if (killFeedEmpty) {
+        if (!hasServer) {
+          killFeedEmpty.textContent = 'Select a server to view the kill feed.';
+        } else if (!loadingVisible) {
+          killFeedEmpty.textContent = 'No kills recorded in the last 24 hours.';
+        }
+        killFeedEmpty.classList.remove('hidden');
+      }
+      return;
+    }
+    killFeedEmpty?.classList.add('hidden');
+    killFeedList.classList.remove('hidden');
+    killFeedList.innerHTML = '';
+
+    records.forEach((entry, index) => {
+      const li = document.createElement('li');
+      li.className = 'kill-feed-entry';
+      const details = document.createElement('details');
+      if (index === 0) details.open = true;
+
+      const summary = document.createElement('summary');
+      summary.className = 'kill-feed-summary';
+
+      const line = document.createElement('div');
+      line.className = 'kill-feed-summary-line';
+
+      const timeInfo = formatChatTimestamp(entry.occurredAt || entry.createdAt);
+      if (timeInfo) {
+        const timeEl = document.createElement('time');
+        timeEl.className = 'kill-feed-time';
+        timeEl.dateTime = timeInfo.iso;
+        timeEl.textContent = timeInfo.label;
+        timeEl.title = timeInfo.title;
+        line.appendChild(timeEl);
+      }
+
+      const killerEl = document.createElement('span');
+      killerEl.className = 'kill-feed-player killer';
+      killerEl.textContent = formatKillPlayerName(entry.killerName, entry.killerClan, entry.killerSteamId);
+      line.appendChild(killerEl);
+
+      const arrowEl = document.createElement('span');
+      arrowEl.className = 'kill-feed-arrow';
+      arrowEl.textContent = '→';
+      line.appendChild(arrowEl);
+
+      const victimEl = document.createElement('span');
+      victimEl.className = 'kill-feed-player victim';
+      victimEl.textContent = formatKillPlayerName(entry.victimName, entry.victimClan, entry.victimSteamId);
+      line.appendChild(victimEl);
+
+      summary.appendChild(line);
+
+      const summaryMeta = document.createElement('div');
+      summaryMeta.className = 'kill-feed-summary-meta';
+      if (entry.weapon) {
+        const weaponEl = document.createElement('span');
+        weaponEl.textContent = entry.weapon;
+        summaryMeta.appendChild(weaponEl);
+      }
+      if (entry.distance != null) {
+        const distanceEl = document.createElement('span');
+        const distanceValue = Number(entry.distance);
+        distanceEl.textContent = Number.isFinite(distanceValue)
+          ? `${distanceValue.toFixed(1)} m`
+          : `${entry.distance}`;
+        summaryMeta.appendChild(distanceEl);
+      }
+      const posLabel = formatKillPosition(entry.position);
+      if (posLabel) {
+        const posEl = document.createElement('span');
+        posEl.textContent = posLabel;
+        summaryMeta.appendChild(posEl);
+      }
+      if (summaryMeta.childElementCount > 0) summary.appendChild(summaryMeta);
+
+      details.appendChild(summary);
+
+      const detailBody = document.createElement('div');
+      detailBody.className = 'kill-feed-detail';
+
+      const metaGrid = document.createElement('div');
+      metaGrid.className = 'kill-feed-meta';
+
+      const metaItems = [
+        { label: 'Killer Steam ID', value: entry.killerSteamId || '—' },
+        { label: 'Victim Steam ID', value: entry.victimSteamId || '—' },
+        { label: 'Weapon', value: entry.weapon || '—' },
+        { label: 'Distance', value: entry.distance != null && Number.isFinite(Number(entry.distance)) ? `${Number(entry.distance).toFixed(1)} m` : '—' },
+        { label: 'Location', value: formatKillPosition(entry.position) || '—' }
+      ];
+
+      if (entry.raw) {
+        metaItems.push({ label: 'Raw log', value: entry.raw });
+      }
+
+      metaItems.forEach((item) => {
+        const itemEl = document.createElement('div');
+        itemEl.className = 'kill-feed-meta-item';
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = item.label;
+        const value = document.createElement('span');
+        value.className = 'value';
+        value.textContent = item.value;
+        itemEl.append(label, value);
+        metaGrid.appendChild(itemEl);
+      });
+
+      detailBody.appendChild(metaGrid);
+
+      if (entry.combatLog) {
+        const logWrap = document.createElement('div');
+        logWrap.className = 'kill-feed-combatlog';
+        const heading = document.createElement('h4');
+        heading.textContent = 'Combat log';
+        const pre = document.createElement('pre');
+        const lines = Array.isArray(entry.combatLog.lines) && entry.combatLog.lines.length
+          ? entry.combatLog.lines.join('\n')
+          : (entry.combatLog.text || 'No combat log entries.');
+        pre.textContent = lines;
+        logWrap.append(heading, pre);
+        detailBody.appendChild(logWrap);
+      } else if (entry.combatLogError) {
+        const logWrap = document.createElement('div');
+        logWrap.className = 'kill-feed-combatlog';
+        const heading = document.createElement('h4');
+        heading.textContent = 'Combat log';
+        const notice = document.createElement('p');
+        notice.className = 'notice small';
+        notice.textContent = entry.combatLogError;
+        logWrap.append(heading, notice);
+        detailBody.appendChild(logWrap);
+      }
+
+      details.appendChild(detailBody);
+      li.appendChild(details);
+      killFeedList.appendChild(li);
+    });
+  }
+
+  function clearKillFeedRefreshTimer() {
+    if (killFeedRefreshTimer) {
+      clearInterval(killFeedRefreshTimer);
+      killFeedRefreshTimer = null;
+    }
+  }
+
+  function scheduleKillFeedRefresh(serverId) {
+    clearKillFeedRefreshTimer();
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return;
+    if (!hasServerCapability('console')) return;
+    killFeedRefreshTimer = setInterval(() => {
+      if (state.currentServerId !== numeric) {
+        clearKillFeedRefreshTimer();
+        return;
+      }
+      if (!hasServerCapability('console')) {
+        clearKillFeedRefreshTimer();
+        return;
+      }
+      refreshKillFeedForServer(numeric).catch(() => {});
+    }, KILL_FEED_REFRESH_INTERVAL_MS);
+  }
+
+  async function refreshKillFeedForServer(serverId, { force = false } = {}) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return;
+    if (!hasServerCapability('console')) return;
+    const now = Date.now();
+    const last = killFeedState.lastFetched.get(numeric) || 0;
+    if (!force && killFeedState.cache.has(numeric) && now - last < KILL_FEED_REFRESH_INTERVAL_MS) {
+      killFeedState.loading = false;
+      if (numeric === state.currentServerId) renderKillFeed();
+      return;
+    }
+    killFeedState.loading = true;
+    if (numeric === state.currentServerId) renderKillFeed();
+    try {
+      const since = new Date(now - KILL_FEED_RETENTION_MS).toISOString();
+      const data = await api(`/servers/${numeric}/kills?limit=200&since=${encodeURIComponent(since)}`);
+      const events = Array.isArray(data?.events) ? data.events : [];
+      storeKillEvents(numeric, events, { replace: true });
+      killFeedState.error = null;
+      killFeedState.lastFetched.set(numeric, now);
+    } catch (err) {
+      killFeedState.error = describeError(err);
+      if (errorCode(err) === 'unauthorized') {
+        handleUnauthorized();
+      } else {
+        ui.log('Failed to load kill feed: ' + describeError(err));
+      }
+    } finally {
+      killFeedState.loading = false;
+      if (numeric === state.currentServerId) renderKillFeed();
+    }
+  }
+
+  function handleIncomingKill(payload) {
+    if (!payload) return;
+    const serverId = Number(payload?.serverId ?? payload?.server_id ?? state.currentServerId);
+    if (!Number.isFinite(serverId)) return;
+    if (payload?.event) {
+      storeKillEvents(serverId, [payload.event]);
+    } else if (Array.isArray(payload?.events)) {
+      storeKillEvents(serverId, payload.events);
+    } else if (Array.isArray(payload)) {
+      storeKillEvents(serverId, payload);
+    } else if (payload && typeof payload === 'object') {
+      storeKillEvents(serverId, [payload]);
+    }
+    if (serverId === state.currentServerId) {
+      killFeedState.error = null;
+      renderKillFeed();
     }
   }
 
@@ -2484,12 +2856,16 @@
     }
     moduleBus.emit('server:disconnected', { serverId: previous, reason });
     clearChatRefreshTimer();
+    clearKillFeedRefreshTimer();
+    killFeedState.loading = false;
+    killFeedState.error = null;
     state.currentServerId = null;
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
     emitWorkspaceEvent('workspace:server-cleared', { reason });
     resetF7Reports();
     highlightSelectedServer();
     renderChatMessages();
+    renderKillFeed();
   }
 
   function coerceNumber(value) {
@@ -2791,6 +3167,8 @@
     });
     socket.on('f7-report', (payload) => {
       handleIncomingF7Report(payload);
+    socket.on('kill', (payload) => {
+      handleIncomingKill(payload);
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
@@ -3280,8 +3658,11 @@
       if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
       emitWorkspaceEvent('workspace:server-selected', { serverId: numericId, repeat: true });
       renderChatMessages();
+      renderKillFeed();
       refreshChatForServer(numericId).catch(() => {});
       scheduleChatRefresh(numericId);
+      refreshKillFeedForServer(numericId).catch(() => {});
+      scheduleKillFeedRefresh(numericId);
       return;
     }
     if (previous != null && previous !== numericId) {
@@ -3299,6 +3680,17 @@
     highlightSelectedServer();
     ui.clearConsole();
     renderChatMessages();
+    moduleBus.emit('server:disconnected', { serverId: previous, reason: 'switch' });
+  }
+  clearChatRefreshTimer();
+  clearKillFeedRefreshTimer();
+  state.currentServerId = numericId;
+  if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
+  emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
+  highlightSelectedServer();
+  ui.clearConsole();
+  renderChatMessages();
+  renderKillFeed();
     const name = entry?.data?.name || `Server #${numericId}`;
     const consoleAccess = hasServerCapability('console');
     ui.log(`${consoleAccess ? 'Connecting to' : 'Opening'} ${name}...`);
@@ -3309,9 +3701,11 @@
     showWorkspaceForServer(numericId);
     moduleBus.emit('server:connected', { serverId: numericId, server: entry?.data || null });
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
-    refreshChatForServer(numericId, { force: true }).catch(() => {});
-    scheduleChatRefresh(numericId);
-  }
+  refreshChatForServer(numericId, { force: true }).catch(() => {});
+  scheduleChatRefresh(numericId);
+  refreshKillFeedForServer(numericId, { force: true }).catch(() => {});
+  scheduleKillFeedRefresh(numericId);
+}
 
   const ui = {
     showLogin() {
@@ -3514,6 +3908,12 @@
     chatState.teamColors.clear();
     resetF7Reports();
     renderChatMessages();
+    clearKillFeedRefreshTimer();
+    killFeedState.cache.clear();
+    killFeedState.lastFetched.clear();
+    killFeedState.loading = false;
+    killFeedState.error = null;
+    renderKillFeed();
     ui.showLogin();
     loadPublicConfig();
     moduleBus.emit('auth:logout');

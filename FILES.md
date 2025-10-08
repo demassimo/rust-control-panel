@@ -14,7 +14,7 @@ This document summarizes the purpose of the key files and directories that make 
 ## Backend service (`backend/`)
 - `package.json` / `package-lock.json` – Declare backend runtime dependencies (Express, Socket.IO, sqlite/mysql clients, Discord SDK) and start scripts.
 - `Dockerfile` – Produces a container image for the backend with Node.js 18, copying the source and installing dependencies.
-- `src/index.js` – Entry point that boots Express, attaches Socket.IO, seeds the database, manages RCON sessions, persists chat history, exposes REST APIs, and streams live server data to clients.【F:backend/src/index.js†L1-L121】
+- `src/index.js` – Entry point that boots Express, attaches Socket.IO, seeds the database, manages RCON sessions, persists chat history, streams kill-feed events, exposes REST APIs, and streams live server data to clients.【F:backend/src/index.js†L1-L121】【F:backend/src/index.js†L708-L846】【F:backend/src/index.js†L2934-L3052】
 - `src/auth.js` – JWT-based authentication helpers used by HTTP routes and WebSocket handshakes, including middleware for enforcing admin access.【F:backend/src/auth.js†L1-L36】
 - `src/permissions.js` – Normalises role definitions, checks per-server capabilities, filters data by access level, and serialises permission payloads.【F:backend/src/permissions.js†L1-L120】
 - `src/db/index.js` – Chooses the configured database driver (SQLite or MySQL), ensures schema migrations, seeds default roles, and provisions the first admin account.【F:backend/src/db/index.js†L1-L63】
@@ -26,7 +26,7 @@ This document summarizes the purpose of the key files and directories that make 
 
 ## Frontend assets (`frontend/`)
 - `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI.
-- `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, chat history rendering, and orchestrates dynamic modules within the dashboard.【F:frontend/assets/app.js†L1-L80】
+- `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, chat and kill feed rendering, and orchestrates dynamic modules within the dashboard.【F:frontend/assets/app.js†L1-L80】【F:frontend/assets/app.js†L958-L1174】
 - `assets/styles.css` – Core stylesheet for layout, dashboard panels, and responsive styling.
 - `assets/css/dark-theme.css` – Overrides enabling a dark theme presentation for the control panel.
 - `assets/js/server-settings.js` – Client-side logic for updating server configuration, credentials, and map metadata from the settings panel.
