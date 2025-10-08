@@ -342,6 +342,109 @@ export function parseF7ReportLine(line) {
   if (typeof line !== 'string') return null;
   const stripped = stripRconTimestampPrefix(stripAnsiSequences(line)).trim();
   if (!stripped) return null;
+
+  const jsonCandidate = (() => {
+    let working = stripped.replace(/^f7\s*report\s*[:\-]\s*/i, '').trim();
+    if (!working.includes('{')) return null;
+    const firstBrace = working.indexOf('{');
+    const lastBrace = working.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace <= firstBrace) return null;
+    const payloadText = working.slice(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(payloadText);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (err) {
+      return null;
+    }
+    return null;
+  })();
+
+  if (jsonCandidate) {
+    const pick = (...keys) => {
+      for (const key of keys) {
+        const value = jsonCandidate[key];
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          if (trimmed) return trimmed;
+        } else if (typeof value === 'number' && Number.isFinite(value)) {
+          return String(value);
+        }
+      }
+      return null;
+    };
+
+    const reporterSteamId = sanitiseSteamId(
+      jsonCandidate.PlayerId
+      ?? jsonCandidate.PlayerID
+      ?? jsonCandidate.ReporterId
+      ?? jsonCandidate.ReporterID
+      ?? jsonCandidate.playerId
+      ?? jsonCandidate.playerID
+      ?? jsonCandidate.reporterId
+      ?? jsonCandidate.reporterID
+    );
+    const reporterName = trimOrNull(pick('PlayerName', 'ReporterName', 'playerName', 'reporterName', 'SourceName', 'sourceName'));
+    const targetSteamId = sanitiseSteamId(
+      jsonCandidate.TargetId
+      ?? jsonCandidate.TargetID
+      ?? jsonCandidate.TargetSteamId
+      ?? jsonCandidate.TargetSteamID
+      ?? jsonCandidate.targetId
+      ?? jsonCandidate.targetID
+      ?? jsonCandidate.targetSteamId
+      ?? jsonCandidate.targetSteamID
+    );
+    const targetName = trimOrNull(pick('TargetName', 'targetName'));
+    const subject = trimOrNull(pick('Subject', 'subject', 'Title', 'title'));
+    const type = trimOrNull(pick('Type', 'type', 'Category', 'category'));
+    const message = trimOrNull(pick('Message', 'message'));
+    const timestamp = normaliseTimestamp(
+      jsonCandidate.Timestamp
+      ?? jsonCandidate.timestamp
+      ?? jsonCandidate.Time
+      ?? jsonCandidate.time
+      ?? jsonCandidate.CreatedAt
+      ?? jsonCandidate.createdAt
+      ?? jsonCandidate.Date
+      ?? jsonCandidate.date
+    );
+    const reportId = trimOrNull(pick('ReportId', 'reportId', 'Id', 'ID', 'id'));
+
+    let category = type || null;
+    if (!category && subject) {
+      const bracketMatch = subject.match(/^\s*\[([^\]]+)\]/);
+      if (bracketMatch) category = trimOrNull(bracketMatch[1]);
+    }
+    if (!category && subject) category = subject;
+
+    let derivedMessage = message || null;
+    if (!derivedMessage && subject) {
+      const withoutPrefix = subject.replace(/^\s*\[[^\]]*\]\s*/, '').trim();
+      derivedMessage = withoutPrefix || subject;
+    }
+    if (!derivedMessage && category) derivedMessage = category;
+
+    if (!reportId && !reporterSteamId && !targetSteamId) {
+      return null;
+    }
+
+    const finalMessage = typeof derivedMessage === 'string' ? trimOrNull(derivedMessage) : null;
+
+    return {
+      raw: stripped,
+      reportId: reportId || null,
+      reporterName,
+      reporterSteamId,
+      targetName,
+      targetSteamId,
+      category,
+      message: finalMessage,
+      timestamp: timestamp || null
+    };
+  }
+
   const lowered = stripped.toLowerCase();
   if (!lowered.includes('f7') || !lowered.includes('report')) return null;
 
