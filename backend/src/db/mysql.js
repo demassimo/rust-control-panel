@@ -215,6 +215,7 @@ function createApi(pool, dialect) {
         INDEX idx_f7_server_time (server_id, created_at),
         INDEX idx_f7_target (server_id, target_steamid, created_at),
         CONSTRAINT fk_f7_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS kill_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         server_id INT NOT NULL,
