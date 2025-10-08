@@ -65,7 +65,8 @@ import {
   parseServerInfoMessage,
   parseChatMessage,
   stripAnsiSequences,
-  stripRconTimestampPrefix
+  stripRconTimestampPrefix,
+  parseF7ReportLine
 } from './rcon-parsers.js';
 
 const mapImageUpload = multer({
@@ -348,6 +349,29 @@ function projectRole(row) {
     permissions: normaliseRolePermissions(row.permissions, row.key),
     created_at: row.created_at,
     updated_at: row.updated_at
+  };
+}
+
+function projectF7Report(row, fallback = {}) {
+  const source = row || {};
+  const base = fallback || {};
+  const idCandidate = Number(source.id ?? base.id);
+  const serverIdCandidate = Number(source.server_id ?? source.serverId ?? base.serverId);
+  const createdAt = source.created_at || source.createdAt || base.createdAt || new Date().toISOString();
+  const updatedAt = source.updated_at || source.updatedAt || createdAt;
+  return {
+    id: Number.isFinite(idCandidate) ? idCandidate : null,
+    serverId: Number.isFinite(serverIdCandidate) ? serverIdCandidate : null,
+    reportId: source.report_id ?? source.reportId ?? base.reportId ?? null,
+    reporterSteamId: source.reporter_steamid ?? source.reporterSteamId ?? base.reporterSteamId ?? null,
+    reporterName: source.reporter_name ?? source.reporterName ?? base.reporterName ?? null,
+    targetSteamId: source.target_steamid ?? source.targetSteamId ?? base.targetSteamId ?? null,
+    targetName: source.target_name ?? source.targetName ?? base.targetName ?? null,
+    category: source.category ?? base.category ?? null,
+    message: source.message ?? base.message ?? null,
+    raw: source.raw ?? base.raw ?? null,
+    createdAt,
+    updatedAt
   };
 }
 
@@ -723,6 +747,8 @@ const CHAT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const CHAT_PURGE_INTERVAL_MS = 10 * 60 * 1000;
 const chatCleanupSchedule = new Map();
 let globalChatCleanupPromise = null;
+const F7_REPORT_NEW_WINDOW_MS = 24 * 60 * 60 * 1000;
+const F7_RECENT_HISTORY_LIMIT = 3;
 
 const KILL_FEED_RETENTION_MS = 24 * 60 * 60 * 1000;
 const KILL_FEED_PURGE_INTERVAL_MS = 15 * 60 * 1000;
@@ -813,8 +839,11 @@ function ensureRconBinding(row) {
     },
     console: (line) => {
       const cleanLine = typeof line === 'string' ? line.replace(ANSI_COLOR_REGEX, '') : '';
-      if (cleanLine) handlePlayerConnectionLine(key, cleanLine);
       if (cleanLine) {
+        handlePlayerConnectionLine(key, cleanLine);
+        handleF7ReportLine(key, cleanLine).catch((err) => {
+          console.warn('f7 report dispatch failed', err);
+        });
         handleKillFeedLine(key, cleanLine).catch((err) => {
           console.warn('kill feed dispatch failed', err);
         });
@@ -953,6 +982,44 @@ async function handleChatMessage(serverId, line, payload) {
 
   io.to(`srv:${key}`).emit('chat', { serverId: key, message: eventPayload });
   maybeCleanupChatHistory(key);
+}
+
+async function handleF7ReportLine(serverId, line) {
+  const numericId = Number(serverId);
+  if (!Number.isFinite(numericId)) return;
+  const parsed = parseF7ReportLine(line);
+  if (!parsed) return;
+
+  const record = {
+    server_id: numericId,
+    report_id: parsed.reportId || null,
+    reporter_steamid: parsed.reporterSteamId || null,
+    reporter_name: parsed.reporterName || null,
+    target_steamid: parsed.targetSteamId || null,
+    target_name: parsed.targetName || null,
+    category: parsed.category || null,
+    message: parsed.message || null,
+    raw: parsed.raw || line,
+    created_at: parsed.timestamp || null
+  };
+
+  let stored = null;
+  if (typeof db?.recordF7Report === 'function') {
+    try {
+      stored = await db.recordF7Report(record);
+    } catch (err) {
+      console.warn('Failed to record F7 report', err);
+    }
+  }
+
+  const fallback = {
+    ...record,
+    serverId: numericId,
+    createdAt: record.created_at || new Date().toISOString()
+  };
+  const payload = projectF7Report(stored, fallback);
+  if (!payload) return;
+  io.to(`srv:${numericId}`).emit('f7-report', payload);
 }
 
 function runGlobalChatCleanup() {
@@ -4921,6 +4988,77 @@ app.get('/api/servers/:id/status', auth, (req, res) => {
   const status = statusMap.get(id);
   if (!status) return res.status(404).json({ error: 'not_found' });
   res.json(status);
+});
+
+app.get('/api/servers/:id/f7-reports', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  const rawScope = typeof req.query?.scope === 'string' ? req.query.scope.toLowerCase() : 'new';
+  const scope = rawScope === 'all' ? 'all' : 'new';
+  const limitParam = Number(req.query?.limit);
+  const defaultLimit = scope === 'all' ? 100 : 25;
+  const maxLimit = scope === 'all' ? 200 : 50;
+  const limit = Number.isFinite(limitParam) && limitParam > 0
+    ? Math.min(Math.max(Math.floor(limitParam), 1), maxLimit)
+    : defaultLimit;
+  const options = { limit };
+  if (scope === 'new') {
+    options.since = new Date(Date.now() - F7_REPORT_NEW_WINDOW_MS).toISOString();
+  } else if (typeof req.query?.since === 'string' && req.query.since.trim()) {
+    const sinceDate = new Date(req.query.since);
+    if (!Number.isNaN(sinceDate.valueOf())) options.since = sinceDate.toISOString();
+  }
+  try {
+    if (typeof db?.listF7Reports !== 'function') {
+      return res.json({ scope, reports: [] });
+    }
+    const rows = await db.listF7Reports(id, options);
+    const reports = Array.isArray(rows) ? rows.map((row) => projectF7Report(row, { serverId: id })) : [];
+    res.json({ scope, reports });
+  } catch (err) {
+    console.error('failed to list f7 reports', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/f7-reports/:reportId', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  const reportId = Number(req.params?.reportId);
+  if (!Number.isFinite(reportId)) {
+    res.status(400).json({ error: 'invalid_report' });
+    return;
+  }
+  if (typeof db?.getF7ReportById !== 'function') {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+  try {
+    const row = await db.getF7ReportById(id, reportId);
+    if (!row) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const report = projectF7Report(row, { serverId: id });
+    let history = [];
+    if (row?.target_steamid && typeof db?.listF7ReportsForTarget === 'function') {
+      try {
+        const related = await db.listF7ReportsForTarget(id, row.target_steamid, {
+          limit: F7_RECENT_HISTORY_LIMIT,
+          excludeId: row.id
+        });
+        if (Array.isArray(related)) {
+          history = related.map((entry) => projectF7Report(entry, { serverId: id }));
+        }
+      } catch (err) {
+        console.warn('failed to load related f7 reports', err);
+      }
+    }
+    res.json({ report, recentForTarget: history });
+  } catch (err) {
+    console.error('failed to load f7 report', err);
+    res.status(500).json({ error: 'db_error' });
+  }
 });
 
 app.get('/api/servers/:id/map-state', auth, async (req, res) => {
