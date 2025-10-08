@@ -3128,6 +3128,9 @@
         const baseThreshold = usePixelDistance
           ? Math.max(CLUSTER_THRESHOLD_PX, Math.min(overlayWidth, overlayHeight) * 0.04)
           : CLUSTER_THRESHOLD_PERCENT;
+        const threshold = zoomScale >= CLUSTER_DISABLE_SCALE
+          ? -1
+          : baseThreshold / zoomScale;
 
         let threshold;
         if (zoomScale >= CLUSTER_DISABLE_SCALE) {
