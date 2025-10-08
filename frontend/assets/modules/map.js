@@ -1174,6 +1174,7 @@
         } else {
           applyMapTransform();
         }
+        renderMarkers();
       }
 
       function handleWheel(event) {
@@ -3120,9 +3121,31 @@
         const usePixelDistance = Number.isFinite(overlayWidth) && Number.isFinite(overlayHeight);
         const CLUSTER_THRESHOLD_PX = 32;
         const CLUSTER_THRESHOLD_PERCENT = 2.2;
-        const threshold = usePixelDistance
+        const CLUSTER_FADE_START_SCALE = 1.2;
+        const CLUSTER_DISABLE_SCALE = 1.55;
+        const MIN_CLUSTER_MULTIPLIER = 0.08;
+        const zoomScale = Math.max(1, mapInteractions.scale || 1);
+        const baseThreshold = usePixelDistance
           ? Math.max(CLUSTER_THRESHOLD_PX, Math.min(overlayWidth, overlayHeight) * 0.04)
           : CLUSTER_THRESHOLD_PERCENT;
+
+        let threshold;
+        if (zoomScale >= CLUSTER_DISABLE_SCALE) {
+          threshold = -1;
+        } else {
+          const zoomAdjustedBase = baseThreshold / Math.pow(zoomScale, 1.25);
+          if (zoomScale <= CLUSTER_FADE_START_SCALE) {
+            threshold = zoomAdjustedBase;
+          } else {
+            const fadeRange = CLUSTER_DISABLE_SCALE - CLUSTER_FADE_START_SCALE;
+            const fadeProgress = fadeRange > 0
+              ? clamp((zoomScale - CLUSTER_FADE_START_SCALE) / fadeRange, 0, 1)
+              : 1;
+            const eased = 1 - Math.pow(1 - fadeProgress, 2);
+            const multiplier = (1 - eased) + (MIN_CLUSTER_MULTIPLIER * eased);
+            threshold = zoomAdjustedBase * multiplier;
+          }
+        }
 
         const clusters = [];
         const removeKeys = [];
