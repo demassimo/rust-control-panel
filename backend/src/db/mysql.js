@@ -945,6 +945,7 @@ function createApi(pool, dialect) {
         params.push(Math.min(Math.floor(limitNum), 50));
       }
       return await exec(sql, params);
+    },
     async recordKillEvent(entry = {}) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
       if (!Number.isFinite(serverIdNum)) return null;
