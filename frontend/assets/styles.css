@@ -1599,6 +1599,152 @@ button.chat-filter-btn:focus-visible {
   padding: 8px 0;
 }
 
+.kill-feed-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.kill-feed-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.kill-feed-loading,
+.kill-feed-empty {
+  margin: 0;
+  padding: 36px 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.kill-feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.kill-feed-entry details {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kill-feed-entry details[open] {
+  border-color: rgba(244, 63, 94, 0.4);
+  box-shadow: 0 24px 46px rgba(244, 63, 94, 0.25);
+}
+
+.kill-feed-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.kill-feed-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-weight: 600;
+}
+
+.kill-feed-arrow {
+  opacity: 0.65;
+}
+
+.kill-feed-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.kill-feed-time {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.kill-feed-player {
+  font-weight: 600;
+}
+
+.kill-feed-player.killer {
+  color: var(--accent-strong);
+}
+
+.kill-feed-player.victim {
+  color: var(--muted-strong);
+}
+
+.kill-feed-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin: 0.75rem 0 0;
+}
+
+.kill-feed-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.kill-feed-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.kill-feed-meta-item .label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.kill-feed-meta-item .value {
+  font-weight: 600;
+}
+
+.kill-feed-combatlog {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.kill-feed-combatlog h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted-strong);
+}
+
+.kill-feed-combatlog pre {
+  margin: 0;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  max-height: 240px;
+  overflow: auto;
+}
+
 .summary-card {
   padding: 16px;
   border-radius: var(--radius-md);
