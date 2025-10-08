@@ -170,6 +170,24 @@ function createApi(dbh, dialect) {
       );
       CREATE INDEX IF NOT EXISTS idx_chat_messages_server_time ON chat_messages(server_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_channel ON chat_messages(server_id, channel, created_at);
+      CREATE TABLE IF NOT EXISTS f7_reports(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL,
+        report_id TEXT,
+        reporter_steamid TEXT,
+        reporter_name TEXT,
+        target_steamid TEXT,
+        target_name TEXT,
+        category TEXT,
+        message TEXT,
+        raw TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE,
+        UNIQUE(server_id, report_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_f7_reports_server_time ON f7_reports(server_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_f7_reports_target ON f7_reports(server_id, target_steamid, created_at);
       CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INTEGER PRIMARY KEY,
         bot_token TEXT,
@@ -197,6 +215,26 @@ function createApi(dbh, dialect) {
       if (!chatCols.some((c) => c.name === 'color')) {
         await dbh.run("ALTER TABLE chat_messages ADD COLUMN color TEXT");
       }
+      await dbh.exec(`
+        CREATE TABLE IF NOT EXISTS f7_reports(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          server_id INTEGER NOT NULL,
+          report_id TEXT,
+          reporter_steamid TEXT,
+          reporter_name TEXT,
+          target_steamid TEXT,
+          target_name TEXT,
+          category TEXT,
+          message TEXT,
+          raw TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE,
+          UNIQUE(server_id, report_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_f7_reports_server_time ON f7_reports(server_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_f7_reports_target ON f7_reports(server_id, target_steamid, created_at);
+      `);
       const serverCols = await dbh.all("PRAGMA table_info('servers')");
       if (!serverCols.some((c) => c.name === 'team_id')) {
         await dbh.run('ALTER TABLE servers ADD COLUMN team_id INTEGER');
@@ -839,6 +877,142 @@ function createApi(dbh, dialect) {
       }
       const result = await dbh.run(sql, params);
       return result.changes || 0;
+    },
+    async recordF7Report(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const raw = trimOrNull(entry?.raw);
+      if (!raw) return null;
+      const nowIso = new Date().toISOString();
+      const createdAt = normaliseIso(entry?.created_at) || nowIso;
+      const updatedAt = normaliseIso(entry?.updated_at) || nowIso;
+      const reportId = trimOrNull(entry?.report_id ?? entry?.reportId);
+      const reporterSteam = trimOrNull(entry?.reporter_steamid ?? entry?.reporterSteamId);
+      const targetSteam = trimOrNull(entry?.target_steamid ?? entry?.targetSteamId);
+      const reporterNameRaw = trimOrNull(entry?.reporter_name ?? entry?.reporterName);
+      const targetNameRaw = trimOrNull(entry?.target_name ?? entry?.targetName);
+      const categoryRaw = trimOrNull(entry?.category);
+      const messageRaw = trimOrNull(entry?.message);
+      const reporterName = reporterNameRaw ? reporterNameRaw.slice(0, 190) : null;
+      const targetName = targetNameRaw ? targetNameRaw.slice(0, 190) : null;
+      const category = categoryRaw ? categoryRaw.slice(0, 190) : null;
+      const message = messageRaw && messageRaw.length > 4000 ? messageRaw.slice(0, 4000) : messageRaw;
+      const sql = `
+        INSERT INTO f7_reports(
+          server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(server_id, report_id) DO UPDATE SET
+          reporter_steamid = COALESCE(excluded.reporter_steamid, reporter_steamid),
+          reporter_name = COALESCE(excluded.reporter_name, reporter_name),
+          target_steamid = COALESCE(excluded.target_steamid, target_steamid),
+          target_name = COALESCE(excluded.target_name, target_name),
+          category = COALESCE(excluded.category, category),
+          message = COALESCE(excluded.message, message),
+          raw = excluded.raw,
+          created_at = CASE
+            WHEN report_id IS NULL OR excluded.created_at < created_at THEN excluded.created_at
+            ELSE created_at
+          END,
+          updated_at = excluded.updated_at
+      `;
+      await dbh.run(sql, [
+        serverIdNum,
+        reportId || null,
+        reporterSteam || null,
+        reporterName,
+        targetSteam || null,
+        targetName,
+        category,
+        message || null,
+        raw,
+        createdAt,
+        updatedAt
+      ]);
+
+      let row = null;
+      if (reportId) {
+        row = await dbh.get(`
+          SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+          FROM f7_reports
+          WHERE server_id=? AND report_id=?
+        `, [serverIdNum, reportId]);
+      }
+      if (!row) {
+        const latest = await dbh.get('SELECT last_insert_rowid() AS id');
+        if (latest?.id) {
+          row = await dbh.get(`
+            SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+            FROM f7_reports
+            WHERE id=?
+          `, [latest.id]);
+        }
+      }
+      if (!row) {
+        row = await dbh.get(`
+          SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+          FROM f7_reports
+          WHERE server_id=?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `, [serverIdNum]);
+      }
+      return row;
+    },
+    async listF7Reports(serverId, { since = null, limit = 50 } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const conditions = ['server_id=?'];
+      const params = [serverIdNum];
+      const sinceIso = normaliseIso(since);
+      if (sinceIso) {
+        conditions.push('created_at >= ?');
+        params.push(sinceIso);
+      }
+      let sql = `
+        SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        FROM f7_reports
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+      `;
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 200));
+      }
+      return await dbh.all(sql, params);
+    },
+    async getF7ReportById(serverId, id) {
+      const serverIdNum = Number(serverId);
+      const numericId = Number(id);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(numericId)) return null;
+      return await dbh.get(`
+        SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        FROM f7_reports
+        WHERE server_id=? AND id=?
+      `, [serverIdNum, numericId]);
+    },
+    async listF7ReportsForTarget(serverId, targetSteamId, { limit = 5, excludeId = null } = {}) {
+      const serverIdNum = Number(serverId);
+      const steamId = trimOrNull(targetSteamId);
+      if (!Number.isFinite(serverIdNum) || !steamId) return [];
+      const params = [serverIdNum, steamId];
+      let sql = `
+        SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        FROM f7_reports
+        WHERE server_id=? AND target_steamid=?
+      `;
+      const excludeNumeric = Number(excludeId);
+      if (Number.isFinite(excludeNumeric)) {
+        sql += ' AND id != ?';
+        params.push(excludeNumeric);
+      }
+      sql += ' ORDER BY created_at DESC, id DESC';
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 50));
+      }
+      return await dbh.all(sql, params);
     },
     async getUserSettings(userId){
       const rows = await dbh.all('SELECT key,value FROM user_settings WHERE user_id=?',[userId]);

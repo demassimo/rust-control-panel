@@ -198,6 +198,24 @@ function createApi(pool, dialect) {
         INDEX idx_chat_server_channel (server_id, channel),
         CONSTRAINT fk_chat_messages_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS f7_reports(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        report_id VARCHAR(64) NULL,
+        reporter_steamid VARCHAR(32) NULL,
+        reporter_name VARCHAR(190) NULL,
+        target_steamid VARCHAR(32) NULL,
+        target_name VARCHAR(190) NULL,
+        category VARCHAR(190) NULL,
+        message TEXT NULL,
+        raw TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_f7_report (server_id, report_id),
+        INDEX idx_f7_server_time (server_id, created_at),
+        INDEX idx_f7_target (server_id, target_steamid, created_at),
+        CONSTRAINT fk_f7_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INT PRIMARY KEY,
         bot_token TEXT NULL,
@@ -767,6 +785,144 @@ function createApi(pool, dialect) {
       }
       const result = await exec(sql, params);
       return result.affectedRows || 0;
+    },
+    async recordF7Report(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      if (!Number.isFinite(serverIdNum)) return null;
+      const raw = trimOrNull(entry?.raw);
+      if (!raw) return null;
+      const now = new Date();
+      const createdAt = normaliseDateTime(entry?.created_at) || normaliseDateTime(now);
+      const updatedAt = normaliseDateTime(entry?.updated_at) || normaliseDateTime(now);
+      const reportId = trimOrNull(entry?.report_id ?? entry?.reportId);
+      const reporterSteam = trimOrNull(entry?.reporter_steamid ?? entry?.reporterSteamId);
+      const targetSteam = trimOrNull(entry?.target_steamid ?? entry?.targetSteamId);
+      const reporterNameRaw = trimOrNull(entry?.reporter_name ?? entry?.reporterName);
+      const targetNameRaw = trimOrNull(entry?.target_name ?? entry?.targetName);
+      const categoryRaw = trimOrNull(entry?.category);
+      const messageRaw = trimOrNull(entry?.message);
+      const reporterName = reporterNameRaw ? reporterNameRaw.slice(0, 190) : null;
+      const targetName = targetNameRaw ? targetNameRaw.slice(0, 190) : null;
+      const category = categoryRaw ? categoryRaw.slice(0, 190) : null;
+      const message = messageRaw && messageRaw.length > 4000 ? messageRaw.slice(0, 4000) : messageRaw;
+      const sql = `
+        INSERT INTO f7_reports(
+          server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE
+          reporter_steamid = VALUES(reporter_steamid),
+          reporter_name = VALUES(reporter_name),
+          target_steamid = VALUES(target_steamid),
+          target_name = VALUES(target_name),
+          category = VALUES(category),
+          message = VALUES(message),
+          raw = VALUES(raw),
+          created_at = LEAST(created_at, VALUES(created_at)),
+          updated_at = VALUES(updated_at)
+      `;
+      const params = [
+        serverIdNum,
+        reportId || null,
+        reporterSteam || null,
+        reporterName,
+        targetSteam || null,
+        targetName,
+        category,
+        message || null,
+        raw,
+        createdAt,
+        updatedAt
+      ];
+      const result = await exec(sql, params);
+
+      let row = null;
+      if (reportId) {
+        const rows = await exec(`
+          SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+          FROM f7_reports
+          WHERE server_id=? AND report_id=?
+        `, [serverIdNum, reportId]);
+        row = rows?.[0] ?? null;
+      }
+      if (!row) {
+        const insertedId = result.insertId || null;
+        if (insertedId) {
+          const rows = await exec(`
+            SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+            FROM f7_reports
+            WHERE id=?
+          `, [insertedId]);
+          row = rows?.[0] ?? null;
+        }
+      }
+      if (!row) {
+        const rows = await exec(`
+          SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+          FROM f7_reports
+          WHERE server_id=?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `, [serverIdNum]);
+        row = rows?.[0] ?? null;
+      }
+      return row;
+    },
+    async listF7Reports(serverId, { since = null, limit = 50 } = {}) {
+      const serverIdNum = Number(serverId);
+      if (!Number.isFinite(serverIdNum)) return [];
+      const conditions = ['server_id=?'];
+      const params = [serverIdNum];
+      const sinceValue = normaliseDateTime(since);
+      if (sinceValue) {
+        conditions.push('created_at >= ?');
+        params.push(sinceValue);
+      }
+      let sql = `
+        SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        FROM f7_reports
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, id DESC
+      `;
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 200));
+      }
+      return await exec(sql, params);
+    },
+    async getF7ReportById(serverId, id) {
+      const serverIdNum = Number(serverId);
+      const numericId = Number(id);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(numericId)) return null;
+      const rows = await exec(`
+        SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        FROM f7_reports
+        WHERE server_id=? AND id=?
+      `, [serverIdNum, numericId]);
+      return rows?.[0] ?? null;
+    },
+    async listF7ReportsForTarget(serverId, targetSteamId, { limit = 5, excludeId = null } = {}) {
+      const serverIdNum = Number(serverId);
+      const steamId = trimOrNull(targetSteamId);
+      if (!Number.isFinite(serverIdNum) || !steamId) return [];
+      const params = [serverIdNum, steamId];
+      let sql = `
+        SELECT id, server_id, report_id, reporter_steamid, reporter_name, target_steamid, target_name, category, message, raw, created_at, updated_at
+        FROM f7_reports
+        WHERE server_id=? AND target_steamid=?
+      `;
+      const excludeNumeric = Number(excludeId);
+      if (Number.isFinite(excludeNumeric)) {
+        sql += ' AND id != ?';
+        params.push(excludeNumeric);
+      }
+      sql += ' ORDER BY created_at DESC, id DESC';
+      const limitNum = Number(limit);
+      if (Number.isFinite(limitNum) && limitNum > 0) {
+        sql += ' LIMIT ?';
+        params.push(Math.min(Math.floor(limitNum), 50));
+      }
+      return await exec(sql, params);
     },
     async getUserSettings(userId){
       const rows = await exec('SELECT `key`,value FROM user_settings WHERE user_id=?',[userId]);

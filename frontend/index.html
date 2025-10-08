@@ -330,6 +330,7 @@
           <button type="button" class="menu-tab" data-view="map" data-capability="liveMap" aria-pressed="false">Map</button>
           <button type="button" class="menu-tab" data-view="settings" data-capability="manage" aria-pressed="false">Settings</button>
           <button type="button" class="menu-tab" data-view="chat" data-capability="console" aria-pressed="false">Chat</button>
+          <button type="button" class="menu-tab" data-view="reports" data-capability="view" aria-pressed="false">Reports</button>
           <button type="button" class="menu-tab" data-view="console" data-capability="console" aria-pressed="false">Console</button>
           <button type="button" class="menu-tab" data-view="dashboard" data-capability="view" aria-pressed="false">Dashboard</button>
         </nav>
@@ -430,6 +431,69 @@
                     <p class="notice hidden discord-notice" id="discord-notice"></p>
                   </form>
                 </section>
+              </div>
+            </div>
+          </section>
+
+          <section id="workspaceViewReports" class="workspace-view" data-view="reports" data-capability="view" aria-hidden="true">
+            <div class="card reports-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3>F7 Reports</h3>
+                  <p class="muted small">Monitor incoming in-game reports from players around the clock.</p>
+                </div>
+                <div class="card-controls reports-scope-controls" role="tablist" aria-label="Report scope">
+                  <button type="button" class="reports-scope-btn active" data-scope="new" role="tab" aria-selected="true">New</button>
+                  <button type="button" class="reports-scope-btn" data-scope="all" role="tab" aria-selected="false">All</button>
+                </div>
+              </div>
+              <div class="reports-body">
+                <aside class="reports-list" aria-label="F7 reports">
+                  <p id="f7ReportsLoading" class="reports-loading muted small hidden">Loading reports…</p>
+                  <p id="f7ReportsError" class="notice warning hidden" role="alert"></p>
+                  <p id="f7ReportsEmpty" class="reports-empty muted small hidden">No F7 reports yet.</p>
+                  <ol id="f7ReportsList" class="reports-items" aria-live="polite"></ol>
+                </aside>
+                <article class="reports-detail" aria-live="polite">
+                  <div id="f7ReportPlaceholder" class="reports-placeholder">
+                    Select a report to review the details.
+                  </div>
+                  <div id="f7ReportDetail" class="reports-detail-card hidden">
+                    <header class="reports-detail-head">
+                      <h4 id="f7ReportDetailTitle">Report details</h4>
+                      <time id="f7ReportDetailTime" class="muted small"></time>
+                    </header>
+                    <dl class="reports-meta">
+                      <div class="reports-meta-item">
+                        <dt>Target</dt>
+                        <dd id="f7ReportTarget"></dd>
+                      </div>
+                      <div class="reports-meta-item">
+                        <dt>Reported by</dt>
+                        <dd id="f7ReportReporter"></dd>
+                      </div>
+                      <div class="reports-meta-item">
+                        <dt>Reason</dt>
+                        <dd id="f7ReportCategory"></dd>
+                      </div>
+                      <div class="reports-meta-item">
+                        <dt>Report ID</dt>
+                        <dd id="f7ReportId"></dd>
+                      </div>
+                    </dl>
+                    <section class="reports-message">
+                      <h5>Message</h5>
+                      <p id="f7ReportMessage" class="reports-message-body muted"></p>
+                    </section>
+                    <section id="f7ReportHistory" class="reports-history hidden">
+                      <h5>Previous reports for this player</h5>
+                      <ul id="f7ReportHistoryList" class="reports-history-list"></ul>
+                    </section>
+                    <div class="reports-actions">
+                      <button type="button" id="f7ReportShowAll" class="ghost small">View all reports for this server</button>
+                    </div>
+                  </div>
+                </article>
               </div>
             </div>
           </section>

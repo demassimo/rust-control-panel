@@ -125,6 +125,22 @@
   const workspaceChatEmpty = $('#workspaceChatEmpty');
   const workspaceChatLoading = $('#workspaceChatLoading');
   const workspaceChatNotice = $('#workspaceChatNotice');
+  const f7ReportsList = $('#f7ReportsList');
+  const f7ReportsLoading = $('#f7ReportsLoading');
+  const f7ReportsEmpty = $('#f7ReportsEmpty');
+  const f7ReportsError = $('#f7ReportsError');
+  const f7ReportPlaceholder = $('#f7ReportPlaceholder');
+  const f7ReportDetail = $('#f7ReportDetail');
+  const f7ReportDetailTime = $('#f7ReportDetailTime');
+  const f7ReportTarget = $('#f7ReportTarget');
+  const f7ReportReporter = $('#f7ReportReporter');
+  const f7ReportCategory = $('#f7ReportCategory');
+  const f7ReportId = $('#f7ReportId');
+  const f7ReportMessage = $('#f7ReportMessage');
+  const f7ReportHistory = $('#f7ReportHistory');
+  const f7ReportHistoryList = $('#f7ReportHistoryList');
+  const f7ReportShowAll = $('#f7ReportShowAll');
+  const f7ScopeButtons = Array.from(document.querySelectorAll('.reports-scope-btn'));
   const btnBackToDashboard = $('#btnBackToDashboard');
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
@@ -172,6 +188,16 @@
     profileCache: new Map(),
     profileRequests: new Map(),
     teamColors: new Map()
+  };
+
+  const f7State = {
+    serverId: null,
+    scope: 'new',
+    list: [],
+    loading: false,
+    error: null,
+    activeId: null,
+    detailCache: new Map()
   };
 
   function emitWorkspaceEvent(name, detail) {
@@ -234,6 +260,23 @@
       setChatFilter(btn.dataset.channel || 'all');
     });
   });
+
+  f7ScopeButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      setF7Scope(btn.dataset.scope || 'new');
+    });
+  });
+
+  if (f7ReportShowAll) {
+    f7ReportShowAll.addEventListener('click', () => {
+      setF7Scope('all');
+      if (f7ReportDetail?.scrollIntoView) {
+        try { f7ReportDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+        catch { /* ignore */ }
+      }
+    });
+  }
 
   if (workspaceViewSections.length) {
     setWorkspaceView(workspaceViewDefault);
@@ -827,7 +870,348 @@
     ingestChatMessage(serverId, content);
   }
 
+  function normalizeF7Report(report) {
+    if (!report) return null;
+    const id = Number(report.id);
+    const serverId = Number(report.serverId ?? report.server_id ?? f7State.serverId);
+    const createdAt = pickString(report.createdAt ?? report.created_at) || null;
+    const updatedAt = pickString(report.updatedAt ?? report.updated_at) || createdAt;
+    return {
+      id: Number.isFinite(id) ? id : null,
+      serverId: Number.isFinite(serverId) ? serverId : f7State.serverId,
+      reportId: pickString(report.reportId ?? report.report_id) || null,
+      reporterSteamId: pickString(report.reporterSteamId ?? report.reporter_steamid) || null,
+      reporterName: pickString(report.reporterName ?? report.reporter_name) || null,
+      targetSteamId: pickString(report.targetSteamId ?? report.target_steamid) || null,
+      targetName: pickString(report.targetName ?? report.target_name) || null,
+      category: pickString(report.category) || null,
+      message: pickString(report.message) || null,
+      raw: pickString(report.raw) || null,
+      createdAt,
+      updatedAt: updatedAt || null
+    };
+  }
+
+  function updateF7ScopeButtons() {
+    const scope = f7State.scope;
+    f7ScopeButtons.forEach((btn) => {
+      const match = (btn?.dataset?.scope || 'new') === scope;
+      btn?.classList?.toggle('active', match);
+      btn?.setAttribute?.('aria-selected', match ? 'true' : 'false');
+    });
+  }
+
+  function renderF7ReportDetail(detail) {
+    if (!f7ReportDetail || !f7ReportPlaceholder) return;
+    if (!detail) {
+      f7ReportDetail.classList.add('hidden');
+      if (!Number.isFinite(f7State.serverId)) {
+        f7ReportPlaceholder.textContent = 'Select a server to view F7 reports.';
+        f7ReportPlaceholder.classList.remove('hidden');
+      } else if (!f7State.loading && f7State.list.length === 0) {
+        f7ReportPlaceholder.textContent = 'Select a report to review the details.';
+        f7ReportPlaceholder.classList.remove('hidden');
+      } else if (f7State.loading) {
+        f7ReportPlaceholder.textContent = 'Loading reports…';
+        f7ReportPlaceholder.classList.remove('hidden');
+      } else {
+        f7ReportPlaceholder.classList.remove('hidden');
+        f7ReportPlaceholder.textContent = 'Select a report to review the details.';
+      }
+      return;
+    }
+
+    f7ReportPlaceholder.classList.add('hidden');
+    f7ReportDetail.classList.remove('hidden');
+
+    if (f7ReportDetailTime) {
+      const absolute = formatDateTime(detail.createdAt);
+      const relative = formatRelativeTime(detail.createdAt);
+      f7ReportDetailTime.textContent = relative ? `${absolute} (${relative})` : absolute;
+    }
+
+    const renderIdentity = (container, name, steamId) => {
+      if (!container) return;
+      container.innerHTML = '';
+      const label = document.createElement(steamId ? 'a' : 'span');
+      label.textContent = name || steamId || '—';
+      if (steamId) {
+        label.href = `https://steamcommunity.com/profiles/${steamId}`;
+        label.target = '_blank';
+        label.rel = 'noopener noreferrer';
+      }
+      container.appendChild(label);
+      if (steamId && name && name !== steamId) {
+        const idLine = document.createElement('div');
+        idLine.className = 'muted small';
+        idLine.textContent = steamId;
+        container.appendChild(idLine);
+      }
+    };
+
+    renderIdentity(f7ReportTarget, detail.targetName, detail.targetSteamId);
+    renderIdentity(f7ReportReporter, detail.reporterName, detail.reporterSteamId);
+
+    if (f7ReportCategory) f7ReportCategory.textContent = detail.category || '—';
+    if (f7ReportId) f7ReportId.textContent = detail.reportId || '—';
+    if (f7ReportMessage) f7ReportMessage.textContent = detail.message || 'No additional message provided.';
+
+    if (Array.isArray(detail.recentForTarget) && detail.recentForTarget.length > 0 && f7ReportHistory && f7ReportHistoryList) {
+      f7ReportHistory.classList.remove('hidden');
+      f7ReportHistoryList.innerHTML = '';
+      detail.recentForTarget.forEach((entry) => {
+        const normalized = normalizeF7Report(entry);
+        if (!normalized) return;
+        const li = document.createElement('li');
+        const when = document.createElement('span');
+        when.textContent = formatRelativeTime(normalized.createdAt) || formatDateTime(normalized.createdAt);
+        const reason = document.createElement('span');
+        reason.textContent = normalized.category || normalized.message || 'No reason provided';
+        li.append(when, reason);
+        f7ReportHistoryList.appendChild(li);
+      });
+    } else if (f7ReportHistory) {
+      f7ReportHistory.classList.add('hidden');
+      if (f7ReportHistoryList) f7ReportHistoryList.innerHTML = '';
+    }
+  }
+
+  function renderF7Reports() {
+    if (!f7ReportsList) return;
+    updateF7ScopeButtons();
+    if (f7ReportsLoading) {
+      f7ReportsLoading.classList.toggle('hidden', !f7State.loading);
+    }
+    if (f7ReportsError) {
+      if (f7State.error) {
+        f7ReportsError.textContent = 'Failed to load F7 reports: ' + f7State.error;
+        f7ReportsError.classList.remove('hidden');
+      } else {
+        f7ReportsError.classList.add('hidden');
+        f7ReportsError.textContent = '';
+      }
+    }
+
+    const hasServer = Number.isFinite(f7State.serverId);
+    const reports = Array.isArray(f7State.list) ? f7State.list : [];
+    const hasReports = reports.length > 0;
+
+    if (f7ReportsEmpty) {
+      const showEmpty = hasServer && !f7State.loading && !f7State.error && !hasReports;
+      f7ReportsEmpty.classList.toggle('hidden', !showEmpty);
+    }
+
+    f7ReportsList.innerHTML = '';
+
+    if (!hasReports) {
+      renderF7ReportDetail(null);
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    const seenIds = new Set();
+    const sorted = [...reports].sort((a, b) => {
+      const aTime = new Date(a.createdAt || 0).getTime();
+      const bTime = new Date(b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+
+    sorted.forEach((raw) => {
+      const report = normalizeF7Report(raw);
+      if (!report) return;
+      if (report.id != null && seenIds.has(report.id)) return;
+      if (report.id != null) seenIds.add(report.id);
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'reports-item';
+      if (report.id === f7State.activeId) button.classList.add('active');
+      const primary = document.createElement('div');
+      primary.className = 'reports-item-primary';
+      const title = document.createElement('span');
+      title.className = 'reports-item-target';
+      title.textContent = report.targetName || report.targetSteamId || 'Unknown target';
+      primary.appendChild(title);
+      if (report.category || report.message) {
+        const reason = document.createElement('span');
+        reason.className = 'reports-item-reason';
+        reason.textContent = report.category || report.message || '';
+        primary.appendChild(reason);
+      }
+      const meta = document.createElement('div');
+      meta.className = 'reports-item-meta';
+      const time = document.createElement('span');
+      time.textContent = formatRelativeTime(report.createdAt) || formatDateTime(report.createdAt);
+      meta.appendChild(time);
+      const reporter = document.createElement('span');
+      reporter.textContent = report.reporterName || report.reporterSteamId || 'Unknown reporter';
+      meta.appendChild(reporter);
+      button.append(primary, meta);
+      button.addEventListener('click', () => {
+        if (f7State.activeId === report.id) return;
+        f7State.activeId = report.id;
+        renderF7Reports();
+        if (report.id != null) {
+          loadF7ReportDetail(report.id).catch(() => {});
+        }
+      });
+      li.appendChild(button);
+      fragment.appendChild(li);
+    });
+
+    f7ReportsList.appendChild(fragment);
+
+    if (f7State.activeId == null && sorted.length > 0) {
+      f7State.activeId = normalizeF7Report(sorted[0])?.id ?? null;
+    }
+    const detail = f7State.activeId != null ? f7State.detailCache.get(f7State.activeId) : null;
+    renderF7ReportDetail(detail || null);
+  }
+
+  async function refreshF7Reports({ force = false } = {}) {
+    const serverId = Number(f7State.serverId);
+    if (!Number.isFinite(serverId)) {
+      f7State.list = [];
+      renderF7Reports();
+      return;
+    }
+    if (!hasServerCapability('view')) {
+      f7State.list = [];
+      f7State.error = null;
+      f7State.loading = false;
+      renderF7Reports();
+      return;
+    }
+    if (f7State.loading && !force) return;
+    f7State.loading = true;
+    renderF7Reports();
+    const params = new URLSearchParams();
+    params.set('scope', f7State.scope);
+    params.set('limit', f7State.scope === 'all' ? '100' : '25');
+    try {
+      const data = await api(`/servers/${serverId}/f7-reports?${params.toString()}`);
+      const list = Array.isArray(data?.reports) ? data.reports.map((item) => normalizeF7Report(item)).filter(Boolean) : [];
+      f7State.list = list;
+      if (list.length && (f7State.activeId == null || !list.some((item) => item.id === f7State.activeId))) {
+        f7State.activeId = list[0]?.id ?? null;
+      }
+      f7State.error = null;
+    } catch (err) {
+      f7State.error = describeError(err);
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+    } finally {
+      f7State.loading = false;
+      renderF7Reports();
+      if (f7State.activeId != null) {
+        loadF7ReportDetail(f7State.activeId).catch(() => {});
+      }
+    }
+  }
+
+  async function loadF7ReportDetail(reportId, { force = false } = {}) {
+    const serverId = Number(f7State.serverId);
+    if (!Number.isFinite(serverId)) return;
+    const numericId = Number(reportId);
+    if (!Number.isFinite(numericId)) return;
+    if (!force && f7State.detailCache.has(numericId)) {
+      renderF7ReportDetail(f7State.detailCache.get(numericId));
+      return;
+    }
+    try {
+      const data = await api(`/servers/${serverId}/f7-reports/${numericId}`);
+      const detail = {
+        ...normalizeF7Report(data?.report),
+        recentForTarget: Array.isArray(data?.recentForTarget)
+          ? data.recentForTarget.map((item) => normalizeF7Report(item)).filter(Boolean)
+          : []
+      };
+      f7State.detailCache.set(numericId, detail);
+      if (numericId === f7State.activeId) {
+        renderF7ReportDetail(detail);
+      }
+    } catch (err) {
+      ui.log('Failed to load report details: ' + describeError(err));
+    }
+  }
+
+  function setF7Scope(scope) {
+    const normalized = scope === 'all' ? 'all' : 'new';
+    if (f7State.scope === normalized) return;
+    f7State.scope = normalized;
+    updateF7ScopeButtons();
+    refreshF7Reports({ force: true }).catch(() => {});
+  }
+
+  function prepareF7ForServer(serverId) {
+    const numeric = Number(serverId);
+    f7State.serverId = Number.isFinite(numeric) ? numeric : null;
+    f7State.list = [];
+    f7State.detailCache.clear();
+    f7State.activeId = null;
+    f7State.error = null;
+    f7State.loading = false;
+    f7State.scope = 'new';
+    updateF7ScopeButtons();
+    renderF7Reports();
+    if (!Number.isFinite(numeric) || !hasServerCapability('view')) {
+      return;
+    }
+    refreshF7Reports({ force: true }).catch(() => {});
+  }
+
+  function resetF7Reports() {
+    f7State.serverId = null;
+    f7State.list = [];
+    f7State.detailCache.clear();
+    f7State.activeId = null;
+    f7State.error = null;
+    f7State.loading = false;
+    updateF7ScopeButtons();
+    renderF7Reports();
+  }
+
+  function handleIncomingF7Report(payload) {
+    if (!payload) return;
+    const report = normalizeF7Report(payload);
+    if (!report) return;
+    if (!hasServerCapability('view')) return;
+    if (Number(report.serverId) !== Number(state.currentServerId)) return;
+    if (report.id != null) {
+      f7State.detailCache.set(report.id, { ...report, recentForTarget: [] });
+    }
+    const shouldTrack = f7State.scope === 'new' || f7State.scope === 'all';
+    if (shouldTrack) {
+      const matchesReport = (item) => {
+        if (!item) return false;
+        if (report.id != null && item.id != null) return item.id === report.id;
+        if (report.reportId && item.reportId) return item.reportId === report.reportId;
+        return (
+          !!report.createdAt &&
+          report.createdAt === item.createdAt &&
+          report.reporterSteamId === item.reporterSteamId &&
+          report.targetSteamId === item.targetSteamId
+        );
+      };
+      const existingIndex = f7State.list.findIndex((item) => matchesReport(item));
+      if (existingIndex !== -1) {
+        f7State.list.splice(existingIndex, 1);
+      }
+      f7State.list.unshift(report);
+      if (f7State.list.length > 200) f7State.list.length = 200;
+    }
+    if (report.id != null) {
+      if (f7State.activeId == null) {
+        f7State.activeId = report.id;
+      }
+      if (f7State.activeId === report.id) {
+        loadF7ReportDetail(report.id, { force: true }).catch(() => {});
+      }
+    }
+    renderF7Reports();
+  }
+
   renderChatMessages();
+  renderF7Reports();
 
   const ROLE_CAPABILITY_INFO = {
     view: {
@@ -2075,6 +2459,7 @@
     state.currentServerId = null;
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
     emitWorkspaceEvent('workspace:server-cleared', { reason });
+    resetF7Reports();
     highlightSelectedServer();
     renderChatMessages();
   }
@@ -2153,6 +2538,32 @@
     const date = new Date(text);
     if (!Number.isNaN(date.valueOf())) return date.toLocaleString();
     return text;
+  }
+
+  const relativeTimeFormatter = typeof Intl !== 'undefined' && typeof Intl.RelativeTimeFormat === 'function'
+    ? new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+    : null;
+
+  function formatRelativeTime(value) {
+    const text = pickString(value);
+    if (!text) return '';
+    const date = new Date(text);
+    if (Number.isNaN(date.valueOf())) return text;
+    if (!relativeTimeFormatter) return date.toLocaleString();
+    const diff = date.getTime() - Date.now();
+    const thresholds = [
+      { unit: 'day', ms: 86400000 },
+      { unit: 'hour', ms: 3600000 },
+      { unit: 'minute', ms: 60000 },
+      { unit: 'second', ms: 1000 }
+    ];
+    for (const { unit, ms } of thresholds) {
+      if (Math.abs(diff) >= ms || unit === 'second') {
+        const rounded = Math.round(diff / ms);
+        return relativeTimeFormatter.format(rounded, unit);
+      }
+    }
+    return date.toLocaleString();
   }
 
   function updateWorkspaceDisplay(entry) {
@@ -2349,6 +2760,9 @@
     });
     socket.on('chat', (payload) => {
       handleIncomingChat(payload);
+    });
+    socket.on('f7-report', (payload) => {
+      handleIncomingF7Report(payload);
     });
     socket.on('error', (err) => {
       const message = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
@@ -2851,6 +3265,7 @@
     }
     clearChatRefreshTimer();
     state.currentServerId = numericId;
+    prepareF7ForServer(numericId);
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
     emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
     highlightSelectedServer();
@@ -3069,6 +3484,7 @@
     chatState.profileCache.clear();
     chatState.profileRequests.clear();
     chatState.teamColors.clear();
+    resetF7Reports();
     renderChatMessages();
     ui.showLogin();
     loadPublicConfig();

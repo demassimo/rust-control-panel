@@ -338,6 +338,86 @@ export function parseChatMessage(message, payload = {}) {
   };
 }
 
+export function parseF7ReportLine(line) {
+  if (typeof line !== 'string') return null;
+  const stripped = stripRconTimestampPrefix(stripAnsiSequences(line)).trim();
+  if (!stripped) return null;
+  const lowered = stripped.toLowerCase();
+  if (!lowered.includes('f7') || !lowered.includes('report')) return null;
+
+  const result = {
+    raw: stripped,
+    reportId: null,
+    reporterName: null,
+    reporterSteamId: null,
+    targetName: null,
+    targetSteamId: null,
+    category: null,
+    message: null,
+    timestamp: null
+  };
+
+  const reportIdMatch = stripped.match(/report\s*id\s*[:#]\s*(\d{3,})/i);
+  if (reportIdMatch) {
+    result.reportId = reportIdMatch[1];
+  }
+
+  const timestampMatch = stripped.match(/(?:time|timestamp|reported\s+at)\s*[:@-]\s*(.+?)(?:\s+-|\s+report|\s*$)/i);
+  if (timestampMatch) {
+    const normalised = normaliseTimestamp(timestampMatch[1]);
+    if (normalised) result.timestamp = normalised;
+  }
+
+  const participantRegex = /([^\[(]+?)\s*[\[(](\d{16,})[\])]/g;
+  const participants = [];
+  let match;
+  while ((match = participantRegex.exec(stripped))) {
+    const name = trimOrNull(match[1]);
+    const steamid = sanitiseSteamId(match[2]);
+    if (!steamid) continue;
+    participants.push({ name: name || null, steamid });
+    if (participants.length >= 2) break;
+  }
+  if (participants[0]) {
+    result.reporterName = participants[0].name;
+    result.reporterSteamId = participants[0].steamid;
+  }
+  if (participants[1]) {
+    result.targetName = participants[1].name;
+    result.targetSteamId = participants[1].steamid;
+  }
+
+  const reasonLabelMatch = stripped.match(/(?:reason|category|type)\s*[:\-]\s*(?:"([^"]+)"|'([^']+)'|([^\-]+?))(?:\s+-|\s+report|\s*$)/i);
+  if (reasonLabelMatch) {
+    const value = trimOrNull(reasonLabelMatch[1] || reasonLabelMatch[2] || reasonLabelMatch[3]);
+    if (value) result.category = value;
+  }
+
+  if (!result.category) {
+    const forMatch = stripped.match(/\breport(?:ed)?\b[^]*?\bfor\b\s+(?:"([^"]+)"|'([^']+)'|([^\-]+?))(?:\s+-|\s+report|\s*$)/i);
+    if (forMatch) {
+      const value = trimOrNull(forMatch[1] || forMatch[2] || forMatch[3]);
+      if (value) result.category = value;
+    }
+  }
+
+  const messageMatch = stripped.match(/(?:message|notes?)\s*[:\-]\s*(.+)$/i);
+  if (messageMatch) {
+    const value = trimOrNull(messageMatch[1]);
+    if (value) result.message = value;
+  }
+
+  if (!result.message && result.category) {
+    result.message = result.category;
+  }
+
+  if (!result.reportId && participants.length === 0) {
+    return null;
+  }
+
+  return result;
+}
+
 export function extractInteger(value) {
   if (value == null) return null;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
