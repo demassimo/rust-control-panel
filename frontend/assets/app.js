@@ -198,6 +198,7 @@
   const killFeedState = {
     cache: new Map(),
     lastFetched: new Map(),
+    renderSignatures: new Map(),
     loading: false,
     error: null
   };
@@ -898,20 +899,33 @@
     const text = raw.trim();
     if (!text) return null;
 
-    const pattern = /^(?:\[(?<victimClan>[^\]]+)\]\s*)?(?<victimName>[^\[]+?)\[(?<victimSteamId>\d+)\]\s+was killed by\s+(?:\[(?<killerClan>[^\]]+)\]\s*)?(?<killerName>[^\[]+?)\[(?<killerSteamId>\d+)\](?<rest>.*)$/i;
-    const match = text.match(pattern);
-    if (!match || !match.groups) return null;
+    const victimPattern = /^(?:\[(?<victimClan>[^\]]+)\]\s*)?(?<victimName>[^\[]+?)\[(?<victimSteamId>\d+)\]\s+was killed by\s+(?<killerPart>.+)$/i;
+    const victimMatch = text.match(victimPattern);
+    if (!victimMatch?.groups) return null;
 
     const result = {
-      victimName: match.groups.victimName?.trim() || null,
-      victimClan: match.groups.victimClan?.trim() || null,
-      victimSteamId: match.groups.victimSteamId || null,
-      killerName: match.groups.killerName?.trim() || null,
-      killerClan: match.groups.killerClan?.trim() || null,
-      killerSteamId: match.groups.killerSteamId || null
+      victimName: victimMatch.groups.victimName?.trim() || null,
+      victimClan: victimMatch.groups.victimClan?.trim() || null,
+      victimSteamId: victimMatch.groups.victimSteamId || null,
+      killerName: null,
+      killerClan: null,
+      killerSteamId: null
     };
 
-    const rest = match.groups.rest || '';
+    const killerPart = victimMatch.groups.killerPart || '';
+    const killerPattern = /^(?:\[(?<killerClan>[^\]]+)\]\s*)?(?<killerName>.*?)(?:\[(?<killerSteamId>\d+)\])?(?<rest>(?:\s+.*)?)$/i;
+    const killerMatch = killerPart.match(killerPattern);
+
+    let rest = '';
+    if (killerMatch?.groups) {
+      result.killerName = killerMatch.groups.killerName?.trim() || null;
+      result.killerClan = killerMatch.groups.killerClan?.trim() || null;
+      result.killerSteamId = killerMatch.groups.killerSteamId || null;
+      rest = killerMatch.groups.rest || '';
+    } else {
+      result.killerName = killerPart.trim() || null;
+      rest = '';
+    }
 
     const weaponPattern = /\b(?:using|with)\s+(?<weapon>[^@]+?)(?:\s+from\b|\s+at\b|\s*$)/i;
     const weaponMatch = rest.match(weaponPattern);
@@ -1109,6 +1123,33 @@
     ].join('::');
   }
 
+  function killFeedRenderSignature(records) {
+    return records
+      .map((entry) => {
+        const distanceValue = Number(entry.distance);
+        const coords = entry.position
+          ? ['x', 'y', 'z']
+              .map((axis) => {
+                const value = Number(entry.position?.[axis]);
+                return Number.isFinite(value) ? value.toFixed(3) : '';
+              })
+              .join(',')
+          : '';
+        const combatLogLines = Array.isArray(entry.combatLog?.lines)
+          ? entry.combatLog.lines.join('|')
+          : entry.combatLog?.text || '';
+        return [
+          killEventSignature(entry),
+          Number.isFinite(distanceValue) ? distanceValue.toFixed(3) : '',
+          coords,
+          entry.weapon || '',
+          combatLogLines,
+          entry.combatLogError || ''
+        ].join('@@');
+      })
+      .join('##');
+  }
+
   function formatKillPlayerName(name, clan, fallbackId) {
     const baseName = typeof name === 'string' && name.trim() ? name.trim() : (fallbackId ? `Steam ${fallbackId}` : 'Unknown');
     return clan && clan.trim() ? `[${clan.trim()}] ${baseName}` : baseName;
@@ -1243,17 +1284,42 @@
         }
         killFeedEmpty.classList.remove('hidden');
       }
+      if (hasServer) killFeedState.renderSignatures.delete(serverId);
       return;
     }
     killFeedEmpty?.classList.add('hidden');
     killFeedList.classList.remove('hidden');
+
+    const renderSignature = killFeedRenderSignature(records);
+    const previousSignature = killFeedState.renderSignatures.get(serverId);
+    if (
+      previousSignature === renderSignature &&
+      killFeedList.childElementCount > 0
+    ) {
+      return;
+    }
+
+    const openSignatures = new Set();
+    killFeedList.querySelectorAll('li[data-signature]').forEach((item) => {
+      const signature = item?.dataset?.signature;
+      const detailsEl = item.querySelector('details');
+      if (signature && detailsEl?.open) {
+        openSignatures.add(signature);
+      }
+    });
+
     killFeedList.innerHTML = '';
 
     records.forEach((entry, index) => {
       const li = document.createElement('li');
       li.className = 'kill-feed-entry';
+      const signature = killEventSignature(entry);
+      li.dataset.signature = signature;
       const details = document.createElement('details');
-      if (index === 0) details.open = true;
+      const shouldOpen = openSignatures.size
+        ? openSignatures.has(signature)
+        : index === 0;
+      if (shouldOpen) details.open = true;
 
       const summary = document.createElement('summary');
       summary.className = 'kill-feed-summary';
@@ -1412,6 +1478,8 @@
       li.appendChild(details);
       killFeedList.appendChild(li);
     });
+
+    killFeedState.renderSignatures.set(serverId, renderSignature);
   }
 
   function clearKillFeedRefreshTimer() {
@@ -4159,6 +4227,7 @@
     clearKillFeedRefreshTimer();
     killFeedState.cache.clear();
     killFeedState.lastFetched.clear();
+    killFeedState.renderSignatures.clear();
     killFeedState.loading = false;
     killFeedState.error = null;
     renderKillFeed();
