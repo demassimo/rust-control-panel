@@ -1502,29 +1502,32 @@
       async function refreshNotes({ force = false } = {}) {
         if (!modalState.open || !modalState.steamid) return;
         if (!modalState.notes) modalState.notes = createNotesState();
-        if (modalState.notes.loading && !force) return;
+        const targetSteamid = modalState.steamid;
+        const notesState = modalState.notes;
+        if (notesState.loading && !force) return;
         const serverId = resolveActiveServerId();
         if (!Number.isFinite(serverId)) {
           setNotesMessage('Select a server before viewing notes.', 'error');
-          modalState.notes.loading = false;
-          modalState.notes.loaded = false;
+          notesState.loading = false;
+          notesState.loaded = false;
           renderNotesDialog();
           return;
         }
-        modalState.notes.loading = true;
-        modalState.notes.loaded = force ? false : modalState.notes.loaded;
+        notesState.loading = true;
+        notesState.loaded = force ? false : notesState.loaded;
         if (!force) setNotesMessage('');
         renderNotesDialog();
         try {
-          const payload = await ctx.api(`/players/${modalState.steamid}/notes?serverId=${serverId}`);
+          const payload = await ctx.api(`/players/${targetSteamid}/notes?serverId=${serverId}`);
+          if (!modalState.open || modalState.steamid !== targetSteamid || modalState.notes !== notesState) return;
           const rows = Array.isArray(payload?.notes) ? payload.notes : [];
-          modalState.notes.items = rows.map((row) => normalisePlayerNote(row)).filter(Boolean);
-          modalState.notes.loaded = true;
+          notesState.items = rows.map((row) => normalisePlayerNote(row)).filter(Boolean);
+          notesState.loaded = true;
           setNotesMessage('');
           if (modal.elements?.notesInput) modal.elements.notesInput.value = '';
         } catch (err) {
           if (ctx.errorCode?.(err) === 'unauthorized') {
-            modalState.notes.loading = false;
+            notesState.loading = false;
             setNotesMessage('');
             renderNotesDialog();
             ctx.handleUnauthorized?.();
@@ -1533,12 +1536,16 @@
             return;
           }
           const description = ctx.describeError?.(err) || err?.message || 'Unknown error';
-          setNotesMessage('Failed to load notes: ' + description, 'error');
+          if (modalState.notes === notesState) {
+            setNotesMessage('Failed to load notes: ' + description, 'error');
+          }
         } finally {
-          modalState.notes.loading = false;
-          renderNotesDialog();
-          if (modalState.notes.open) {
-            setTimeout(() => modal.elements?.notesInput?.focus(), 50);
+          if (modalState.notes === notesState) {
+            notesState.loading = false;
+            renderNotesDialog();
+            if (notesState.open) {
+              setTimeout(() => modal.elements?.notesInput?.focus(), 50);
+            }
           }
         }
       }
