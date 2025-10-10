@@ -360,14 +360,31 @@ class RustWebRcon extends EventEmitter {
 
   _routeTyped(obj) {
     const t = String(obj?.Type ?? '').toLowerCase();
-    const msg = obj?.Message ?? '';
-    if (!t && typeof msg === 'string') {
-      this.emit('console', msg);
+    const rawMessage = obj?.Message;
+    const messageText = typeof rawMessage === 'string'
+      ? rawMessage
+      : (rawMessage == null ? '' : (() => {
+        try { return JSON.stringify(rawMessage); }
+        catch { return String(rawMessage); }
+      })());
+
+    if (!t && messageText) {
+      this.emit('console', messageText, obj);
       return;
     }
-    if (t.includes('chat')) this.emit('chat', msg, obj);
-    else if (t.includes('generic') || t.includes('log') || t.includes('console')) this.emit('console', msg, obj);
-    else this.emit('event', obj);
+
+    if (t.includes('chat')) {
+      this.emit('chat', messageText || rawMessage, obj);
+    } else if (
+      t.includes('generic') ||
+      t.includes('log') ||
+      t.includes('console') ||
+      t.includes('f7')
+    ) {
+      this.emit('console', messageText, obj);
+    } else {
+      this.emit('event', obj);
+    }
   }
 }
 
