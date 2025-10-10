@@ -795,6 +795,43 @@
 
       state.pollInterval = normaliseRefreshInterval(state.pollPreference);
 
+      let lastTeamColorServerId = null;
+      let lastTeamColorSignature = null;
+
+      function emitTeamColors(serverId, entries) {
+        const numeric = Number(serverId);
+        if (!Number.isFinite(numeric)) return;
+        const normalized = Array.isArray(entries)
+          ? entries.map((entry) => ({ teamId: entry.teamId, color: entry.color }))
+          : [];
+        const payload = { serverId: numeric, colors: normalized };
+        ctx.emit?.('map:team-colors', payload);
+        try {
+          window.dispatchEvent(new CustomEvent('map:team-colors', { detail: payload }));
+        } catch {
+          /* ignore dispatch errors */
+        }
+      }
+
+      function broadcastTeamColorsIfChanged() {
+        const numericServerId = Number(state.serverId);
+        if (!Number.isFinite(numericServerId)) return;
+        const entries = [];
+        for (const [teamId, color] of state.teamColors.entries()) {
+          const numericTeamId = Number(teamId);
+          if (!Number.isFinite(numericTeamId) || numericTeamId <= 0) continue;
+          const text = typeof color === 'string' ? color.trim() : '';
+          if (!text) continue;
+          entries.push({ teamId: numericTeamId, color: text });
+        }
+        entries.sort((a, b) => a.teamId - b.teamId);
+        const signature = JSON.stringify(entries);
+        if (lastTeamColorServerId === numericServerId && lastTeamColorSignature === signature) return;
+        lastTeamColorServerId = numericServerId;
+        lastTeamColorSignature = signature;
+        emitTeamColors(numericServerId, entries);
+      }
+
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
       }
@@ -1561,6 +1598,7 @@
         for (const key of [...state.teamColors.keys()]) {
           if (!presentTeams.has(key)) state.teamColors.delete(key);
         }
+        broadcastTeamColorsIfChanged();
       }
 
       function getActiveMapMeta() {
@@ -1576,6 +1614,7 @@
           const fallbackIndex = state.teamColors.size;
           const color = COLOR_PALETTE[fallbackIndex] || generateColor(fallbackIndex);
           state.teamColors.set(key, color);
+          broadcastTeamColorsIfChanged();
           return color;
         }
         const sid = player?.steamId || '';
@@ -4158,11 +4197,18 @@
         updateMarkerPopups();
       }
 
-      function broadcastPlayers() {
-        const payload = { players: [...state.players], serverId: state.serverId };
+      function broadcastPlayers(targetServerId = state.serverId) {
+        const numericServerId = Number(targetServerId);
+        const resolvedServerId = Number.isFinite(numericServerId) ? numericServerId : null;
+        const players = [...state.players];
+        const payload = { players, serverId: resolvedServerId };
         ctx.emit?.('live-players:data', payload);
-        ctx.emit?.('players:list', { players: [...state.players] });
-        window.dispatchEvent(new CustomEvent('players:list', { detail: { players: [...state.players] } }));
+        ctx.emit?.('players:list', payload);
+        try {
+          window.dispatchEvent(new CustomEvent('players:list', { detail: payload }));
+        } catch {
+          /* ignore dispatch errors */
+        }
       }
 
       function clearSelection() {
@@ -4462,6 +4508,7 @@
       const offConnect = ctx.on?.('server:connected', ({ serverId }) => {
         if (!serverId) return;
         state.serverId = serverId;
+        const numericServerId = Number(serverId);
         clearPendingRefresh();
         state.pendingGeneration = false;
         state.pendingRefresh = null;
@@ -4469,6 +4516,15 @@
         state.activeClusterMembers = null;
         state.status = null;
         state.players = [];
+        state.teamColors.clear();
+        if (Number.isFinite(numericServerId)) {
+          emitTeamColors(numericServerId, []);
+          lastTeamColorServerId = numericServerId;
+          lastTeamColorSignature = '[]';
+        } else {
+          lastTeamColorServerId = null;
+          lastTeamColorSignature = null;
+        }
         state.mapMeta = null;
         state.mapMetaServerId = null;
         state.serverInfo = null;
@@ -4502,6 +4558,7 @@
         clearMapImage();
         updateConfigPanel();
         clearSelection();
+        broadcastPlayers(serverId);
         const persistedStatus = loadPersistentStatusMessage();
         if (persistedStatus?.message && hasPersistentStatusForServer(serverId)) {
           setMessage(persistedStatus.message, { persist: true });
@@ -4521,9 +4578,17 @@
 
       const offDisconnect = ctx.on?.('server:disconnected', ({ serverId }) => {
         if (state.serverId && serverId === state.serverId) {
+          const previousServerId = state.serverId;
           stopPolling();
           clearPendingRefresh();
           customMapFreezeCache.delete(serverId);
+          const numericPreviousId = Number(previousServerId);
+          state.teamColors.clear();
+          if (Number.isFinite(numericPreviousId)) {
+            emitTeamColors(numericPreviousId, []);
+          }
+          lastTeamColorServerId = null;
+          lastTeamColorSignature = null;
           state.serverId = null;
           state.players = [];
           state.mapMeta = null;
@@ -4569,7 +4634,7 @@
           updateUploadSection();
           updateConfigPanel();
           hideUploadNotice();
-          broadcastPlayers();
+          broadcastPlayers(previousServerId);
           setMessage('Connect to a server to load the live map.');
           resetRefreshPolicy();
         }
@@ -4580,6 +4645,14 @@
         clearPendingRefresh();
         closeFullscreenWindow();
         customMapFreezeCache.clear();
+        const previousServerId = state.serverId;
+        const numericPreviousId = Number(previousServerId);
+        state.teamColors.clear();
+        if (Number.isFinite(numericPreviousId)) {
+          emitTeamColors(numericPreviousId, []);
+        }
+        lastTeamColorServerId = null;
+        lastTeamColorSignature = null;
         state.serverId = null;
         state.players = [];
         state.mapMeta = null;
@@ -4623,7 +4696,7 @@
         updateUploadSection();
         updateConfigPanel();
         hideUploadNotice();
-        broadcastPlayers();
+        broadcastPlayers(previousServerId);
         setMessage('Sign in and connect to a server to view the live map.');
         resetRefreshPolicy();
       });
