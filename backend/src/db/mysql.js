@@ -736,7 +736,42 @@ function createApi(pool, dialect) {
       return result.affectedRows || 0;
     },
     async addPlayerEvent(ev){ await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)',[ev.steamid, ev.server_id||null, ev.event, ev.note||null]); },
+    async addPlayerNote(entry = {}) {
+      const sid = String(entry?.steamid || '').trim();
+      if (!sid) return null;
+      const text = typeof entry?.note === 'string' ? entry.note.trim() : '';
+      if (!text) return null;
+      const serverIdRaw = entry?.server_id ?? entry?.serverId;
+      const serverIdNum = Number(serverIdRaw);
+      const serverId = Number.isFinite(serverIdNum) ? Math.trunc(serverIdNum) : null;
+      const result = await exec('INSERT INTO player_events(steamid,server_id,event,note) VALUES(?,?,?,?)', [sid, serverId, 'note', text]);
+      const insertedId = result?.insertId;
+      if (insertedId) {
+        const rows = await exec('SELECT * FROM player_events WHERE id=? LIMIT 1', [insertedId]);
+        return rows?.[0] ?? null;
+      }
+      const rows = await exec('SELECT * FROM player_events WHERE steamid=? AND event=? ORDER BY id DESC LIMIT 1', [sid, 'note']);
+      return rows?.[0] ?? null;
+    },
     async listPlayerEvents(steamid,{limit=100,offset=0}={}){ return await exec('SELECT * FROM player_events WHERE steamid=? ORDER BY id DESC LIMIT ? OFFSET ?',[steamid,limit,offset]); },
+    async listPlayerNotes(steamid, { limit = 100, offset = 0 } = {}) {
+      const limitNum = Number(limit);
+      const offsetNum = Number(offset);
+      const safeLimit = Number.isFinite(limitNum) && limitNum > 0 ? Math.min(Math.floor(limitNum), 500) : 100;
+      const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
+      return await exec(
+        'SELECT * FROM player_events WHERE steamid=? AND event=? ORDER BY id DESC LIMIT ? OFFSET ?',
+        [steamid, 'note', safeLimit, safeOffset]
+      );
+    },
+    async deletePlayerNote(entry = {}) {
+      const sid = String(entry?.steamid || '').trim();
+      const idNum = Number(entry?.id ?? entry?.note_id ?? entry?.noteId);
+      if (!sid || !Number.isFinite(idNum)) return 0;
+      const safeId = Math.max(1, Math.trunc(idNum));
+      const result = await exec('DELETE FROM player_events WHERE id=? AND steamid=? AND event=?', [safeId, sid, 'note']);
+      return result?.affectedRows || 0;
+    },
     async recordChatMessage(entry = {}) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
       if (!Number.isFinite(serverIdNum)) return null;

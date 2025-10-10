@@ -33,7 +33,7 @@ This document summarizes the purpose of the key files and directories that make 
 - `assets/modules/module-loader.js` – Lightweight module registry used by the dashboard to dynamically enable widgets in the workspace view.
 - `assets/modules/live-players.js` – Displays the live player list and syncs statuses from the backend.
 - `assets/modules/players-graph.js` – Visualises historical player counts for the selected server.
-- `assets/modules/players.js` – Provides searchable player management tools, including ban notes and profile metadata.
+- `assets/modules/players.js` – Provides searchable player management tools, including moderation actions, player notes, and profile metadata.
 - `assets/modules/map.js` – Integrates with RustMaps data to render the live map overlay, monument markers, real-time world-event icons (cargo ship, patrol helicopter), and player positions.
 - `assets/icons/map/` – Standalone SVG exports of the live map vector icons for documentation and design reviews.
 

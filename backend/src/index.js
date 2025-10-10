@@ -442,6 +442,7 @@ const PLAYER_HISTORY_MAX_BUCKETS = 2000;
 const PLAYER_LIST_DEFAULT_LIMIT = 200;
 const PLAYER_LIST_MAX_LIMIT = 1000;
 const PLAYER_LIMIT_UNLIMITED_TOKENS = new Set(['unlimited', 'all', '*', 'infinite', 'infinity', 'none']);
+const MAX_PLAYER_NOTE_LENGTH = 2000;
 
 const DEFAULT_RANGE_INTERVALS = [
   { maxRange: 6 * 60 * 60 * 1000, interval: 15 * 60 * 1000 },
@@ -2205,6 +2206,21 @@ function normaliseServerPlayer(row) {
     total_playtime_seconds: totalSeconds,
     total_playtime_minutes: Number.isFinite(totalSeconds) ? Math.floor(totalSeconds / 60) : null,
     ...base
+  };
+}
+
+function projectPlayerNote(row) {
+  if (!row) return null;
+  const idRaw = row?.id ?? row?.note_id ?? row?.noteId;
+  const serverIdRaw = row?.server_id ?? row?.serverId;
+  const idNum = Number(idRaw);
+  const serverIdNum = Number(serverIdRaw);
+  return {
+    id: Number.isFinite(idNum) && idNum > 0 ? Math.trunc(idNum) : null,
+    steamid: row?.steamid || row?.SteamID || null,
+    server_id: Number.isFinite(serverIdNum) ? Math.trunc(serverIdNum) : null,
+    note: typeof row?.note === 'string' ? row.note : '',
+    created_at: row?.created_at || row?.createdAt || null
   };
 }
 
@@ -6351,6 +6367,67 @@ app.post('/api/players/:steamid/event', auth, async (req, res) => {
     await db.addPlayerEvent({ steamid, server_id, event, note });
     res.json({ ok: true });
   } catch {
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/players/:steamid/notes', auth, async (req, res) => {
+  if (typeof db.listPlayerNotes !== 'function') {
+    return res.status(400).json({ error: 'unsupported' });
+  }
+  const steamid = String(req.params.steamid || '').trim();
+  if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+  const limitRaw = Number(req.query.limit);
+  const offsetRaw = Number(req.query.offset);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 500) : 100;
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
+  try {
+    const rows = await db.listPlayerNotes(steamid, { limit, offset });
+    const notes = (rows || []).map((row) => projectPlayerNote(row)).filter(Boolean);
+    res.json({ steamid, notes });
+  } catch (err) {
+    console.error('listPlayerNotes failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/players/:steamid/notes', auth, async (req, res) => {
+  if (typeof db.addPlayerNote !== 'function') {
+    return res.status(400).json({ error: 'unsupported' });
+  }
+  const steamid = String(req.params.steamid || '').trim();
+  if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+  const serverIdRaw = req.body?.server_id ?? req.body?.serverId;
+  const serverIdNum = Number(serverIdRaw);
+  const serverId = Number.isFinite(serverIdNum) ? Math.trunc(serverIdNum) : null;
+  const noteRaw = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
+  if (!noteRaw) return res.status(400).json({ error: 'invalid_note' });
+  if (noteRaw.length > MAX_PLAYER_NOTE_LENGTH) return res.status(400).json({ error: 'note_too_long' });
+  try {
+    const row = await db.addPlayerNote({ steamid, server_id: serverId, note: noteRaw });
+    if (!row) return res.status(500).json({ error: 'db_error' });
+    const projected = projectPlayerNote(row);
+    res.status(201).json({ note: projected });
+  } catch (err) {
+    console.error('addPlayerNote failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/players/:steamid/notes/:noteId', auth, async (req, res) => {
+  if (typeof db.deletePlayerNote !== 'function') {
+    return res.status(400).json({ error: 'unsupported' });
+  }
+  const steamid = String(req.params.steamid || '').trim();
+  if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+  const noteId = Number(req.params.noteId);
+  if (!Number.isFinite(noteId) || noteId <= 0) return res.status(400).json({ error: 'invalid_note_id' });
+  try {
+    const deleted = await db.deletePlayerNote({ steamid, id: Math.trunc(noteId) });
+    if (!deleted) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('deletePlayerNote failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
