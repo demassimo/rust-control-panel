@@ -1136,6 +1136,33 @@ function createApi(dbh, dialect) {
         created_at: createdAt
       };
     },
+    async updateKillEventCombatLog(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      const eventId = Number(entry?.id ?? entry?.eventId);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(eventId)) return 0;
+      let combatLogSerialized = null;
+      const combatPayload = entry?.combat_log ?? entry?.combatLog ?? entry?.combat_log_json ?? entry?.combatLogJson;
+      if (combatPayload != null) {
+        if (typeof combatPayload === 'string') {
+          const text = combatPayload.length > 8000 ? combatPayload.slice(0, 8000) : combatPayload;
+          combatLogSerialized = text;
+        } else {
+          try {
+            const json = JSON.stringify(combatPayload);
+            combatLogSerialized = json.length > 8000 ? json.slice(0, 8000) : json;
+          } catch {
+            combatLogSerialized = null;
+          }
+        }
+      }
+      const combatErrorRaw = trimOrNull(entry?.combat_log_error ?? entry?.combatLogError);
+      const combatLogError = combatErrorRaw ? combatErrorRaw.slice(0, 500) : null;
+      const result = await dbh.run(
+        `UPDATE kill_events SET combat_log = ?, combat_log_error = ? WHERE server_id = ? AND id = ?`,
+        [combatLogSerialized, combatLogError, serverIdNum, eventId]
+      );
+      return result?.changes || 0;
+    },
     async listKillEvents(serverId, { limit = 200, since = null } = {}) {
       const serverIdNum = Number(serverId);
       if (!Number.isFinite(serverIdNum)) return [];

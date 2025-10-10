@@ -1237,7 +1237,15 @@
       const normalized = normalizeKillEvent(raw, numeric);
       if (!normalized) continue;
       const signature = killEventSignature(normalized);
-      if (seen.has(signature)) continue;
+      if (seen.has(signature)) {
+        for (let i = 0; i < list.length; i += 1) {
+          if (killEventSignature(list[i]) === signature) {
+            list[i] = { ...list[i], ...normalized };
+            break;
+          }
+        }
+        continue;
+      }
       list.push(normalized);
       seen.add(signature);
     }

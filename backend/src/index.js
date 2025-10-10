@@ -1079,26 +1079,6 @@ async function handleKillFeedLine(serverId, line) {
     created_at: parsed.occurredAt
   };
 
-  let combatLog = null;
-  let combatLogError = null;
-  if (parsed.victimSteamId) {
-    try {
-      const serverRow = await getMonitoredServerRow(key);
-      if (serverRow) {
-        const reply = await sendRconCommand(serverRow, `combatlog ${parsed.victimSteamId}`, {
-          silent: true,
-          timeoutMs: 15000
-        });
-        combatLog = normaliseCombatLogReply(reply);
-      }
-    } catch (err) {
-      combatLogError = err?.message || String(err);
-    }
-  }
-
-  if (combatLog) record.combat_log = combatLog;
-  if (combatLogError) record.combat_log_error = combatLogError;
-
   let stored = null;
   if (typeof db?.recordKillEvent === 'function') {
     try {
@@ -1110,15 +1090,32 @@ async function handleKillFeedLine(serverId, line) {
 
   const fallback = stored || {
     ...record,
-    combat_log: combatLog ? JSON.stringify(combatLog) : null,
+    combat_log: null,
+    combat_log_error: null,
     id: null
   };
   const normalized = normaliseKillEventRow(fallback);
   if (!normalized) return;
 
-  cacheKillEvent(key, normalized);
-  io.to(`srv:${key}`).emit('kill', { serverId: key, event: normalized });
+  const pendingEvent = (!normalized.combatLog && !normalized.combatLogError && parsed.victimSteamId)
+    ? {
+        ...normalized,
+        combatLogError: 'Please wait, server is fetching combat log…'
+      }
+    : normalized;
+
+  cacheKillEvent(key, pendingEvent);
+  io.to(`srv:${key}`).emit('kill', { serverId: key, event: pendingEvent });
   maybeCleanupKillFeed(key);
+
+  if (parsed.victimSteamId) {
+    scheduleCombatLogFetch({
+      serverId: key,
+      victimSteamId: parsed.victimSteamId,
+      eventId: stored?.id ?? null,
+      baseEvent: pendingEvent
+    });
+  }
 }
 
 function parseStatusMessage(message) {
@@ -3061,9 +3058,11 @@ function parseKillLogLine(line) {
   const killerInfo = extractNameAndClan(match.groups.killerPart);
   const rest = match.groups.rest || '';
 
-  const weaponMatch = rest.match(/using\s+(.+?)(?:\s+from\s+|\s+at\s+\(|$)/i);
-  const distanceMatch = rest.match(/from\s+(-?\d+(?:\.\d+)?)\s*m/i);
-  const positionMatch = rest.match(/\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/);
+  const weaponMatch = rest.match(/\b(?:using|with)\s+(?<weapon>.+?)(?=(?:\s+from\b|\s+at\b|$))/i);
+  const distanceMatch = rest.match(/\bfrom\s+(-?\d+(?:\.\d+)?)\s*m\b/i);
+  const positionMatch =
+    rest.match(/\bat\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i) ||
+    rest.match(/\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/);
 
   const distance = distanceMatch ? Number(distanceMatch[1]) : null;
   const posX = positionMatch ? Number(positionMatch[1]) : null;
@@ -3080,7 +3079,17 @@ function parseKillLogLine(line) {
     victimSteamId: match.groups.victimId,
     victimName: victimInfo.name,
     victimClan: victimInfo.clan,
-    weapon: weaponMatch ? weaponMatch[1].trim() : null,
+    weapon: (() => {
+      if (weaponMatch?.groups?.weapon) {
+        const value = weaponMatch.groups.weapon.trim();
+        return value || null;
+      }
+      if (Array.isArray(weaponMatch) && weaponMatch[1]) {
+        const value = weaponMatch[1].trim();
+        return value || null;
+      }
+      return null;
+    })(),
     distance: Number.isFinite(distance) ? distance : null,
     position: Number.isFinite(posX) && Number.isFinite(posY) && Number.isFinite(posZ)
       ? { x: posX, y: posY, z: posZ }
@@ -3173,15 +3182,32 @@ function normaliseKillEventRow(row) {
   };
 }
 
+function killEventSignature(event) {
+  if (!event) return null;
+  const occurred = event.occurredAt || event.createdAt || '';
+  const killer = event.killerSteamId || '';
+  const victim = event.victimSteamId || '';
+  const raw = event.raw || '';
+  return `${occurred}:${killer}:${victim}:${raw}`;
+}
+
 function cacheKillEvent(serverId, event) {
   if (!event) return;
   const key = Number(serverId);
   if (!Number.isFinite(key)) return;
   const existing = killFeedCache.get(key) || [];
-  const signatures = new Set(existing.map((entry) => `${entry.occurredAt}:${entry.killerSteamId}:${entry.victimSteamId}:${entry.raw ?? ''}`));
+  const signature = killEventSignature(event);
   const next = [...existing];
-  const signature = `${event.occurredAt}:${event.killerSteamId}:${event.victimSteamId}:${event.raw ?? ''}`;
-  if (!signatures.has(signature)) {
+  let replaced = false;
+  for (let i = 0; i < next.length; i += 1) {
+    const currentSignature = killEventSignature(next[i]);
+    if (currentSignature === signature) {
+      next[i] = { ...next[i], ...event };
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
     next.push(event);
   }
   next.sort((a, b) => {
@@ -3196,6 +3222,85 @@ function cacheKillEvent(serverId, event) {
     return Number.isFinite(ts) ? ts >= cutoff : true;
   }).slice(0, KILL_FEED_MAX_CACHE);
   killFeedCache.set(key, filtered);
+}
+
+function scheduleCombatLogFetch({ serverId, victimSteamId, eventId = null, baseEvent = null, delayMs = 10000 }) {
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const steamId = victimSteamId ? String(victimSteamId).trim() : '';
+  if (!steamId) return;
+  const waitMs = Number(delayMs);
+  const ms = Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : 10000;
+
+  (async () => {
+    if (ms > 0) {
+      await delay(ms);
+    }
+
+    const serverRow = await getMonitoredServerRow(key);
+    if (!serverRow) return;
+
+    try {
+      const reply = await sendRconCommand(serverRow, `combatlog ${steamId}`, {
+        silent: true,
+        timeoutMs: 15000
+      });
+      const combatLog = normaliseCombatLogReply(reply);
+      await applyCombatLogToKillEvent(key, {
+        eventId,
+        combatLog,
+        error: null,
+        baseEvent
+      });
+    } catch (err) {
+      const message = err?.message || String(err);
+      await applyCombatLogToKillEvent(key, {
+        eventId,
+        combatLog: null,
+        error: message,
+        baseEvent
+      });
+    }
+  })().catch((err) => {
+    console.warn('combat log fetch failed', err);
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer?.unref === 'function') timer.unref();
+  });
+}
+
+async function applyCombatLogToKillEvent(serverId, { eventId = null, combatLog = null, error = null, baseEvent = null }) {
+  if (!combatLog && !error) return;
+  const key = Number(serverId);
+  if (!Number.isFinite(key)) return;
+  const id = Number(eventId);
+  if (Number.isFinite(id) && typeof db?.updateKillEventCombatLog === 'function') {
+    try {
+      await db.updateKillEventCombatLog({
+        id,
+        server_id: key,
+        combat_log: combatLog ?? null,
+        combat_log_error: error ?? null
+      });
+    } catch (err) {
+      console.warn('Failed to persist combat log update', err);
+    }
+  }
+
+  if (!baseEvent) return;
+  const updatedEvent = {
+    ...baseEvent,
+    combatLog: combatLog ?? baseEvent.combatLog ?? null,
+    combatLogError: error ?? null
+  };
+
+  cacheKillEvent(key, updatedEvent);
+  maybeCleanupKillFeed(key);
+  io.to(`srv:${key}`).emit('kill', { serverId: key, event: updatedEvent });
 }
 
 function normaliseCombatLogReply(reply) {
