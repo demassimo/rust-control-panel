@@ -193,7 +193,9 @@
     error: null,
     profileCache: new Map(),
     profileRequests: new Map(),
-    teamColors: new Map()
+    teamColors: new Map(),
+    teamPalettes: new Map(),
+    playerTeams: new Map()
   };
   const killFeedState = {
     cache: new Map(),
@@ -418,6 +420,190 @@
       return fallback;
     }
     return DEFAULT_TEAM_CHAT_COLOR;
+  }
+
+  function normalizeServerId(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  function normalizeTeamId(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+  }
+
+  function resolvePlayerSteamIdForMapping(player) {
+    if (!player || typeof player !== 'object') return '';
+    const candidates = [
+      player.steamId,
+      player.steamid,
+      player.SteamID,
+      player.SteamId,
+      player.userid,
+      player.userId,
+      player.UserId,
+      player.id,
+      player.ID,
+      player.entityId,
+      player.EntityId
+    ];
+    for (const candidate of candidates) {
+      if (candidate == null) continue;
+      const value = String(candidate).trim();
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function resolvePlayerTeamIdForMapping(player) {
+    if (!player || typeof player !== 'object') return null;
+    const candidates = [
+      player.teamId,
+      player.TeamId,
+      player.teamID,
+      player.TeamID,
+      player.team,
+      player.Team
+    ];
+    for (const candidate of candidates) {
+      const teamId = normalizeTeamId(candidate);
+      if (teamId != null) return teamId;
+    }
+    return null;
+  }
+
+  function assignMapIfChanged(storage, key, nextMap) {
+    const previous = storage.get(key);
+    if (previous && previous.size === nextMap.size) {
+      let identical = true;
+      for (const [entryKey, entryValue] of nextMap.entries()) {
+        if (previous.get(entryKey) !== entryValue) {
+          identical = false;
+          break;
+        }
+      }
+      if (identical) {
+        for (const entryKey of previous.keys()) {
+          if (!nextMap.has(entryKey)) {
+            identical = false;
+            break;
+          }
+        }
+      }
+      if (identical) return false;
+    }
+    storage.set(key, nextMap);
+    return true;
+  }
+
+  function updatePlayerTeamMapping(serverId, players) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return false;
+    const next = new Map();
+    for (const player of Array.isArray(players) ? players : []) {
+      const steamId = resolvePlayerSteamIdForMapping(player);
+      if (!steamId) continue;
+      const teamId = resolvePlayerTeamIdForMapping(player);
+      if (teamId == null) continue;
+      next.set(steamId, teamId);
+    }
+    return assignMapIfChanged(chatState.playerTeams, numeric, next);
+  }
+
+  function updateServerTeamPalette(serverId, colors) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return false;
+    const next = new Map();
+    for (const entry of Array.isArray(colors) ? colors : []) {
+      const teamId = normalizeTeamId(entry?.teamId ?? entry?.team_id ?? entry?.id);
+      const color = pickString(entry?.color ?? entry?.value ?? entry?.hex);
+      if (teamId == null || !color) continue;
+      next.set(teamId, color);
+    }
+    return assignMapIfChanged(chatState.teamPalettes, numeric, next);
+  }
+
+  const TEAM_ID_PATTERNS = [
+    /\bteam\s*(?:chat)?\s*(?:#|id[:=])\s*(\d+)\b/i,
+    /\bteam\s*(\d+)\b/i
+  ];
+
+  function parseTeamIdFromText(text) {
+    if (typeof text !== 'string') return null;
+    for (const pattern of TEAM_ID_PATTERNS) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        const teamId = normalizeTeamId(match[1]);
+        if (teamId != null) return teamId;
+      }
+    }
+    return null;
+  }
+
+  function resolveTeamIdForEntry(serverId, entry) {
+    if (!entry || entry.channel !== 'team') return null;
+    const numericServerId = Number(serverId);
+    const entrySteamId = pickString(entry.steamId);
+    if (entrySteamId && Number.isFinite(numericServerId)) {
+      const teamMap = chatState.playerTeams.get(numericServerId);
+      const mapped = teamMap?.get(entrySteamId);
+      if (mapped != null) return mapped;
+    }
+    const sources = [];
+    if (entry.raw) sources.push(entry.raw);
+    if (entry.message) sources.push(entry.message);
+    for (const source of sources) {
+      const teamId = parseTeamIdFromText(source);
+      if (teamId != null) return teamId;
+    }
+    return null;
+  }
+
+  function resolveTeamMessageColor(serverId, entry) {
+    const numericServerId = Number(serverId);
+    const baseColor = getTeamChatColor(numericServerId, entry?.color);
+    if (!entry || entry.channel !== 'team') {
+      return pickString(baseColor, DEFAULT_TEAM_CHAT_COLOR);
+    }
+    const teamId = resolveTeamIdForEntry(numericServerId, entry);
+    if (teamId != null) {
+      const palette = chatState.teamPalettes.get(numericServerId);
+      const paletteColor = palette?.get(teamId);
+      const normalized = pickString(paletteColor);
+      if (normalized) return normalized;
+    }
+    const direct = pickString(entry?.color);
+    return pickString(direct, baseColor, DEFAULT_TEAM_CHAT_COLOR);
+  }
+
+  function handlePlayersListUpdate(payload = {}) {
+    const players = Array.isArray(payload.players) ? payload.players : [];
+    const explicitServerId = payload.serverId;
+    let serverId = normalizeServerId(explicitServerId);
+    if (serverId == null && explicitServerId === undefined) {
+      serverId = normalizeServerId(state.currentServerId);
+    }
+    if (serverId == null) return;
+    const changed = updatePlayerTeamMapping(serverId, players);
+    const currentServerId = normalizeServerId(state.currentServerId);
+    if (changed && currentServerId != null && currentServerId === serverId) {
+      renderChatMessages();
+    }
+  }
+
+  function handleTeamColorsUpdate(payload = {}) {
+    const colors = Array.isArray(payload.colors) ? payload.colors : [];
+    const explicitServerId = payload.serverId;
+    let serverId = normalizeServerId(explicitServerId);
+    if (serverId == null && explicitServerId === undefined) {
+      serverId = normalizeServerId(state.currentServerId);
+    }
+    if (serverId == null) return;
+    const changed = updateServerTeamPalette(serverId, colors);
+    const currentServerId = normalizeServerId(state.currentServerId);
+    if (changed && currentServerId != null && currentServerId === serverId) {
+      renderChatMessages();
+    }
   }
 
   function messageSignature(entry) {
@@ -671,7 +857,7 @@
   function renderChatMessages() {
     if (!workspaceChatList) return;
     updateChatFilterButtons();
-    const serverId = state.currentServerId;
+    const serverId = Number(state.currentServerId);
     const hasServer = Number.isFinite(serverId);
     const records = hasServer ? (chatState.cache.get(serverId) || []) : [];
     const filtered = chatState.filter === 'all'
@@ -768,7 +954,7 @@
 
       const hasAvatarImage = !!avatarUrl;
       if (entry.channel === 'team') {
-        const teamColor = getTeamChatColor(serverId, entry.color);
+        const teamColor = resolveTeamMessageColor(serverId, entry) || DEFAULT_TEAM_CHAT_COLOR;
         const nameColor = rgbaFromColor(teamColor, 0.95) || teamColor;
         const badgeColor = rgbaFromColor(teamColor, 0.2) || teamColor;
         const borderColor = rgbaFromColor(teamColor, 0.45) || teamColor;
@@ -2655,6 +2841,14 @@
     };
   })();
 
+  moduleBus.on('players:list', handlePlayersListUpdate);
+  moduleBus.on('map:team-colors', handleTeamColorsUpdate);
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('players:list', (event) => handlePlayersListUpdate(event?.detail || {}));
+    window.addEventListener('map:team-colors', (event) => handleTeamColorsUpdate(event?.detail || {}));
+  }
+
   const quickCommands = new Map();
 
   function setQuickInput(value) {
@@ -4231,6 +4425,8 @@
     chatState.profileCache.clear();
     chatState.profileRequests.clear();
     chatState.teamColors.clear();
+    chatState.teamPalettes.clear();
+    chatState.playerTeams.clear();
     resetF7Reports();
     renderChatMessages();
     clearKillFeedRefreshTimer();
