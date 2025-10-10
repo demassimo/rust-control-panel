@@ -132,6 +132,17 @@ function trimOrNull(value) {
   return text || null;
 }
 
+function normaliseReportCategory(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const collapsed = trimmed.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!collapsed) return trimmed;
+  const shouldTitleCase = collapsed === collapsed.toLowerCase() || /[_-]/.test(trimmed);
+  if (!shouldTitleCase) return collapsed;
+  return collapsed.replace(/\b\w+/g, (segment) => segment.charAt(0).toUpperCase() + segment.slice(1));
+}
+
 export function parseChatMessage(message, payload = {}) {
   const payloadMessage = typeof payload?.Message === 'string' ? payload.Message : (typeof payload?.message === 'string' ? payload.message : null);
   const baseText = trimOrNull(stripAnsiSequences(message ?? payloadMessage ?? ''));
@@ -344,7 +355,7 @@ export function parseF7ReportLine(line) {
   if (!stripped) return null;
 
   const jsonCandidate = (() => {
-    let working = stripped.replace(/^f7\s*report\s*[:\-]\s*/i, '').trim();
+    let working = stripped.replace(/^f7\s*(?:report|ticket)\s*[:\-]\s*/i, '').trim();
     if (!working.includes('{')) return null;
     const firstBrace = working.indexOf('{');
     const lastBrace = working.lastIndexOf('}');
@@ -380,12 +391,27 @@ export function parseF7ReportLine(line) {
       ?? jsonCandidate.PlayerID
       ?? jsonCandidate.ReporterId
       ?? jsonCandidate.ReporterID
+      ?? jsonCandidate.SourceId
+      ?? jsonCandidate.SourceID
+      ?? jsonCandidate.SourceSteamId
+      ?? jsonCandidate.SourceSteamID
       ?? jsonCandidate.playerId
       ?? jsonCandidate.playerID
       ?? jsonCandidate.reporterId
       ?? jsonCandidate.reporterID
+      ?? jsonCandidate.sourceId
+      ?? jsonCandidate.sourceID
+      ?? jsonCandidate.sourceSteamId
+      ?? jsonCandidate.sourceSteamID
     );
-    const reporterName = trimOrNull(pick('PlayerName', 'ReporterName', 'playerName', 'reporterName', 'SourceName', 'sourceName'));
+    const reporterName = trimOrNull(pick(
+      'PlayerName',
+      'ReporterName',
+      'playerName',
+      'reporterName',
+      'SourceName',
+      'sourceName'
+    ));
     const targetSteamId = sanitiseSteamId(
       jsonCandidate.TargetId
       ?? jsonCandidate.TargetID
@@ -398,7 +424,7 @@ export function parseF7ReportLine(line) {
     );
     const targetName = trimOrNull(pick('TargetName', 'targetName'));
     const subject = trimOrNull(pick('Subject', 'subject', 'Title', 'title'));
-    const type = trimOrNull(pick('Type', 'type', 'Category', 'category'));
+    const type = trimOrNull(pick('Type', 'type', 'Category', 'category', 'TicketType', 'ticketType'));
     const message = trimOrNull(pick('Message', 'message'));
     const timestamp = normaliseTimestamp(
       jsonCandidate.Timestamp
@@ -410,14 +436,16 @@ export function parseF7ReportLine(line) {
       ?? jsonCandidate.Date
       ?? jsonCandidate.date
     );
-    const reportId = trimOrNull(pick('ReportId', 'reportId', 'Id', 'ID', 'id'));
+    const reportId = trimOrNull(pick('ReportId', 'reportId', 'Id', 'ID', 'id', 'TicketId', 'TicketID'));
 
-    let category = type || null;
+    let category = normaliseReportCategory(type) || type || null;
     if (!category && subject) {
       const bracketMatch = subject.match(/^\s*\[([^\]]+)\]/);
-      if (bracketMatch) category = trimOrNull(bracketMatch[1]);
+      if (bracketMatch) {
+        category = normaliseReportCategory(bracketMatch[1]) || trimOrNull(bracketMatch[1]);
+      }
     }
-    if (!category && subject) category = subject;
+    if (!category && subject) category = normaliseReportCategory(subject) || subject;
 
     let derivedMessage = message || null;
     if (!derivedMessage && subject) {
@@ -425,6 +453,22 @@ export function parseF7ReportLine(line) {
       derivedMessage = withoutPrefix || subject;
     }
     if (!derivedMessage && category) derivedMessage = category;
+
+    if (category) {
+      const prettyCategory = normaliseReportCategory(category);
+      if (prettyCategory) category = prettyCategory;
+    }
+
+    if (derivedMessage) {
+      if (category && derivedMessage === type) {
+        derivedMessage = category;
+      } else if (category && derivedMessage === type?.replace(/[_-]+/g, ' ')) {
+        derivedMessage = category;
+      } else if (/[_-]/.test(derivedMessage)) {
+        const prettyMessage = normaliseReportCategory(derivedMessage);
+        if (prettyMessage) derivedMessage = prettyMessage;
+      }
+    }
 
     if (!reportId && !reporterSteamId && !targetSteamId) {
       return null;
@@ -440,13 +484,15 @@ export function parseF7ReportLine(line) {
       targetName,
       targetSteamId,
       category,
-      message: finalMessage,
+      message: typeof finalMessage === 'string' && /[_-]/.test(finalMessage)
+        ? normaliseReportCategory(finalMessage) || finalMessage
+        : finalMessage,
       timestamp: timestamp || null
     };
   }
 
   const lowered = stripped.toLowerCase();
-  if (!lowered.includes('f7') || !lowered.includes('report')) return null;
+  if (!lowered.includes('f7') || (!lowered.includes('report') && !lowered.includes('ticket'))) return null;
 
   const result = {
     raw: stripped,
@@ -460,7 +506,7 @@ export function parseF7ReportLine(line) {
     timestamp: null
   };
 
-  const reportIdMatch = stripped.match(/report\s*id\s*[:#]\s*(\d{3,})/i);
+  const reportIdMatch = stripped.match(/(?:report|ticket)\s*(?:id|#)\s*[:#-]?\s*(\d{3,})/i);
   if (reportIdMatch) {
     result.reportId = reportIdMatch[1];
   }
@@ -512,6 +558,22 @@ export function parseF7ReportLine(line) {
 
   if (!result.message && result.category) {
     result.message = result.category;
+  }
+
+  if (result.category) {
+    const prettyCategory = normaliseReportCategory(result.category);
+    if (prettyCategory) result.category = prettyCategory;
+  }
+
+  if (result.message) {
+    const normalisedMessage = /[_-]/.test(result.message)
+      ? normaliseReportCategory(result.message)
+      : null;
+    if (normalisedMessage) {
+      result.message = normalisedMessage;
+    } else if (result.category && result.message === result.category.replace(/\s+/g, '').toLowerCase()) {
+      result.message = result.category;
+    }
   }
 
   if (!result.reportId && participants.length === 0) {
