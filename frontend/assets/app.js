@@ -1092,6 +1092,7 @@
     const victimName = pickString(raw?.victimName, raw?.victim_name, parsedRaw?.victimName);
     const victimClan = pickString(raw?.victimClan, raw?.victim_clan, parsedRaw?.victimClan);
     let weapon = pickString(raw?.weapon, parsedRaw?.weapon);
+    const rawWeapon = weapon;
 
     if (combatLog?.records?.length) {
       for (let i = combatLog.records.length - 1; i >= 0; i -= 1) {
@@ -1126,6 +1127,7 @@
       victimName,
       victimClan,
       weapon,
+      rawWeapon,
       distance: distanceValue,
       position: hasPosition ? position : null,
       raw: rawLog,
@@ -1140,7 +1142,7 @@
       entry.occurredAt,
       entry.killerSteamId || '',
       entry.victimSteamId || '',
-      entry.weapon || '',
+      (entry.rawWeapon ?? entry.weapon ?? ''),
       entry.raw || ''
     ].join('::');
   }
