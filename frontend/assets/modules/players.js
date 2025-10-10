@@ -268,6 +268,13 @@
         };
       }
 
+      function resolveActiveServerId() {
+        const globalState = ctx.getState?.();
+        const serverId = Number(state.serverId ?? globalState?.currentServerId);
+        if (!Number.isFinite(serverId)) return null;
+        return Math.trunc(serverId);
+      }
+
       function normalisePlayerNote(entry) {
         if (!entry) return null;
         const idRaw = entry?.id ?? entry?.note_id ?? entry?.noteId;
@@ -1496,12 +1503,20 @@
         if (!modalState.open || !modalState.steamid) return;
         if (!modalState.notes) modalState.notes = createNotesState();
         if (modalState.notes.loading && !force) return;
+        const serverId = resolveActiveServerId();
+        if (!Number.isFinite(serverId)) {
+          setNotesMessage('Select a server before viewing notes.', 'error');
+          modalState.notes.loading = false;
+          modalState.notes.loaded = false;
+          renderNotesDialog();
+          return;
+        }
         modalState.notes.loading = true;
         modalState.notes.loaded = force ? false : modalState.notes.loaded;
         if (!force) setNotesMessage('');
         renderNotesDialog();
         try {
-          const payload = await ctx.api(`/players/${modalState.steamid}/notes`);
+          const payload = await ctx.api(`/players/${modalState.steamid}/notes?serverId=${serverId}`);
           const rows = Array.isArray(payload?.notes) ? payload.notes : [];
           modalState.notes.items = rows.map((row) => normalisePlayerNote(row)).filter(Boolean);
           modalState.notes.loaded = true;
@@ -1580,6 +1595,12 @@
           setModalStatus('Steam ID is required to add a note.', 'error');
           return;
         }
+        const serverId = resolveActiveServerId();
+        if (!Number.isFinite(serverId)) {
+          setNotesMessage('Select a server before adding notes.', 'error');
+          renderNotesDialog();
+          return;
+        }
         if (!modal?.elements?.notesInput) return;
         if (!modalState.notes) modalState.notes = createNotesState();
         const value = modal.elements.notesInput.value.trim();
@@ -1599,7 +1620,7 @@
         setNotesMessage('Saving note…', 'info');
         renderNotesDialog();
         try {
-          const payload = await ctx.api(`/players/${modalState.steamid}/notes`, { note: value }, 'POST');
+          const payload = await ctx.api(`/players/${modalState.steamid}/notes`, { note: value, serverId }, 'POST');
           const created = normalisePlayerNote(payload?.note);
           if (created) {
             const existing = Array.isArray(modalState.notes.items) ? modalState.notes.items : [];
@@ -1632,6 +1653,12 @@
         if (!modalState.open || !modalState.steamid) return;
         const idNum = Number(noteId);
         if (!Number.isFinite(idNum) || idNum <= 0) return;
+        const serverId = resolveActiveServerId();
+        if (!Number.isFinite(serverId)) {
+          setNotesMessage('Select a server before removing notes.', 'error');
+          renderNotesDialog();
+          return;
+        }
         if (!modalState.notes) modalState.notes = createNotesState();
         let confirmed = true;
         if (typeof ctx.confirm === 'function') {
@@ -1646,7 +1673,7 @@
         modalState.notes.removing.add(Math.trunc(idNum));
         renderNotesDialog();
         try {
-          await ctx.api(`/players/${modalState.steamid}/notes/${Math.trunc(idNum)}`, null, 'DELETE');
+          await ctx.api(`/players/${modalState.steamid}/notes/${Math.trunc(idNum)}?serverId=${serverId}`, null, 'DELETE');
           modalState.notes.items = (modalState.notes.items || []).filter((note) => note?.id !== Math.trunc(idNum));
           setNotesMessage('Note removed.', 'success');
         } catch (err) {

@@ -6371,18 +6371,34 @@ app.post('/api/players/:steamid/event', auth, async (req, res) => {
   }
 });
 
+function ensureManageCapabilityForNotes(req, res, rawServerId) {
+  const serverId = toServerId(rawServerId);
+  if (serverId == null) {
+    res.status(400).json({ error: 'invalid_server_id' });
+    return null;
+  }
+  if (!canAccessServer(req.authUser, serverId, 'manage')) {
+    res.status(403).json({ error: 'forbidden' });
+    return null;
+  }
+  return serverId;
+}
+
 app.get('/api/players/:steamid/notes', auth, async (req, res) => {
   if (typeof db.listPlayerNotes !== 'function') {
     return res.status(400).json({ error: 'unsupported' });
   }
   const steamid = String(req.params.steamid || '').trim();
   if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+  const serverIdRaw = req.query?.server_id ?? req.query?.serverId;
+  const serverId = ensureManageCapabilityForNotes(req, res, serverIdRaw);
+  if (serverId == null) return;
   const limitRaw = Number(req.query.limit);
   const offsetRaw = Number(req.query.offset);
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 500) : 100;
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
   try {
-    const rows = await db.listPlayerNotes(steamid, { limit, offset });
+    const rows = await db.listPlayerNotes(steamid, { limit, offset, serverId });
     const notes = (rows || []).map((row) => projectPlayerNote(row)).filter(Boolean);
     res.json({ steamid, notes });
   } catch (err) {
@@ -6398,8 +6414,8 @@ app.post('/api/players/:steamid/notes', auth, async (req, res) => {
   const steamid = String(req.params.steamid || '').trim();
   if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
   const serverIdRaw = req.body?.server_id ?? req.body?.serverId;
-  const serverIdNum = Number(serverIdRaw);
-  const serverId = Number.isFinite(serverIdNum) ? Math.trunc(serverIdNum) : null;
+  const serverId = ensureManageCapabilityForNotes(req, res, serverIdRaw);
+  if (serverId == null) return;
   const noteRaw = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
   if (!noteRaw) return res.status(400).json({ error: 'invalid_note' });
   if (noteRaw.length > MAX_PLAYER_NOTE_LENGTH) return res.status(400).json({ error: 'note_too_long' });
@@ -6420,10 +6436,13 @@ app.delete('/api/players/:steamid/notes/:noteId', auth, async (req, res) => {
   }
   const steamid = String(req.params.steamid || '').trim();
   if (!steamid) return res.status(400).json({ error: 'invalid_steamid' });
+  const serverIdRaw = req.query?.server_id ?? req.query?.serverId;
+  const serverId = ensureManageCapabilityForNotes(req, res, serverIdRaw);
+  if (serverId == null) return;
   const noteId = Number(req.params.noteId);
   if (!Number.isFinite(noteId) || noteId <= 0) return res.status(400).json({ error: 'invalid_note_id' });
   try {
-    const deleted = await db.deletePlayerNote({ steamid, id: Math.trunc(noteId) });
+    const deleted = await db.deletePlayerNote({ steamid, id: Math.trunc(noteId), server_id: serverId });
     if (!deleted) return res.status(404).json({ error: 'not_found' });
     res.json({ ok: true });
   } catch (err) {
