@@ -1096,8 +1096,15 @@ async function handleKillFeedLine(serverId, line) {
   const normalized = normaliseKillEventRow(fallback);
   if (!normalized) return;
 
-  cacheKillEvent(key, normalized);
-  io.to(`srv:${key}`).emit('kill', { serverId: key, event: normalized });
+  const pendingEvent = (!normalized.combatLog && !normalized.combatLogError && parsed.victimSteamId)
+    ? {
+        ...normalized,
+        combatLogError: 'Please wait, server is fetching combat log…'
+      }
+    : normalized;
+
+  cacheKillEvent(key, pendingEvent);
+  io.to(`srv:${key}`).emit('kill', { serverId: key, event: pendingEvent });
   maybeCleanupKillFeed(key);
 
   if (parsed.victimSteamId) {
@@ -1105,7 +1112,7 @@ async function handleKillFeedLine(serverId, line) {
       serverId: key,
       victimSteamId: parsed.victimSteamId,
       eventId: stored?.id ?? null,
-      baseEvent: normalized
+      baseEvent: pendingEvent
     });
   }
 }
@@ -3208,36 +3215,46 @@ function scheduleCombatLogFetch({ serverId, victimSteamId, eventId = null, baseE
   if (!steamId) return;
   const waitMs = Number(delayMs);
   const ms = Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : 10000;
-  const timer = setTimeout(() => {
-    (async () => {
-      const serverRow = await getMonitoredServerRow(key);
-      if (!serverRow) return;
-      try {
-        const reply = await sendRconCommand(serverRow, `combatlog ${steamId}`, {
-          silent: true,
-          timeoutMs: 15000
-        });
-        const combatLog = normaliseCombatLogReply(reply);
-        await applyCombatLogToKillEvent(key, {
-          eventId,
-          combatLog,
-          error: null,
-          baseEvent
-        });
-      } catch (err) {
-        const message = err?.message || String(err);
-        await applyCombatLogToKillEvent(key, {
-          eventId,
-          combatLog: null,
-          error: message,
-          baseEvent
-        });
-      }
-    })().catch((err) => {
-      console.warn('combat log fetch failed', err);
-    });
-  }, ms);
-  if (typeof timer?.unref === 'function') timer.unref();
+
+  (async () => {
+    if (ms > 0) {
+      await delay(ms);
+    }
+
+    const serverRow = await getMonitoredServerRow(key);
+    if (!serverRow) return;
+
+    try {
+      const reply = await sendRconCommand(serverRow, `combatlog ${steamId}`, {
+        silent: true,
+        timeoutMs: 15000
+      });
+      const combatLog = normaliseCombatLogReply(reply);
+      await applyCombatLogToKillEvent(key, {
+        eventId,
+        combatLog,
+        error: null,
+        baseEvent
+      });
+    } catch (err) {
+      const message = err?.message || String(err);
+      await applyCombatLogToKillEvent(key, {
+        eventId,
+        combatLog: null,
+        error: message,
+        baseEvent
+      });
+    }
+  })().catch((err) => {
+    console.warn('combat log fetch failed', err);
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (typeof timer?.unref === 'function') timer.unref();
+  });
 }
 
 async function applyCombatLogToKillEvent(serverId, { eventId = null, combatLog = null, error = null, baseEvent = null }) {
