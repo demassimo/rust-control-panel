@@ -1084,6 +1084,8 @@ async function handleKillFeedLine(serverId, line) {
     try {
       const serverRow = await getMonitoredServerRow(key);
       if (serverRow) {
+        // Give the server time to populate the combat log before requesting it.
+        await new Promise((resolve) => setTimeout(resolve, 10000));
         const reply = await sendRconCommand(serverRow, `combatlog ${parsed.victimSteamId}`, {
           silent: true,
           timeoutMs: 15000
@@ -3045,9 +3047,11 @@ function parseKillLogLine(line) {
   const killerInfo = extractNameAndClan(match.groups.killerPart);
   const rest = match.groups.rest || '';
 
-  const weaponMatch = rest.match(/using\s+(.+?)(?:\s+from\s+|\s+at\s+\(|$)/i);
-  const distanceMatch = rest.match(/from\s+(-?\d+(?:\.\d+)?)\s*m/i);
-  const positionMatch = rest.match(/\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/);
+  const weaponMatch = rest.match(/\b(?:using|with)\s+(?<weapon>.+?)(?=(?:\s+from\b|\s+at\b|$))/i);
+  const distanceMatch = rest.match(/\bfrom\s+(-?\d+(?:\.\d+)?)\s*m\b/i);
+  const positionMatch =
+    rest.match(/\bat\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i) ||
+    rest.match(/\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/);
 
   const distance = distanceMatch ? Number(distanceMatch[1]) : null;
   const posX = positionMatch ? Number(positionMatch[1]) : null;
@@ -3064,7 +3068,17 @@ function parseKillLogLine(line) {
     victimSteamId: match.groups.victimId,
     victimName: victimInfo.name,
     victimClan: victimInfo.clan,
-    weapon: weaponMatch ? weaponMatch[1].trim() : null,
+    weapon: (() => {
+      if (weaponMatch?.groups?.weapon) {
+        const value = weaponMatch.groups.weapon.trim();
+        return value || null;
+      }
+      if (Array.isArray(weaponMatch) && weaponMatch[1]) {
+        const value = weaponMatch[1].trim();
+        return value || null;
+      }
+      return null;
+    })(),
     distance: Number.isFinite(distance) ? distance : null,
     position: Number.isFinite(posX) && Number.isFinite(posY) && Number.isFinite(posZ)
       ? { x: posX, y: posY, z: posZ }
