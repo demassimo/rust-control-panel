@@ -4119,6 +4119,7 @@
       actions.appendChild(accountBtn);
       actions.appendChild(logoutBtn);
       userBox.appendChild(actions);
+
       applyPermissionGates();
     }
   };

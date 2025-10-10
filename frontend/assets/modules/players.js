@@ -20,6 +20,7 @@
         { value: 'unlimited', label: 'Unlimited' }
       ];
       const limitValueSet = new Set(limitOptions.map((option) => option.value));
+      const PLAYER_NOTE_MAX_LENGTH = 2000;
       if (typeof window !== 'undefined' && typeof window[sharedSearchKey] !== 'string') {
         window[sharedSearchKey] = '';
       }
@@ -253,13 +254,50 @@
         return Math.floor(numeric);
       }
 
+      function createNotesState() {
+        return {
+          open: false,
+          loading: false,
+          loaded: false,
+          items: [],
+          message: '',
+          messageVariant: 'info',
+          submitting: false,
+          removing: new Set(),
+          trigger: null
+        };
+      }
+
+      function resolveActiveServerId() {
+        const globalState = ctx.getState?.();
+        const serverId = Number(state.serverId ?? globalState?.currentServerId);
+        if (!Number.isFinite(serverId)) return null;
+        return Math.trunc(serverId);
+      }
+
+      function normalisePlayerNote(entry) {
+        if (!entry) return null;
+        const idRaw = entry?.id ?? entry?.note_id ?? entry?.noteId;
+        const idNum = Number(idRaw);
+        const created = entry?.created_at || entry?.createdAt || null;
+        const serverIdRaw = entry?.server_id ?? entry?.serverId;
+        const serverIdNum = Number(serverIdRaw);
+        return {
+          id: Number.isFinite(idNum) && idNum > 0 ? Math.trunc(idNum) : null,
+          note: typeof entry?.note === 'string' ? entry.note : '',
+          created_at: created,
+          server_id: Number.isFinite(serverIdNum) ? Math.trunc(serverIdNum) : null
+        };
+      }
+
       const modalState = {
         open: false,
         steamid: null,
         base: null,
         details: null,
         refreshing: false,
-        updatingName: false
+        updatingName: false,
+        notes: createNotesState()
       };
 
       const modal = createPlayerModal();
@@ -858,6 +896,8 @@
       function openModal(player) {
         if (!player || !modal) return;
         const steamid = String(player.steamid || '').trim();
+        closeNotesDialog({ reset: true, restoreFocus: false });
+        modalState.notes = createNotesState();
         modalState.open = true;
         modalState.steamid = steamid || null;
         modalState.updatingName = false;
@@ -880,6 +920,7 @@
         modalState.details = null;
         modalState.refreshing = false;
         modalState.updatingName = false;
+        closeNotesDialog({ reset: true, restoreFocus: false });
         setModalStatus('');
         setModalLoading(false);
         modal.hide();
@@ -1100,6 +1141,18 @@
           }
           modal.elements.forceNameBtn.disabled = busy || !hasSteam || !Number.isFinite(serverId);
         }
+        if (modal.elements.notesBtn) {
+          const hasSteam = Boolean(combined.steamid);
+          const busy = modalState.notes.loading || modalState.notes.submitting;
+          modal.elements.notesBtn.disabled = !hasSteam || busy;
+        }
+        if (Array.isArray(modal.elements.moderationButtons)) {
+          const hasSteam = Boolean(combined.steamid);
+          const busy = moderationBusy();
+          for (const btn of modal.elements.moderationButtons) {
+            if (btn) btn.disabled = busy || !hasSteam;
+          }
+        }
       }
 
       function setModalStatus(message, variant = 'info') {
@@ -1119,6 +1172,533 @@
       function setModalLoading(isLoading) {
         if (!modal?.elements.loading) return;
         modal.elements.loading.classList.toggle('hidden', !isLoading);
+      }
+
+      function describeDuration(minutes) {
+        const value = Math.round(Number(minutes));
+        if (!Number.isFinite(value) || value <= 0) return '1 minute';
+        const safe = Math.max(1, value);
+        return `${safe} minute${safe === 1 ? '' : 's'}`;
+      }
+
+      function getSelectedPlayerContext() {
+        const combined = { ...(modalState.base || {}), ...(modalState.details || {}) };
+        const steamId = String(modalState.steamid || combined.steamid || combined.steamId || '')
+          .trim();
+        const name =
+          combined.display_name ||
+          combined.persona ||
+          combined.raw_display_name ||
+          steamId ||
+          'Unknown player';
+        return { steamId, name };
+      }
+
+      async function requestModerationReason({
+        title,
+        message,
+        confirmText,
+        label,
+        requiredMessage
+      }) {
+        if (typeof ctx.prompt !== 'function') {
+          setModalStatus('Reason prompt unavailable in this build.', 'error');
+          return null;
+        }
+        while (true) {
+          const value = await ctx.prompt({
+            title,
+            message,
+            confirmText,
+            cancelText: 'Cancel',
+            label,
+            required: true,
+            requiredMessage
+          });
+          if (value == null) return null;
+          const trimmed = String(value).trim();
+          if (trimmed) return trimmed;
+          if (typeof ctx.confirm === 'function') {
+            await ctx.confirm({
+              title: 'Reason required',
+              message: requiredMessage || 'Please provide a non-empty reason.',
+              confirmText: 'OK',
+              showCancel: false
+            });
+          }
+        }
+      }
+
+      async function requestModerationDuration({
+        title,
+        message,
+        confirmText,
+        placeholder,
+        emptyIsIndefiniteMessage
+      }) {
+        if (typeof ctx.prompt !== 'function') {
+          setModalStatus('Duration prompt unavailable in this build.', 'error');
+          return { cancelled: true, minutes: null };
+        }
+        while (true) {
+          const value = await ctx.prompt({
+            title,
+            message,
+            confirmText,
+            cancelText: 'Cancel',
+            label: 'Duration (minutes)',
+            placeholder,
+            type: 'number'
+          });
+          if (value == null) return { cancelled: true, minutes: null };
+          const trimmed = String(value).trim();
+          if (!trimmed) return { cancelled: false, minutes: null };
+          const parsed = Number(trimmed);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            if (typeof ctx.confirm === 'function') {
+              await ctx.confirm({
+                title: 'Invalid duration',
+                message:
+                  emptyIsIndefiniteMessage ||
+                  'Enter a positive number of minutes or leave the field blank.',
+                confirmText: 'OK',
+                showCancel: false
+              });
+            }
+            continue;
+          }
+          const minutes = Math.round(parsed);
+          return { cancelled: false, minutes: minutes > 0 ? minutes : 1 };
+        }
+      }
+
+      function moderationBusy() {
+        return modalState.refreshing || modalState.updatingName;
+      }
+
+      async function handleBanModeration() {
+        if (!modalState.open || moderationBusy()) return;
+        const target = getSelectedPlayerContext();
+        if (!target.steamId) {
+          setModalStatus('Steam ID is required to issue a ban.', 'error');
+          return;
+        }
+        const reason = await requestModerationReason({
+          title: 'Ban player',
+          message: `Provide a reason for banning ${target.name} (${target.steamId}).`,
+          confirmText: 'Continue',
+          label: 'Ban reason',
+          requiredMessage: 'Ban reason is required.'
+        });
+        if (!reason) return;
+        const duration = await requestModerationDuration({
+          title: 'Ban duration',
+          message:
+            'Enter the duration in minutes for a temporary ban. Leave blank for a permanent ban.',
+          confirmText: 'Apply ban',
+          placeholder: 'Leave blank for permanent ban',
+          emptyIsIndefiniteMessage:
+            'Enter a positive number of minutes or leave the field blank for a permanent ban.'
+        });
+        if (duration.cancelled) return;
+        const descriptor = duration.minutes
+          ? `temporary ban for ${describeDuration(duration.minutes)}`
+          : 'permanent ban';
+        const logLine = `Ban issued for ${target.name} [${target.steamId}] (${descriptor}). Reason: ${reason}`;
+        ctx.log?.(logLine);
+        setModalStatus(`Logged ${descriptor} for ${target.name}.`, 'success');
+      }
+
+      async function handleKickModeration() {
+        if (!modalState.open || moderationBusy()) return;
+        const target = getSelectedPlayerContext();
+        if (!target.steamId) {
+          setModalStatus('Steam ID is required to issue a kick.', 'error');
+          return;
+        }
+        const reason = await requestModerationReason({
+          title: 'Kick player',
+          message: `Provide a reason for kicking ${target.name} (${target.steamId}).`,
+          confirmText: 'Kick player',
+          label: 'Kick reason',
+          requiredMessage: 'Kick reason is required.'
+        });
+        if (!reason) return;
+        const logLine = `Kick issued for ${target.name} [${target.steamId}]. Reason: ${reason}`;
+        ctx.log?.(logLine);
+        setModalStatus(`Logged kick for ${target.name}.`, 'success');
+      }
+
+      async function handleMuteModeration() {
+        if (!modalState.open || moderationBusy()) return;
+        const target = getSelectedPlayerContext();
+        if (!target.steamId) {
+          setModalStatus('Steam ID is required to apply a mute.', 'error');
+          return;
+        }
+        const reason = await requestModerationReason({
+          title: 'Mute player',
+          message: `Provide a reason for muting ${target.name} (${target.steamId}).`,
+          confirmText: 'Continue',
+          label: 'Mute reason',
+          requiredMessage: 'Mute reason is required.'
+        });
+        if (!reason) return;
+        const duration = await requestModerationDuration({
+          title: 'Mute duration',
+          message:
+            'Enter the duration in minutes for a temporary mute. Leave blank for an indefinite mute.',
+          confirmText: 'Apply mute',
+          placeholder: 'Leave blank for indefinite mute',
+          emptyIsIndefiniteMessage:
+            'Enter a positive number of minutes or leave the field blank for an indefinite mute.'
+        });
+        if (duration.cancelled) return;
+        const descriptor = duration.minutes
+          ? `temporary mute for ${describeDuration(duration.minutes)}`
+          : 'indefinite mute';
+        const logLine = `Mute issued for ${target.name} [${target.steamId}] (${descriptor}). Reason: ${reason}`;
+        ctx.log?.(logLine);
+        setModalStatus(`Logged ${descriptor} for ${target.name}.`, 'success');
+      }
+
+      async function handleUnbanModeration() {
+        if (!modalState.open || moderationBusy()) return;
+        const target = getSelectedPlayerContext();
+        if (!target.steamId) {
+          setModalStatus('Steam ID is required to unban a player.', 'error');
+          return;
+        }
+        if (typeof ctx.confirm !== 'function') {
+          setModalStatus('Confirmation dialog unavailable in this build.', 'error');
+          return;
+        }
+        const confirmed = await ctx.confirm({
+          title: 'Unban player',
+          message: `Are you sure you want to unban ${target.name} (${target.steamId})?`,
+          confirmText: 'Unban',
+          cancelText: 'Cancel'
+        });
+        if (!confirmed) return;
+        const logLine = `Unban confirmed for ${target.name} [${target.steamId}].`;
+        ctx.log?.(logLine);
+        setModalStatus(`Logged unban for ${target.name}.`, 'success');
+      }
+
+      async function handleUnmuteModeration() {
+        if (!modalState.open || moderationBusy()) return;
+        const target = getSelectedPlayerContext();
+        if (!target.steamId) {
+          setModalStatus('Steam ID is required to unmute a player.', 'error');
+          return;
+        }
+        if (typeof ctx.confirm !== 'function') {
+          setModalStatus('Confirmation dialog unavailable in this build.', 'error');
+          return;
+        }
+        const confirmed = await ctx.confirm({
+          title: 'Unmute player',
+          message: `Are you sure you want to unmute ${target.name} (${target.steamId})?`,
+          confirmText: 'Unmute',
+          cancelText: 'Cancel'
+        });
+        if (!confirmed) return;
+        const logLine = `Unmute confirmed for ${target.name} [${target.steamId}].`;
+        ctx.log?.(logLine);
+        setModalStatus(`Logged unmute for ${target.name}.`, 'success');
+      }
+
+      function setNotesMessage(message, variant = 'info') {
+        if (!modalState.notes) modalState.notes = createNotesState();
+        modalState.notes.message = message || '';
+        modalState.notes.messageVariant = message ? variant : 'info';
+      }
+
+      function renderNotesDialog() {
+        if (!modal?.elements) return;
+        const {
+          notesList,
+          notesEmpty,
+          notesStatus,
+          notesInput,
+          notesSaveBtn
+        } = modal.elements;
+        const state = modalState.notes || createNotesState();
+        if (notesStatus) {
+          if (state.message) {
+            notesStatus.textContent = state.message;
+            notesStatus.dataset.variant = state.messageVariant || 'info';
+            notesStatus.classList.remove('hidden');
+          } else {
+            notesStatus.textContent = '';
+            notesStatus.classList.add('hidden');
+            notesStatus.removeAttribute('data-variant');
+          }
+        }
+        if (notesInput) {
+          notesInput.disabled = state.loading || state.submitting;
+        }
+        if (notesSaveBtn) {
+          const hasValue = notesInput ? notesInput.value.trim().length > 0 : false;
+          notesSaveBtn.disabled = state.loading || state.submitting || !hasValue;
+          notesSaveBtn.textContent = state.submitting ? 'Saving…' : 'Add note';
+        }
+        if (modal.elements.notesBtn) {
+          const hasSteam = Boolean(modalState.steamid);
+          modal.elements.notesBtn.disabled = !hasSteam || state.loading || state.submitting;
+        }
+        if (!notesList) return;
+        notesList.innerHTML = '';
+        if (state.loading) {
+          const li = document.createElement('li');
+          li.className = 'player-notes-placeholder muted small';
+          li.textContent = 'Loading notes…';
+          notesList.appendChild(li);
+          if (notesEmpty) notesEmpty.classList.add('hidden');
+          return;
+        }
+        if (!Array.isArray(state.items) || state.items.length === 0) {
+          if (notesEmpty) {
+            notesEmpty.textContent = state.message && state.messageVariant === 'error'
+              ? ''
+              : 'No notes recorded for this player yet.';
+            notesEmpty.classList.toggle('hidden', Boolean(state.message) && state.messageVariant === 'error');
+          }
+          return;
+        }
+        if (notesEmpty) notesEmpty.classList.add('hidden');
+        for (const note of state.items) {
+          const entry = normalisePlayerNote(note);
+          if (!entry) continue;
+          const li = document.createElement('li');
+          li.className = 'player-notes-item';
+          const body = document.createElement('p');
+          body.className = 'player-notes-text';
+          body.textContent = entry.note || '';
+          li.appendChild(body);
+          const meta = document.createElement('div');
+          meta.className = 'player-notes-meta muted small';
+          const parts = [];
+          const created = entry.created_at ? formatTimestamp(entry.created_at) : '';
+          if (created) parts.push(created);
+          if (Number.isFinite(entry.server_id)) parts.push(`Server ${entry.server_id}`);
+          meta.textContent = parts.filter(Boolean).join(' · ');
+          li.appendChild(meta);
+          const actions = document.createElement('div');
+          actions.className = 'player-notes-item-actions';
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className = 'btn ghost danger small';
+          const removing = state.removing?.has(entry.id);
+          removeBtn.textContent = removing ? 'Removing…' : 'Remove';
+          removeBtn.disabled = removing || state.loading || state.submitting;
+          removeBtn.addEventListener('click', () => handleDeleteNote(entry.id));
+          actions.appendChild(removeBtn);
+          li.appendChild(actions);
+          notesList.appendChild(li);
+        }
+      }
+
+      async function refreshNotes({ force = false } = {}) {
+        if (!modalState.open || !modalState.steamid) return;
+        if (!modalState.notes) modalState.notes = createNotesState();
+        const targetSteamid = modalState.steamid;
+        const notesState = modalState.notes;
+        if (notesState.loading && !force) return;
+        const serverId = resolveActiveServerId();
+        if (!Number.isFinite(serverId)) {
+          setNotesMessage('Select a server before viewing notes.', 'error');
+          notesState.loading = false;
+          notesState.loaded = false;
+          renderNotesDialog();
+          return;
+        }
+        notesState.loading = true;
+        notesState.loaded = force ? false : notesState.loaded;
+        if (!force) setNotesMessage('');
+        renderNotesDialog();
+        try {
+          const payload = await ctx.api(`/players/${targetSteamid}/notes?serverId=${serverId}`);
+          if (!modalState.open || modalState.steamid !== targetSteamid || modalState.notes !== notesState) return;
+          const rows = Array.isArray(payload?.notes) ? payload.notes : [];
+          notesState.items = rows.map((row) => normalisePlayerNote(row)).filter(Boolean);
+          notesState.loaded = true;
+          setNotesMessage('');
+          if (modal.elements?.notesInput) modal.elements.notesInput.value = '';
+        } catch (err) {
+          if (ctx.errorCode?.(err) === 'unauthorized') {
+            notesState.loading = false;
+            setNotesMessage('');
+            renderNotesDialog();
+            ctx.handleUnauthorized?.();
+            closeNotesDialog({ reset: true, restoreFocus: false });
+            closeModal();
+            return;
+          }
+          const description = ctx.describeError?.(err) || err?.message || 'Unknown error';
+          if (modalState.notes === notesState) {
+            setNotesMessage('Failed to load notes: ' + description, 'error');
+          }
+        } finally {
+          if (modalState.notes === notesState) {
+            notesState.loading = false;
+            renderNotesDialog();
+            if (notesState.open) {
+              setTimeout(() => modal.elements?.notesInput?.focus(), 50);
+            }
+          }
+        }
+      }
+
+      function onNotesInputChange() {
+        if (!modal?.elements?.notesInput) return;
+        if (!modalState.notes) modalState.notes = createNotesState();
+        if (modal.elements.notesInput.value.length > PLAYER_NOTE_MAX_LENGTH) {
+          modal.elements.notesInput.value = modal.elements.notesInput.value.slice(0, PLAYER_NOTE_MAX_LENGTH);
+        }
+        renderNotesDialog();
+      }
+
+      function closeNotesDialog({ reset = false, restoreFocus = true } = {}) {
+        if (!modal?.elements?.notesBackdrop) return;
+        modal.elements.notesBackdrop.classList.add('hidden');
+        modal.elements.notesBackdrop.setAttribute('aria-hidden', 'true');
+        if (!modalState.notes) modalState.notes = createNotesState();
+        modalState.notes.open = false;
+        const trigger = modalState.notes.trigger;
+        if (reset) {
+          modalState.notes = createNotesState();
+          if (modal.elements.notesInput) modal.elements.notesInput.value = '';
+        } else {
+          modalState.notes.trigger = null;
+        }
+        if (trigger && restoreFocus && typeof trigger.focus === 'function') {
+          setTimeout(() => trigger.focus(), 50);
+        }
+        renderNotesDialog();
+      }
+
+      async function openNotesDialog() {
+        if (!modalState.open || !modalState.steamid) {
+          setModalStatus('Steam ID is required to view notes.', 'error');
+          return;
+        }
+        if (!modal?.elements?.notesBackdrop) return;
+        if (!modalState.notes) modalState.notes = createNotesState();
+        modalState.notes.open = true;
+        modalState.notes.trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        modal.elements.notesBackdrop.classList.remove('hidden');
+        modal.elements.notesBackdrop.setAttribute('aria-hidden', 'false');
+        renderNotesDialog();
+        if (!modalState.notes.loaded) {
+          await refreshNotes({ force: true });
+        } else {
+          setTimeout(() => modal.elements?.notesInput?.focus(), 50);
+        }
+      }
+
+      async function handleAddNote() {
+        if (!modalState.open || !modalState.steamid) {
+          setModalStatus('Steam ID is required to add a note.', 'error');
+          return;
+        }
+        const serverId = resolveActiveServerId();
+        if (!Number.isFinite(serverId)) {
+          setNotesMessage('Select a server before adding notes.', 'error');
+          renderNotesDialog();
+          return;
+        }
+        if (!modal?.elements?.notesInput) return;
+        if (!modalState.notes) modalState.notes = createNotesState();
+        const value = modal.elements.notesInput.value.trim();
+        if (!value) {
+          setNotesMessage('Enter a note before saving.', 'error');
+          renderNotesDialog();
+          modal.elements.notesInput.focus();
+          return;
+        }
+        if (value.length > PLAYER_NOTE_MAX_LENGTH) {
+          setNotesMessage(`Notes cannot exceed ${PLAYER_NOTE_MAX_LENGTH} characters.`, 'error');
+          renderNotesDialog();
+          modal.elements.notesInput.focus();
+          return;
+        }
+        modalState.notes.submitting = true;
+        setNotesMessage('Saving note…', 'info');
+        renderNotesDialog();
+        try {
+          const payload = await ctx.api(`/players/${modalState.steamid}/notes`, { note: value, serverId }, 'POST');
+          const created = normalisePlayerNote(payload?.note);
+          if (created) {
+            const existing = Array.isArray(modalState.notes.items) ? modalState.notes.items : [];
+            modalState.notes.items = [created, ...existing.filter((note) => note?.id !== created.id)];
+            modalState.notes.loaded = true;
+            setNotesMessage('Note added.', 'success');
+          } else {
+            setNotesMessage('Note saved but response was empty.', 'warn');
+          }
+          modal.elements.notesInput.value = '';
+        } catch (err) {
+          if (ctx.errorCode?.(err) === 'unauthorized') {
+            modalState.notes.submitting = false;
+            setNotesMessage('');
+            renderNotesDialog();
+            ctx.handleUnauthorized?.();
+            closeNotesDialog({ reset: true, restoreFocus: false });
+            closeModal();
+            return;
+          }
+          const description = ctx.describeError?.(err) || err?.message || 'Unknown error';
+          setNotesMessage('Failed to save note: ' + description, 'error');
+        } finally {
+          modalState.notes.submitting = false;
+          renderNotesDialog();
+        }
+      }
+
+      async function handleDeleteNote(noteId) {
+        if (!modalState.open || !modalState.steamid) return;
+        const idNum = Number(noteId);
+        if (!Number.isFinite(idNum) || idNum <= 0) return;
+        const serverId = resolveActiveServerId();
+        if (!Number.isFinite(serverId)) {
+          setNotesMessage('Select a server before removing notes.', 'error');
+          renderNotesDialog();
+          return;
+        }
+        if (!modalState.notes) modalState.notes = createNotesState();
+        let confirmed = true;
+        if (typeof ctx.confirm === 'function') {
+          confirmed = await ctx.confirm({
+            title: 'Remove note',
+            message: 'Are you sure you want to remove this note?',
+            confirmText: 'Remove note',
+            cancelText: 'Cancel'
+          });
+        }
+        if (!confirmed) return;
+        modalState.notes.removing.add(Math.trunc(idNum));
+        renderNotesDialog();
+        try {
+          await ctx.api(`/players/${modalState.steamid}/notes/${Math.trunc(idNum)}?serverId=${serverId}`, null, 'DELETE');
+          modalState.notes.items = (modalState.notes.items || []).filter((note) => note?.id !== Math.trunc(idNum));
+          setNotesMessage('Note removed.', 'success');
+        } catch (err) {
+          if (ctx.errorCode?.(err) === 'unauthorized') {
+            modalState.notes.removing.delete(Math.trunc(idNum));
+            setNotesMessage('');
+            renderNotesDialog();
+            ctx.handleUnauthorized?.();
+            closeNotesDialog({ reset: true, restoreFocus: false });
+            closeModal();
+            return;
+          }
+          const description = ctx.describeError?.(err) || err?.message || 'Unknown error';
+          setNotesMessage('Failed to remove note: ' + description, 'error');
+        } finally {
+          modalState.notes.removing.delete(Math.trunc(idNum));
+          renderNotesDialog();
+        }
       }
 
       async function loadPlayerDetails(steamid, { showLoading = false, basePlayer = null } = {}) {
@@ -1304,6 +1884,40 @@
         status.className = 'player-modal-status hidden';
         footer.appendChild(status);
 
+        const moderationActions = document.createElement('div');
+        moderationActions.className = 'player-modal-actions';
+        const notesBtn = document.createElement('button');
+        notesBtn.type = 'button';
+        notesBtn.className = 'btn ghost small';
+        notesBtn.textContent = 'Player notes';
+        moderationActions.appendChild(notesBtn);
+        const banBtn = document.createElement('button');
+        banBtn.type = 'button';
+        banBtn.className = 'btn danger small';
+        banBtn.textContent = 'Ban player';
+        moderationActions.appendChild(banBtn);
+        const kickBtn = document.createElement('button');
+        kickBtn.type = 'button';
+        kickBtn.className = 'btn danger small';
+        kickBtn.textContent = 'Kick player';
+        moderationActions.appendChild(kickBtn);
+        const muteBtn = document.createElement('button');
+        muteBtn.type = 'button';
+        muteBtn.className = 'btn danger small';
+        muteBtn.textContent = 'Mute player';
+        moderationActions.appendChild(muteBtn);
+        const unbanBtn = document.createElement('button');
+        unbanBtn.type = 'button';
+        unbanBtn.className = 'btn ghost small';
+        unbanBtn.textContent = 'Unban player';
+        moderationActions.appendChild(unbanBtn);
+        const unmuteBtn = document.createElement('button');
+        unmuteBtn.type = 'button';
+        unmuteBtn.className = 'btn ghost small';
+        unmuteBtn.textContent = 'Unmute player';
+        moderationActions.appendChild(unmuteBtn);
+        footer.appendChild(moderationActions);
+
         const actions = document.createElement('div');
         actions.className = 'player-modal-actions';
         const forceNameBtn = document.createElement('button');
@@ -1328,15 +1942,94 @@
         actions.appendChild(serverArmourBtn);
         footer.appendChild(actions);
 
+        const notesBackdrop = document.createElement('div');
+        notesBackdrop.className = 'player-notes-backdrop hidden';
+        notesBackdrop.setAttribute('aria-hidden', 'true');
+        const notesDialog = document.createElement('section');
+        notesDialog.className = 'player-notes-dialog';
+        notesDialog.setAttribute('role', 'dialog');
+        notesDialog.setAttribute('aria-modal', 'true');
+        const notesHeader = document.createElement('header');
+        notesHeader.className = 'player-notes-header';
+        const notesTitle = document.createElement('h2');
+        notesTitle.textContent = 'Player notes';
+        const notesCloseBtn = document.createElement('button');
+        notesCloseBtn.type = 'button';
+        notesCloseBtn.className = 'btn ghost small';
+        notesCloseBtn.textContent = 'Close';
+        notesHeader.appendChild(notesTitle);
+        notesHeader.appendChild(notesCloseBtn);
+        notesDialog.appendChild(notesHeader);
+        const notesBody = document.createElement('div');
+        notesBody.className = 'player-notes-body';
+        const notesStatus = document.createElement('p');
+        notesStatus.className = 'player-notes-status hidden small';
+        notesBody.appendChild(notesStatus);
+        const notesCompose = document.createElement('div');
+        notesCompose.className = 'player-notes-compose';
+        const notesInput = document.createElement('textarea');
+        notesInput.className = 'player-notes-input';
+        notesInput.rows = 4;
+        notesInput.placeholder = 'Write a note about this player…';
+        notesInput.maxLength = PLAYER_NOTE_MAX_LENGTH;
+        notesCompose.appendChild(notesInput);
+        const notesComposeActions = document.createElement('div');
+        notesComposeActions.className = 'player-notes-compose-actions';
+        const notesHelp = document.createElement('span');
+        notesHelp.className = 'player-notes-help muted small';
+        notesHelp.textContent = 'Notes are shared with your team.';
+        const notesSaveBtn = document.createElement('button');
+        notesSaveBtn.type = 'button';
+        notesSaveBtn.className = 'btn accent small';
+        notesSaveBtn.textContent = 'Add note';
+        notesSaveBtn.disabled = true;
+        notesComposeActions.appendChild(notesHelp);
+        notesComposeActions.appendChild(notesSaveBtn);
+        notesCompose.appendChild(notesComposeActions);
+        notesBody.appendChild(notesCompose);
+        const notesList = document.createElement('ul');
+        notesList.className = 'player-notes-list';
+        notesBody.appendChild(notesList);
+        const notesEmpty = document.createElement('p');
+        notesEmpty.className = 'player-notes-empty muted small hidden';
+        notesEmpty.textContent = 'No notes recorded for this player yet.';
+        notesBody.appendChild(notesEmpty);
+        notesDialog.appendChild(notesBody);
+        notesBackdrop.appendChild(notesDialog);
+        overlay.appendChild(notesBackdrop);
+
         document.body.appendChild(overlay);
 
         const hide = () => closeModal();
         const onBackdrop = (ev) => {
-          if (ev.target === overlay) hide();
+          if (ev.target === overlay) {
+            if (modalState.notes?.open) {
+              closeNotesDialog();
+              return;
+            }
+            hide();
+          }
         };
         const onKeyDown = (ev) => {
-          if (ev.key === 'Escape') hide();
+          if (ev.key === 'Escape') {
+            if (modalState.notes?.open) {
+              closeNotesDialog();
+              return;
+            }
+            hide();
+          }
         };
+        const onNotesBackdropClick = (event) => {
+          event.stopPropagation();
+          if (event.target === notesBackdrop) closeNotesDialog();
+        };
+        const onNotesDialogClick = (event) => {
+          event.stopPropagation();
+        };
+        const onNotesClose = () => closeNotesDialog();
+        const onNotesSave = () => handleAddNote();
+        const onNotesInput = () => onNotesInputChange();
+        const onNotesOpen = () => openNotesDialog();
 
         const openSteamProfile = () => {
           const url = steamProfileBtn.dataset.url;
@@ -1350,11 +2043,22 @@
 
         overlay.addEventListener('click', onBackdrop);
         dialog.addEventListener('click', (ev) => ev.stopPropagation());
+        notesBackdrop.addEventListener('click', onNotesBackdropClick);
+        notesDialog.addEventListener('click', onNotesDialogClick);
         closeBtn.addEventListener('click', hide);
         refreshBtn.addEventListener('click', forceSteamRefresh);
         forceNameBtn.addEventListener('click', forceDisplayName);
         steamProfileBtn.addEventListener('click', openSteamProfile);
         serverArmourBtn.addEventListener('click', openServerArmour);
+        notesCloseBtn.addEventListener('click', onNotesClose);
+        notesSaveBtn.addEventListener('click', onNotesSave);
+        notesInput.addEventListener('input', onNotesInput);
+        notesBtn.addEventListener('click', onNotesOpen);
+        banBtn.addEventListener('click', handleBanModeration);
+        kickBtn.addEventListener('click', handleKickModeration);
+        muteBtn.addEventListener('click', handleMuteModeration);
+        unbanBtn.addEventListener('click', handleUnbanModeration);
+        unmuteBtn.addEventListener('click', handleUnmuteModeration);
 
         return {
           show() {
@@ -1380,6 +2084,22 @@
             details,
             events: eventsList,
             status,
+            moderationActions,
+            moderationButtons: [banBtn, kickBtn, muteBtn, unbanBtn, unmuteBtn],
+            notesBtn,
+            notesBackdrop,
+            notesDialog,
+            notesList,
+            notesEmpty,
+            notesStatus,
+            notesInput,
+            notesSaveBtn,
+            notesCloseBtn,
+            banBtn,
+            kickBtn,
+            muteBtn,
+            unbanBtn,
+            unmuteBtn,
             refreshBtn,
             forceNameBtn,
             steamProfileBtn,
@@ -1390,11 +2110,22 @@
           destroy() {
             document.removeEventListener('keydown', onKeyDown);
             overlay.removeEventListener('click', onBackdrop);
+            notesBackdrop.removeEventListener('click', onNotesBackdropClick);
+            notesDialog.removeEventListener('click', onNotesDialogClick);
             closeBtn.removeEventListener('click', hide);
             refreshBtn.removeEventListener('click', forceSteamRefresh);
             forceNameBtn.removeEventListener('click', forceDisplayName);
             steamProfileBtn.removeEventListener('click', openSteamProfile);
             serverArmourBtn.removeEventListener('click', openServerArmour);
+            notesCloseBtn.removeEventListener('click', onNotesClose);
+            notesSaveBtn.removeEventListener('click', onNotesSave);
+            notesInput.removeEventListener('input', onNotesInput);
+            notesBtn.removeEventListener('click', onNotesOpen);
+            banBtn.removeEventListener('click', handleBanModeration);
+            kickBtn.removeEventListener('click', handleKickModeration);
+            muteBtn.removeEventListener('click', handleMuteModeration);
+            unbanBtn.removeEventListener('click', handleUnbanModeration);
+            unmuteBtn.removeEventListener('click', handleUnmuteModeration);
             overlay.remove();
           }
         };
