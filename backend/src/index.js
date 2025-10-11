@@ -838,16 +838,29 @@ function ensureRconBinding(row) {
       io.to(`srv:${key}`).emit('console', msg);
       console.log(`[RCON:${host}:${port}]`, msg);
     },
-    console: (line) => {
+    console: (line, payload) => {
       const cleanLine = typeof line === 'string' ? line.replace(ANSI_COLOR_REGEX, '') : '';
       if (cleanLine) {
         handlePlayerConnectionLine(key, cleanLine);
-        handleF7ReportLine(key, cleanLine).catch((err) => {
+        handleF7ReportLine(key, cleanLine, payload).catch((err) => {
           console.warn('f7 report dispatch failed', err);
         });
         handleKillFeedLine(key, cleanLine).catch((err) => {
           console.warn('kill feed dispatch failed', err);
         });
+      }
+    },
+    event: (payload = {}) => {
+      try {
+        const type = typeof payload?.Type === 'string' ? payload.Type.toLowerCase() : '';
+        if (!type || (!type.includes('f7') && !type.includes('report'))) return;
+        const message = payload?.Message ?? payload?.message ?? null;
+        const text = typeof message === 'string' ? message.replace(ANSI_COLOR_REGEX, '') : '';
+        handleF7ReportLine(key, text, payload).catch((err) => {
+          console.warn('f7 report dispatch failed', err);
+        });
+      } catch (err) {
+        console.warn('f7 report event handling failed', err);
       }
     },
     chat: (line, payload) => {
@@ -985,10 +998,10 @@ async function handleChatMessage(serverId, line, payload) {
   maybeCleanupChatHistory(key);
 }
 
-async function handleF7ReportLine(serverId, line) {
+async function handleF7ReportLine(serverId, line, payload = null) {
   const numericId = Number(serverId);
   if (!Number.isFinite(numericId)) return;
-  const parsed = parseF7ReportLine(line);
+  const parsed = parseF7ReportLine(line, payload);
   if (!parsed) return;
 
   const record = {
@@ -1000,7 +1013,10 @@ async function handleF7ReportLine(serverId, line) {
     target_name: parsed.targetName || null,
     category: parsed.category || null,
     message: parsed.message || null,
-    raw: parsed.raw || line,
+    raw: parsed.raw
+      || line
+      || (typeof payload?.Message === 'string' ? payload.Message : null)
+      || (typeof payload?.message === 'string' ? payload.message : null),
     created_at: parsed.timestamp || null
   };
 
@@ -1018,9 +1034,9 @@ async function handleF7ReportLine(serverId, line) {
     serverId: numericId,
     createdAt: record.created_at || new Date().toISOString()
   };
-  const payload = projectF7Report(stored, fallback);
-  if (!payload) return;
-  io.to(`srv:${numericId}`).emit('f7-report', payload);
+  const eventPayload = projectF7Report(stored, fallback);
+  if (!eventPayload) return;
+  io.to(`srv:${numericId}`).emit('f7-report', eventPayload);
 }
 
 function runGlobalChatCleanup() {
