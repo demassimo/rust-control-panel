@@ -1239,14 +1239,16 @@
         : typeof combatLog.text === 'string'
           ? combatLog.text.replace(/\r/g, '').split('\n').map((line) => line.trimEnd()).filter((line) => line)
           : [];
+      const limitedLines = lines.slice(0, 20);
+      const limitedText = limitedLines.join('\n');
       combatLog = {
-        text: typeof combatLog.text === 'string' ? combatLog.text : lines.join('\n'),
-        lines: lines.slice(0, 200),
+        text: limitedText,
+        lines: limitedLines,
         fetchedAt: combatLog.fetchedAt || new Date().toISOString()
       };
       const parsedCombat = parseCombatLogEntries(combatLog.lines);
       if (parsedCombat.records.length) {
-        combatLog.records = parsedCombat.records.slice(0, 200);
+        combatLog.records = parsedCombat.records.slice(0, 20);
         combatLog.header = parsedCombat.header;
       }
     } else {
