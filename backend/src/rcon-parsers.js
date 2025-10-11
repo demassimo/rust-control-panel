@@ -349,13 +349,50 @@ export function parseChatMessage(message, payload = {}) {
   };
 }
 
-export function parseF7ReportLine(line) {
-  if (typeof line !== 'string') return null;
-  const stripped = stripRconTimestampPrefix(stripAnsiSequences(line)).trim();
+export function parseF7ReportLine(line, payload = null) {
+  const payloadMessage = payload?.Message ?? payload?.message;
+  let source = typeof line === 'string' ? line : null;
+  if ((!source || !source.trim()) && typeof payloadMessage === 'string') {
+    source = payloadMessage;
+  }
+
+  const objectCandidate = (() => {
+    if (payloadMessage && typeof payloadMessage === 'object' && !Array.isArray(payloadMessage)) {
+      return payloadMessage;
+    }
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      if (payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload)) {
+        return payload.payload;
+      }
+      if (payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)) {
+        return payload.data;
+      }
+    }
+    return null;
+  })();
+
+  if ((!source || !source.trim()) && objectCandidate) {
+    try {
+      source = `F7 report: ${JSON.stringify(objectCandidate)}`;
+    } catch {
+      source = null;
+    }
+  }
+
+  if (typeof source !== 'string') return null;
+
+  const stripped = stripRconTimestampPrefix(stripAnsiSequences(source)).trim();
   if (!stripped) return null;
 
   const jsonCandidate = (() => {
-    let working = stripped.replace(/^f7\s*(?:report|ticket)\s*[:\-]\s*/i, '').trim();
+    if (objectCandidate) return objectCandidate;
+    let working = stripped;
+    if (/^f7\s*(?:report|ticket)\b/i.test(working)) {
+      working = working.replace(/^f7\s*(?:report|ticket)\s*[:\-]\s*/i, '').trim();
+    }
+    if (!working.includes('{') && stripped.startsWith('{') && stripped.endsWith('}')) {
+      working = stripped;
+    }
     if (!working.includes('{')) return null;
     const firstBrace = working.indexOf('{');
     const lastBrace = working.lastIndexOf('}');
@@ -370,6 +407,16 @@ export function parseF7ReportLine(line) {
       return null;
     }
     return null;
+  })();
+
+  const rawSource = (() => {
+    if (typeof line === 'string' && line.trim()) {
+      return stripRconTimestampPrefix(stripAnsiSequences(line)).trim();
+    }
+    if (typeof payloadMessage === 'string' && payloadMessage.trim()) {
+      return stripRconTimestampPrefix(stripAnsiSequences(payloadMessage)).trim();
+    }
+    return stripped;
   })();
 
   if (jsonCandidate) {
@@ -477,7 +524,7 @@ export function parseF7ReportLine(line) {
     const finalMessage = typeof derivedMessage === 'string' ? trimOrNull(derivedMessage) : null;
 
     return {
-      raw: stripped,
+      raw: rawSource,
       reportId: reportId || null,
       reporterName,
       reporterSteamId,
@@ -495,7 +542,7 @@ export function parseF7ReportLine(line) {
   if (!lowered.includes('f7') || (!lowered.includes('report') && !lowered.includes('ticket'))) return null;
 
   const result = {
-    raw: stripped,
+    raw: rawSource,
     reportId: null,
     reporterName: null,
     reporterSteamId: null,
