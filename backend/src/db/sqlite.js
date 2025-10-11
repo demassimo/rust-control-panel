@@ -1,5 +1,6 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import { serializeCombatLogPayload } from './combat-log.js';
 
 export default {
   async connect({ file }) {
@@ -1069,21 +1070,8 @@ function createApi(dbh, dialect) {
       const posY = Number.isFinite(posYRaw) ? posYRaw : null;
       const posZ = Number.isFinite(posZRaw) ? posZRaw : null;
       const rawLine = trimOrNull(entry?.raw);
-      let combatLogSerialized = null;
       const combatPayload = entry?.combat_log ?? entry?.combatLog ?? entry?.combat_log_json ?? entry?.combatLogJson;
-      if (combatPayload != null) {
-        if (typeof combatPayload === 'string') {
-          const text = combatPayload.length > 8000 ? combatPayload.slice(0, 8000) : combatPayload;
-          combatLogSerialized = text;
-        } else {
-          try {
-            const json = JSON.stringify(combatPayload);
-            combatLogSerialized = json.length > 8000 ? json.slice(0, 8000) : json;
-          } catch {
-            combatLogSerialized = null;
-          }
-        }
-      }
+      const combatLogSerialized = serializeCombatLogPayload(combatPayload);
       const combatErrorRaw = trimOrNull(entry?.combat_log_error ?? entry?.combatLogError);
       const combatLogError = combatErrorRaw ? combatErrorRaw.slice(0, 500) : null;
       const createdAt = normaliseIso(entry?.created_at ?? entry?.createdAt) || new Date().toISOString();
@@ -1140,21 +1128,8 @@ function createApi(dbh, dialect) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
       const eventId = Number(entry?.id ?? entry?.eventId);
       if (!Number.isFinite(serverIdNum) || !Number.isFinite(eventId)) return 0;
-      let combatLogSerialized = null;
       const combatPayload = entry?.combat_log ?? entry?.combatLog ?? entry?.combat_log_json ?? entry?.combatLogJson;
-      if (combatPayload != null) {
-        if (typeof combatPayload === 'string') {
-          const text = combatPayload.length > 8000 ? combatPayload.slice(0, 8000) : combatPayload;
-          combatLogSerialized = text;
-        } else {
-          try {
-            const json = JSON.stringify(combatPayload);
-            combatLogSerialized = json.length > 8000 ? json.slice(0, 8000) : json;
-          } catch {
-            combatLogSerialized = null;
-          }
-        }
-      }
+      const combatLogSerialized = serializeCombatLogPayload(combatPayload);
       const combatErrorRaw = trimOrNull(entry?.combat_log_error ?? entry?.combatLogError);
       const combatLogError = combatErrorRaw ? combatErrorRaw.slice(0, 500) : null;
       const result = await dbh.run(
