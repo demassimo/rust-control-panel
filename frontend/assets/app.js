@@ -129,6 +129,8 @@
   const f7ReportsLoading = $('#f7ReportsLoading');
   const f7ReportsEmpty = $('#f7ReportsEmpty');
   const f7ReportsError = $('#f7ReportsError');
+  const f7ReportsCount = $('#f7ReportsCount');
+  const f7ReportsSearch = $('#f7ReportsSearch');
   const f7ReportPlaceholder = $('#f7ReportPlaceholder');
   const f7ReportDetail = $('#f7ReportDetail');
   const f7ReportDetailTime = $('#f7ReportDetailTime');
@@ -137,10 +139,34 @@
   const f7ReportCategory = $('#f7ReportCategory');
   const f7ReportId = $('#f7ReportId');
   const f7ReportMessage = $('#f7ReportMessage');
+  const f7ReportTargetSummary = $('#f7ReportTargetSummary');
+  const f7ReportSummaryTotal = $('#f7ReportSummaryTotal');
+  const f7ReportSummaryRecent = $('#f7ReportSummaryRecent');
+  const f7ReportSummaryRecentLabel = $('#f7ReportSummaryRecentLabel');
+  const f7ReportSummaryReporters = $('#f7ReportSummaryReporters');
+  const f7ReportSummaryFirst = $('#f7ReportSummaryFirst');
+  const f7ReportSummaryLast = $('#f7ReportSummaryLast');
+  const f7ReportSummaryCategories = $('#f7ReportSummaryCategories');
+  const f7ReportTargetProfile = $('#f7ReportTargetProfile');
+  const f7ReportProfileAvatar = $('#f7ReportProfileAvatar');
+  const f7ReportProfileName = $('#f7ReportProfileName');
+  const f7ReportProfileSteam = $('#f7ReportProfileSteam');
+  const f7ReportProfileCountry = $('#f7ReportProfileCountry');
+  const f7ReportProfileVac = $('#f7ReportProfileVac');
+  const f7ReportProfileGameBans = $('#f7ReportProfileGameBans');
+  const f7ReportProfileLastBan = $('#f7ReportProfileLastBan');
+  const f7ReportProfilePlaytime = $('#f7ReportProfilePlaytime');
+  const f7ReportProfileStatus = $('#f7ReportProfileStatus');
   const f7ReportHistory = $('#f7ReportHistory');
   const f7ReportHistoryList = $('#f7ReportHistoryList');
   const f7ReportShowAll = $('#f7ReportShowAll');
+  const f7ReportOpenProfile = $('#f7ReportOpenProfile');
   const f7ScopeButtons = Array.from(document.querySelectorAll('.reports-scope-btn'));
+
+  const regionDisplay = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+    ? new Intl.DisplayNames(['en'], { type: 'region' })
+    : null;
+  const COUNTRY_FALLBACKS = { UK: 'United Kingdom', EU: 'European Union' };
   const killFeedList = $('#killFeedList');
   const killFeedEmpty = $('#killFeedEmpty');
   const killFeedLoading = $('#killFeedLoading');
@@ -215,8 +241,15 @@
     activeId: null,
     detailCache: new Map(),
     listRequestToken: null,
-    detailRequests: new Map()
+    detailRequests: new Map(),
+    filter: '',
+    filterActive: false,
+    totalCount: 0,
+    visibleCount: 0
   };
+  let f7FilterTimer = null;
+  const f7ProfileCache = new Map();
+  const f7ProfileRequests = new Map();
 
   function emitWorkspaceEvent(name, detail) {
     if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
@@ -293,6 +326,39 @@
         try { f7ReportDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
         catch { /* ignore */ }
       }
+    });
+  }
+
+  if (f7ReportsSearch) {
+    const commitFilter = () => {
+      const value = f7ReportsSearch.value || '';
+      if (value === f7State.filter) return;
+      f7State.filter = value;
+      renderF7Reports();
+    };
+    const onSearchInput = () => {
+      if (f7FilterTimer) clearTimeout(f7FilterTimer);
+      f7FilterTimer = setTimeout(() => {
+        f7FilterTimer = null;
+        commitFilter();
+      }, 200);
+    };
+    f7ReportsSearch.addEventListener('input', onSearchInput);
+    f7ReportsSearch.addEventListener('search', commitFilter);
+  }
+
+  if (f7ReportOpenProfile) {
+    f7ReportOpenProfile.addEventListener('click', () => {
+      const detail = f7State.activeId != null ? f7State.detailCache.get(f7State.activeId) : null;
+      const payload = buildF7PlayerPayload(detail);
+      if (!payload?.steamid) return;
+      window.dispatchEvent(new CustomEvent('players:open-profile', {
+        detail: {
+          steamId: payload.steamid,
+          player: payload,
+          source: 'f7-reports'
+        }
+      }));
     });
   }
 
@@ -1821,6 +1887,67 @@
     };
   }
 
+  function normaliseF7FilterTokens(value) {
+    if (value == null) return [];
+    const text = String(value).trim().toLowerCase();
+    if (!text) return [];
+    return text.split(/\s+/).map((token) => token.trim()).filter(Boolean);
+  }
+
+  function matchesF7Filter(report, tokens = []) {
+    if (!report) return false;
+    if (!Array.isArray(tokens) || tokens.length === 0) return true;
+    return tokens.every((token) => matchF7Token(report, token));
+  }
+
+  function matchF7Token(report, token) {
+    if (!token) return true;
+    const raw = String(token).trim();
+    if (!raw) return true;
+    let key = null;
+    let value = raw;
+    if (raw.includes(':')) {
+      const parts = raw.split(/:(.+)/);
+      if (parts.length >= 2) {
+        key = parts[0]?.trim().toLowerCase() || null;
+        value = parts[1]?.trim() || '';
+      }
+    }
+    if (!value) return true;
+    const target = value.toLowerCase();
+    const compare = (fields) => fields.some((field) => {
+      if (field == null) return false;
+      const str = String(field).toLowerCase();
+      return str.includes(target);
+    });
+    if (key) {
+      switch (key) {
+        case 'target':
+        case 'player':
+          return compare([report.targetName, report.targetSteamId]);
+        case 'reporter':
+          return compare([report.reporterName, report.reporterSteamId]);
+        case 'reason':
+        case 'category':
+          return compare([report.category, report.message]);
+        case 'id':
+          return compare([report.reportId, report.id]);
+        default:
+          break;
+      }
+    }
+    return compare([
+      report.targetName,
+      report.targetSteamId,
+      report.reporterName,
+      report.reporterSteamId,
+      report.category,
+      report.message,
+      report.reportId,
+      report.id
+    ]);
+  }
+
   function updateF7ScopeButtons() {
     const scope = f7State.scope;
     f7ScopeButtons.forEach((btn) => {
@@ -1834,10 +1961,22 @@
     if (!f7ReportDetail || !f7ReportPlaceholder) return;
     if (!detail) {
       f7ReportDetail.classList.add('hidden');
+      renderF7TargetSummary(null);
+      renderF7TargetProfile(null);
+      if (f7ReportOpenProfile) {
+        f7ReportOpenProfile.disabled = true;
+        delete f7ReportOpenProfile.dataset.steamid;
+      }
+      const filterActive = !!f7State.filterActive;
+      const totalCount = Number(f7State.totalCount) || 0;
+      const visibleCount = Number(f7State.visibleCount) || 0;
       if (!Number.isFinite(f7State.serverId)) {
         f7ReportPlaceholder.textContent = 'Select a server to view F7 reports.';
         f7ReportPlaceholder.classList.remove('hidden');
-      } else if (!f7State.loading && f7State.list.length === 0) {
+      } else if (filterActive && totalCount > 0 && visibleCount === 0) {
+        f7ReportPlaceholder.textContent = 'No reports match your search. Clear the filter to see everything.';
+        f7ReportPlaceholder.classList.remove('hidden');
+      } else if (!f7State.loading && totalCount === 0) {
         f7ReportPlaceholder.textContent = 'Select a report to review the details.';
         f7ReportPlaceholder.classList.remove('hidden');
       } else if (f7State.loading) {
@@ -1885,6 +2024,9 @@
     if (f7ReportId) f7ReportId.textContent = detail.reportId || '—';
     if (f7ReportMessage) f7ReportMessage.textContent = detail.message || 'No additional message provided.';
 
+    renderF7TargetSummary(detail.targetSummary || null);
+    renderF7TargetProfile(detail);
+
     if (Array.isArray(detail.recentForTarget) && detail.recentForTarget.length > 0 && f7ReportHistory && f7ReportHistoryList) {
       f7ReportHistory.classList.remove('hidden');
       f7ReportHistoryList.innerHTML = '';
@@ -1922,34 +2064,77 @@
     }
 
     const hasServer = Number.isFinite(f7State.serverId);
-    const reports = Array.isArray(f7State.list) ? f7State.list : [];
-    const hasReports = reports.length > 0;
+    if (f7ReportsSearch) f7ReportsSearch.disabled = !hasServer;
+
+    const baseList = Array.isArray(f7State.list) ? f7State.list : [];
+    const normalised = baseList
+      .map((item) => normalizeF7Report(item))
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aTime = new Date(a.createdAt || 0).getTime();
+        const bTime = new Date(b.createdAt || 0).getTime();
+        return bTime - aTime;
+      });
+
+    const deduped = [];
+    const seenIds = new Set();
+    for (const report of normalised) {
+      if (report?.id != null) {
+        if (seenIds.has(report.id)) continue;
+        seenIds.add(report.id);
+      }
+      deduped.push(report);
+    }
+
+    const filterText = (f7State.filter || '').trim();
+    const filterTokens = normaliseF7FilterTokens(filterText);
+    const visible = filterTokens.length > 0
+      ? deduped.filter((report) => matchesF7Filter(report, filterTokens))
+      : deduped;
+
+    f7State.totalCount = deduped.length;
+    f7State.visibleCount = visible.length;
+    f7State.filterActive = filterTokens.length > 0;
+
+    if (f7ReportsCount) {
+      if (!hasServer) {
+        f7ReportsCount.textContent = '';
+      } else if (f7State.loading && deduped.length === 0) {
+        f7ReportsCount.textContent = 'Loading…';
+      } else if (f7State.error) {
+        f7ReportsCount.textContent = 'Unable to load';
+      } else if (deduped.length === 0) {
+        f7ReportsCount.textContent = 'No reports';
+      } else if (filterTokens.length > 0) {
+        const label = deduped.length === 1 ? 'report' : 'reports';
+        f7ReportsCount.textContent = `Showing ${visible.length} of ${deduped.length} ${label}`;
+      } else {
+        const label = deduped.length === 1 ? 'report' : 'reports';
+        f7ReportsCount.textContent = `${deduped.length} ${label}`;
+      }
+    }
 
     if (f7ReportsEmpty) {
-      const showEmpty = hasServer && !f7State.loading && !f7State.error && !hasReports;
-      f7ReportsEmpty.classList.toggle('hidden', !showEmpty);
+      const showEmpty = hasServer && !f7State.loading && !f7State.error && deduped.length === 0;
+      const showFilteredEmpty = hasServer && !f7State.loading && !f7State.error && deduped.length > 0 && visible.length === 0;
+      if (showFilteredEmpty) {
+        f7ReportsEmpty.textContent = 'No reports match your filter.';
+      } else {
+        f7ReportsEmpty.textContent = 'No F7 reports yet.';
+      }
+      f7ReportsEmpty.classList.toggle('hidden', !(showEmpty || showFilteredEmpty));
     }
 
     f7ReportsList.innerHTML = '';
 
-    if (!hasReports) {
+    if (visible.length === 0) {
+      f7State.activeId = null;
       renderF7ReportDetail(null);
       return;
     }
 
     const fragment = document.createDocumentFragment();
-    const seenIds = new Set();
-    const sorted = [...reports].sort((a, b) => {
-      const aTime = new Date(a.createdAt || 0).getTime();
-      const bTime = new Date(b.createdAt || 0).getTime();
-      return bTime - aTime;
-    });
-
-    sorted.forEach((raw) => {
-      const report = normalizeF7Report(raw);
-      if (!report) return;
-      if (report.id != null && seenIds.has(report.id)) return;
-      if (report.id != null) seenIds.add(report.id);
+    visible.forEach((report) => {
       const li = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
@@ -1990,11 +2175,318 @@
 
     f7ReportsList.appendChild(fragment);
 
-    if (f7State.activeId == null && sorted.length > 0) {
-      f7State.activeId = normalizeF7Report(sorted[0])?.id ?? null;
+    if (f7State.activeId == null || !visible.some((item) => item.id === f7State.activeId)) {
+      f7State.activeId = visible[0]?.id ?? null;
     }
+
     const detail = f7State.activeId != null ? f7State.detailCache.get(f7State.activeId) : null;
     renderF7ReportDetail(detail || null);
+    if (f7State.activeId != null && !f7State.detailCache.has(f7State.activeId)) {
+      loadF7ReportDetail(f7State.activeId).catch(() => {});
+    }
+  }
+
+  function describeCountry(value) {
+    const text = pickString(value);
+    if (!text) return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    if (COUNTRY_FALLBACKS[upper]) return COUNTRY_FALLBACKS[upper];
+    if (!/^[A-Z]{2}$/.test(upper)) return trimmed;
+    if (regionDisplay) {
+      try {
+        const label = regionDisplay.of(upper);
+        if (label && label !== upper) return label;
+      } catch { /* ignore */ }
+    }
+    return COUNTRY_FALLBACKS[upper] || upper;
+  }
+
+  function formatCountryDetail(name, code) {
+    const label = pickString(name) || null;
+    const upper = pickString(code)?.toUpperCase() || null;
+    if (label && upper) return `${label} (${upper})`;
+    if (label) return label;
+    if (upper) return describeCountry(upper);
+    return null;
+  }
+
+  function describeRecentWindow(windowMs) {
+    const value = Number(windowMs);
+    if (!Number.isFinite(value) || value <= 0) return 'Recent reports';
+    const days = Math.round(value / (24 * 60 * 60 * 1000));
+    if (days >= 7) return `Reports (last ${days} days)`;
+    if (days >= 2) return `Reports (last ${days} days)`;
+    if (days === 1) return 'Reports (last 24 hours)';
+    const hours = Math.round(value / (60 * 60 * 1000));
+    if (hours >= 1) return `Reports (last ${hours} hours)`;
+    return 'Recent reports';
+  }
+
+  function renderF7TargetSummary(summary) {
+    if (!f7ReportTargetSummary) return;
+    if (!summary || typeof summary !== 'object') {
+      f7ReportTargetSummary.classList.add('hidden');
+      if (f7ReportSummaryCategories) f7ReportSummaryCategories.innerHTML = '';
+      if (f7ReportSummaryRecentLabel) f7ReportSummaryRecentLabel.textContent = 'Reports this week';
+      return;
+    }
+    f7ReportTargetSummary.classList.remove('hidden');
+    if (f7ReportSummaryTotal) f7ReportSummaryTotal.textContent = formatNumber(summary.totalReports ?? summary.total_reports ?? 0);
+    if (f7ReportSummaryRecent) f7ReportSummaryRecent.textContent = formatNumber(summary.recentReports ?? summary.recent_reports ?? 0);
+    if (f7ReportSummaryReporters) f7ReportSummaryReporters.textContent = formatNumber(summary.reporterCount ?? summary.reporter_count ?? 0);
+    if (f7ReportSummaryFirst) f7ReportSummaryFirst.textContent = formatAbsoluteWithRelative(summary.firstReportedAt ?? summary.first_report_at);
+    if (f7ReportSummaryLast) f7ReportSummaryLast.textContent = formatAbsoluteWithRelative(summary.lastReportedAt ?? summary.last_report_at);
+    if (f7ReportSummaryRecentLabel) {
+      const label = describeRecentWindow(summary.recentWindowMs ?? summary.recent_window_ms);
+      f7ReportSummaryRecentLabel.textContent = label || 'Recent reports';
+    }
+    if (f7ReportSummaryCategories) {
+      f7ReportSummaryCategories.innerHTML = '';
+      const categories = Array.isArray(summary.topCategories ?? summary.top_categories) ? summary.topCategories ?? summary.top_categories : [];
+      categories.filter(Boolean).forEach((entry) => {
+        const category = pickString(entry.category, entry.name) || 'Unspecified';
+        const count = Number(entry.count ?? entry.total) || 0;
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = `${category} · ${formatNumber(count)}`;
+        f7ReportSummaryCategories.appendChild(tag);
+      });
+    }
+  }
+
+  function normalizeF7PlayerProfile(data, steamId, fallbackName) {
+    const resolvedId = pickString(data?.steamid, data?.steamId, steamId);
+    const forcedName = pickString(data?.forced_display_name, data?.forcedDisplayName);
+    const persona = pickString(
+      forcedName,
+      data?.display_name,
+      data?.displayName,
+      data?.persona,
+      data?.personaName,
+      fallbackName,
+      resolvedId
+    );
+    const rawDisplay = pickString(data?.raw_display_name, data?.rawDisplayName, persona, fallbackName, resolvedId);
+    const profileUrl = pickString(data?.profileurl, data?.profile_url, data?.profileUrl) || (resolvedId ? `https://steamcommunity.com/profiles/${resolvedId}` : null);
+    const avatarFull = pickString(data?.avatarfull, data?.avatarFull, data?.avatar);
+    const countryCode = pickString(data?.country);
+    const ipCountryCode = pickString(data?.ip_country_code, data?.ipCountryCode);
+    const ipCountryName = pickString(data?.ip_country_name, data?.ipCountryName);
+    const vacBanned = Number(data?.vac_banned ?? data?.vacBanned) > 0 ? 1 : 0;
+    const gameBans = Number(data?.game_bans ?? data?.gameBans ?? 0) || 0;
+    const lastBanDays = Number(data?.last_ban_days ?? data?.lastBanDays ?? data?.daysSinceLastBan);
+    const playtimeMinutes = Number(
+      data?.rust_playtime_minutes
+      ?? data?.rustPlaytimeMinutes
+      ?? data?.total_playtime_minutes
+      ?? data?.totalPlaytimeMinutes
+    );
+    return {
+      steamid: resolvedId || steamId || null,
+      display_name: persona || fallbackName || resolvedId || null,
+      persona: persona || null,
+      raw_display_name: rawDisplay || null,
+      profileurl: profileUrl,
+      avatar: avatarFull || null,
+      avatarfull: avatarFull || null,
+      country: countryCode || null,
+      ip_country_code: ipCountryCode || null,
+      ip_country_name: ipCountryName || null,
+      vac_banned: vacBanned,
+      game_bans: Number.isFinite(gameBans) && gameBans > 0 ? gameBans : 0,
+      last_ban_days: Number.isFinite(lastBanDays) && lastBanDays >= 0 ? Math.round(lastBanDays) : null,
+      rust_playtime_minutes: Number.isFinite(playtimeMinutes) && playtimeMinutes > 0 ? Math.round(playtimeMinutes) : null,
+      playtime_updated_at: pickString(data?.playtime_updated_at, data?.playtimeUpdatedAt) || null,
+      forced_display_name: forcedName || null
+    };
+  }
+
+  function ensureF7PlayerProfile(detail) {
+    if (!detail) return null;
+    const steamId = pickString(detail.targetSteamId);
+    const key = steamId ? steamId.trim() : '';
+    if (!key) return null;
+    const cached = f7ProfileCache.get(key);
+    if (cached) return cached;
+    if (f7ProfileRequests.has(key) || !state.TOKEN) return null;
+    const request = (async () => {
+      try {
+        const data = await api(`/players/${encodeURIComponent(key)}`);
+        const normalized = normalizeF7PlayerProfile(data || {}, key, detail.targetName || detail.targetSteamId);
+        f7ProfileCache.set(key, { status: 'ready', profile: normalized, error: null });
+      } catch (err) {
+        if (errorCode(err) === 'unauthorized') handleUnauthorized();
+        const description = describeError(err);
+        f7ProfileCache.set(key, { status: 'error', profile: null, error: description });
+      } finally {
+        f7ProfileRequests.delete(key);
+        const active = f7State.activeId != null ? f7State.detailCache.get(f7State.activeId) : null;
+        if (active && active.targetSteamId && String(active.targetSteamId).trim() === key) {
+          renderF7TargetProfile(active);
+        }
+      }
+    })();
+    f7ProfileRequests.set(key, request);
+    return null;
+  }
+
+  function renderF7TargetProfile(detail) {
+    if (!f7ReportTargetProfile) return;
+    const steamId = pickString(detail?.targetSteamId);
+    if (!detail || !steamId) {
+      f7ReportTargetProfile.classList.add('hidden');
+      if (f7ReportProfileName) f7ReportProfileName.textContent = '—';
+      if (f7ReportProfileSteam) f7ReportProfileSteam.textContent = '—';
+      if (f7ReportProfileCountry) f7ReportProfileCountry.textContent = '—';
+      if (f7ReportProfileVac) f7ReportProfileVac.textContent = '—';
+      if (f7ReportProfileGameBans) f7ReportProfileGameBans.textContent = '—';
+      if (f7ReportProfileLastBan) f7ReportProfileLastBan.textContent = '—';
+      if (f7ReportProfilePlaytime) {
+        f7ReportProfilePlaytime.textContent = '—';
+        f7ReportProfilePlaytime.removeAttribute('title');
+      }
+      if (f7ReportProfileStatus) {
+        f7ReportProfileStatus.textContent = '';
+        f7ReportProfileStatus.classList.add('hidden');
+      }
+      if (f7ReportOpenProfile) {
+        f7ReportOpenProfile.disabled = true;
+        delete f7ReportOpenProfile.dataset.steamid;
+      }
+      if (f7ReportProfileAvatar) f7ReportProfileAvatar.innerHTML = '';
+      return;
+    }
+    const cacheEntry = ensureF7PlayerProfile(detail) || f7ProfileCache.get(steamId.trim());
+    const profile = cacheEntry?.profile || null;
+    const loading = !profile && f7ProfileRequests.has(steamId.trim());
+    const errorMessage = cacheEntry?.error;
+    const displayName = pickString(
+      profile?.display_name,
+      profile?.persona,
+      detail.targetName,
+      steamId
+    );
+    f7ReportTargetProfile.classList.remove('hidden');
+    if (f7ReportProfileName) f7ReportProfileName.textContent = displayName || 'Unknown player';
+    if (f7ReportProfileSteam) {
+      f7ReportProfileSteam.innerHTML = '';
+      const link = document.createElement('a');
+      link.textContent = steamId;
+      link.href = `https://steamcommunity.com/profiles/${steamId}`;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      f7ReportProfileSteam.appendChild(link);
+    }
+    if (f7ReportProfileAvatar) {
+      f7ReportProfileAvatar.innerHTML = '';
+      const avatarUrl = profile?.avatarfull || profile?.avatar || null;
+      if (avatarUrl) {
+        const img = document.createElement('img');
+        img.src = avatarUrl;
+        img.alt = `${displayName || 'Player'} avatar`;
+        img.loading = 'lazy';
+        f7ReportProfileAvatar.appendChild(img);
+      } else {
+        f7ReportProfileAvatar.textContent = chatAvatarInitial(displayName || steamId);
+      }
+    }
+    if (f7ReportProfileCountry) {
+      const steamCountry = profile?.country || null;
+      const ipCountryCode = profile?.ip_country_code || null;
+      const ipCountryName = profile?.ip_country_name || null;
+      const parts = [];
+      const steamLabel = steamCountry ? formatCountryDetail(describeCountry(steamCountry), steamCountry) : null;
+      if (steamLabel) parts.push(`Steam: ${steamLabel}`);
+      const ipLabel = ipCountryCode || ipCountryName
+        ? formatCountryDetail(ipCountryName || describeCountry(ipCountryCode), ipCountryCode)
+        : null;
+      if (ipLabel) parts.push(`IP: ${ipLabel}`);
+      f7ReportProfileCountry.textContent = parts.length ? parts.join(' · ') : '—';
+    }
+    if (f7ReportProfileVac) {
+      const vac = Number(profile?.vac_banned) > 0;
+      f7ReportProfileVac.textContent = vac ? 'VAC ban on record' : 'None';
+    }
+    if (f7ReportProfileGameBans) {
+      const bans = Number(profile?.game_bans) || 0;
+      f7ReportProfileGameBans.textContent = bans > 0 ? `${formatNumber(bans)}` : '0';
+    }
+    if (f7ReportProfileLastBan) {
+      f7ReportProfileLastBan.textContent = describeBanAge(profile?.last_ban_days, Number(profile?.vac_banned) > 0, Number(profile?.game_bans) || 0);
+    }
+    if (f7ReportProfilePlaytime) {
+      f7ReportProfilePlaytime.textContent = formatPlaytimeMinutes(profile?.rust_playtime_minutes);
+      const updated = profile?.playtime_updated_at;
+      if (updated) {
+        f7ReportProfilePlaytime.title = `Updated ${formatAbsoluteWithRelative(updated)}`;
+      } else {
+        f7ReportProfilePlaytime.removeAttribute('title');
+      }
+    }
+    if (f7ReportProfileStatus) {
+      if (errorMessage) {
+        f7ReportProfileStatus.textContent = 'Unable to load profile: ' + errorMessage;
+        f7ReportProfileStatus.classList.remove('hidden');
+      } else if (loading) {
+        f7ReportProfileStatus.textContent = 'Loading latest Steam profile…';
+        f7ReportProfileStatus.classList.remove('hidden');
+      } else {
+        f7ReportProfileStatus.textContent = '';
+        f7ReportProfileStatus.classList.add('hidden');
+      }
+    }
+    if (f7ReportOpenProfile) {
+      f7ReportOpenProfile.disabled = false;
+      f7ReportOpenProfile.dataset.steamid = steamId;
+    }
+  }
+
+  function formatPlaytimeMinutes(minutes) {
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value <= 0) return '—';
+    const total = Math.max(0, Math.round(value));
+    const hours = Math.floor(total / 60);
+    const mins = total % 60;
+    if (hours === 0) return `${mins} min`;
+    if (mins === 0) return `${hours} h`;
+    return `${hours} h ${mins} min`;
+  }
+
+  function describeBanAge(days, vacBanned, gameBans) {
+    const hasBan = (Number(vacBanned) > 0) || (Number(gameBans) > 0);
+    if (!hasBan) return 'No bans';
+    const value = Number(days);
+    if (!Number.isFinite(value) || value < 0) return 'Unknown';
+    if (value === 0) return 'Today';
+    if (value === 1) return '1 day ago';
+    if (value < 30) return `${value} days ago`;
+    const months = Math.floor(value / 30);
+    if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
+    const years = Math.floor(value / 365);
+    return `${years} year${years === 1 ? '' : 's'} ago`;
+  }
+
+  function buildF7PlayerPayload(detail) {
+    if (!detail) return null;
+    const steamId = pickString(detail.targetSteamId);
+    if (!steamId) return null;
+    const key = steamId.trim();
+    const cached = f7ProfileCache.get(key);
+    const baseName = pickString(
+      cached?.profile?.display_name,
+      detail.targetName,
+      steamId
+    ) || steamId;
+    const payload = { ...(cached?.profile || {}) };
+    payload.steamid = payload.steamid || steamId;
+    payload.display_name = payload.display_name || baseName;
+    payload.persona = payload.persona || baseName;
+    if (!payload.profileurl) {
+      payload.profileurl = `https://steamcommunity.com/profiles/${steamId}`;
+    }
+    return payload;
   }
 
   async function refreshF7Reports({ force = false } = {}) {
@@ -2065,11 +2557,14 @@
       if (f7State.detailRequests.get(numericId) !== requestToken || Number(f7State.serverId) !== serverId) {
         return;
       }
+      const baseReport = normalizeF7Report(data?.report);
+      const previous = f7State.detailCache.get(numericId) || {};
       const detail = {
-        ...normalizeF7Report(data?.report),
+        ...baseReport,
         recentForTarget: Array.isArray(data?.recentForTarget)
           ? data.recentForTarget.map((item) => normalizeF7Report(item)).filter(Boolean)
-          : []
+          : [],
+        targetSummary: data?.targetSummary ?? previous.targetSummary ?? null
       };
       f7State.detailCache.set(numericId, detail);
       if (numericId === f7State.activeId) {
@@ -2104,6 +2599,21 @@
     f7State.listRequestToken = null;
     f7State.detailRequests.clear();
     f7State.scope = 'new';
+    f7State.filter = '';
+    f7State.filterActive = false;
+    f7State.totalCount = 0;
+    f7State.visibleCount = 0;
+    f7ProfileCache.clear();
+    f7ProfileRequests.clear();
+    if (f7FilterTimer) {
+      clearTimeout(f7FilterTimer);
+      f7FilterTimer = null;
+    }
+    if (f7ReportsSearch) {
+      f7ReportsSearch.value = '';
+      f7ReportsSearch.disabled = !Number.isFinite(numeric);
+    }
+    if (f7ReportsCount) f7ReportsCount.textContent = '';
     updateF7ScopeButtons();
     renderF7Reports();
     if (!Number.isFinite(numeric) || !hasServerCapability('view')) {
@@ -2121,6 +2631,21 @@
     f7State.loading = false;
     f7State.listRequestToken = null;
     f7State.detailRequests.clear();
+    f7State.filter = '';
+    f7State.filterActive = false;
+    f7State.totalCount = 0;
+    f7State.visibleCount = 0;
+    f7ProfileCache.clear();
+    f7ProfileRequests.clear();
+    if (f7FilterTimer) {
+      clearTimeout(f7FilterTimer);
+      f7FilterTimer = null;
+    }
+    if (f7ReportsSearch) {
+      f7ReportsSearch.value = '';
+      f7ReportsSearch.disabled = true;
+    }
+    if (f7ReportsCount) f7ReportsCount.textContent = '';
     updateF7ScopeButtons();
     renderF7Reports();
   }
@@ -2132,7 +2657,7 @@
     if (!hasServerCapability('view')) return;
     if (Number(report.serverId) !== Number(state.currentServerId)) return;
     if (report.id != null) {
-      f7State.detailCache.set(report.id, { ...report, recentForTarget: [] });
+      f7State.detailCache.set(report.id, { ...report, recentForTarget: [], targetSummary: null });
     }
     const shouldTrack = f7State.scope === 'new' || f7State.scope === 'all';
     if (shouldTrack) {
@@ -3505,6 +4030,12 @@
     const date = new Date(text);
     if (!Number.isNaN(date.valueOf())) return date.toLocaleString();
     return text;
+  }
+
+  function formatAbsoluteWithRelative(value) {
+    const absolute = formatDateTime(value);
+    const relative = formatRelativeTime(value);
+    return relative ? `${absolute} (${relative})` : absolute;
   }
 
   const relativeTimeFormatter = typeof Intl !== 'undefined' && typeof Intl.RelativeTimeFormat === 'function'

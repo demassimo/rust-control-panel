@@ -5178,6 +5178,7 @@ app.get('/api/servers/:id/f7-reports/:reportId', auth, async (req, res) => {
     }
     const report = projectF7Report(row, { serverId: id });
     let history = [];
+    let targetSummary = null;
     if (row?.target_steamid && typeof db?.listF7ReportsForTarget === 'function') {
       try {
         const related = await db.listF7ReportsForTarget(id, row.target_steamid, {
@@ -5191,7 +5192,14 @@ app.get('/api/servers/:id/f7-reports/:reportId', auth, async (req, res) => {
         console.warn('failed to load related f7 reports', err);
       }
     }
-    res.json({ report, recentForTarget: history });
+    if (row?.target_steamid && typeof db?.getF7TargetSummary === 'function') {
+      try {
+        targetSummary = await db.getF7TargetSummary(id, row.target_steamid);
+      } catch (err) {
+        console.warn('failed to load f7 target summary', err);
+      }
+    }
+    res.json({ report, recentForTarget: history, targetSummary });
   } catch (err) {
     console.error('failed to load f7 report', err);
     res.status(500).json({ error: 'db_error' });

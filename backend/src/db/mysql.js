@@ -990,6 +990,50 @@ function createApi(pool, dialect) {
       }
       return await exec(sql, params);
     },
+    async getF7TargetSummary(serverId, targetSteamId, { windowMs = 7 * 24 * 60 * 60 * 1000 } = {}) {
+      const serverIdNum = Number(serverId);
+      const steamId = trimOrNull(targetSteamId);
+      if (!Number.isFinite(serverIdNum) || !steamId) return null;
+      const windowMsNum = Number(windowMs);
+      const sinceIso = Number.isFinite(windowMsNum) && windowMsNum > 0
+        ? normaliseDateTime(new Date(Date.now() - Math.floor(windowMsNum)))
+        : null;
+      const summaryRows = await exec(`
+        SELECT
+          COUNT(*) AS total_reports,
+          SUM(CASE WHEN ? IS NOT NULL AND created_at >= ? THEN 1 ELSE 0 END) AS recent_reports,
+          MIN(created_at) AS first_report_at,
+          MAX(created_at) AS last_report_at,
+          COUNT(DISTINCT reporter_steamid) AS reporter_count
+        FROM f7_reports
+        WHERE server_id=? AND target_steamid=?
+      `, [sinceIso, sinceIso, serverIdNum, steamId]);
+      const summaryRow = summaryRows?.[0] || {};
+      const categories = await exec(`
+        SELECT category, COUNT(*) AS total
+        FROM f7_reports
+        WHERE server_id=? AND target_steamid=? AND category IS NOT NULL AND category <> ''
+        GROUP BY category
+        ORDER BY total DESC, category ASC
+        LIMIT 5
+      `, [serverIdNum, steamId]);
+      return {
+        serverId: serverIdNum,
+        targetSteamId: steamId,
+        totalReports: Number(summaryRow.total_reports) || 0,
+        recentReports: Number(summaryRow.recent_reports) || 0,
+        firstReportedAt: summaryRow.first_report_at || null,
+        lastReportedAt: summaryRow.last_report_at || null,
+        reporterCount: Number(summaryRow.reporter_count) || 0,
+        recentWindowMs: Number.isFinite(windowMsNum) && windowMsNum > 0 ? Math.floor(windowMsNum) : null,
+        topCategories: Array.isArray(categories)
+          ? categories.map((row) => ({
+            category: trimOrNull(row.category) || 'Unspecified',
+            count: Number(row.total) || 0
+          }))
+          : []
+      };
+    },
     async recordKillEvent(entry = {}) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
       if (!Number.isFinite(serverIdNum)) return null;
