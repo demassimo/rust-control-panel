@@ -1277,7 +1277,30 @@
     const victimSteamId = pickString(raw?.victimSteamId, raw?.victim_steamid, parsedRaw?.victimSteamId);
     const victimName = pickString(raw?.victimName, raw?.victim_name, parsedRaw?.victimName);
     const victimClan = pickString(raw?.victimClan, raw?.victim_clan, parsedRaw?.victimClan);
-    const weapon = pickString(raw?.weapon, parsedRaw?.weapon);
+    let weapon = pickString(raw?.weapon, parsedRaw?.weapon);
+    const rawWeapon = weapon;
+
+    if (combatLog?.records?.length) {
+      for (let i = combatLog.records.length - 1; i >= 0; i -= 1) {
+        const record = combatLog.records[i];
+        const info = String(record?.info || '').toLowerCase();
+        const isKillRecord =
+          info.includes('killed') ||
+          (record?.newHp != null && Number.isFinite(record.newHp) && record.newHp <= 0);
+        if (!isKillRecord) continue;
+
+        if (record?.weapon) {
+          weapon = record.weapon;
+        }
+        if (record?.distanceMeters != null && Number.isFinite(record.distanceMeters)) {
+          distanceValue = record.distanceMeters;
+        } else if (record?.distanceRaw) {
+          const parsedDistance = toNumber(String(record.distanceRaw).replace(/[^0-9.-]+/g, ''));
+          if (parsedDistance != null) distanceValue = parsedDistance;
+        }
+        break;
+      }
+    }
 
     return {
       id: raw?.id ?? null,
@@ -1290,6 +1313,7 @@
       victimName,
       victimClan,
       weapon,
+      rawWeapon,
       distance: distanceValue,
       position: hasPosition ? position : null,
       raw: rawLog,
@@ -1304,7 +1328,7 @@
       entry.occurredAt,
       entry.killerSteamId || '',
       entry.victimSteamId || '',
-      entry.weapon || '',
+      (entry.rawWeapon ?? entry.weapon ?? ''),
       entry.raw || ''
     ].join('::');
   }
@@ -1502,6 +1526,10 @@
       }
     });
 
+    const previousScrollTop = killFeedList.scrollTop;
+    const previousScrollHeight = killFeedList.scrollHeight;
+    const anchoredToTop = previousScrollTop <= 1;
+
     killFeedList.innerHTML = '';
 
     records.forEach((entry, index) => {
@@ -1672,6 +1700,14 @@
       li.appendChild(details);
       killFeedList.appendChild(li);
     });
+
+    if (anchoredToTop) {
+      killFeedList.scrollTop = 0;
+    } else {
+      const newScrollHeight = killFeedList.scrollHeight;
+      const delta = newScrollHeight - previousScrollHeight;
+      killFeedList.scrollTop = Math.max(0, previousScrollTop + (Number.isFinite(delta) ? delta : 0));
+    }
 
     killFeedState.renderSignatures.set(serverId, renderSignature);
   }
