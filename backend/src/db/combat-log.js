@@ -1,4 +1,5 @@
 const COMBAT_LOG_MAX_LENGTH = 8000;
+const COMBAT_LOG_MAX_ENTRIES = 20;
 
 function ensureMaxLength(text) {
   if (typeof text !== 'string') return null;
@@ -17,8 +18,8 @@ export function serializeCombatLogPayload(combatPayload) {
   }
 
   const payload = { ...combatPayload };
-  if (Array.isArray(payload.lines)) payload.lines = payload.lines.slice();
-  if (Array.isArray(payload.records)) payload.records = payload.records.slice();
+  if (Array.isArray(payload.lines)) payload.lines = payload.lines.slice(0, COMBAT_LOG_MAX_ENTRIES);
+  if (Array.isArray(payload.records)) payload.records = payload.records.slice(0, COMBAT_LOG_MAX_ENTRIES);
 
   const encode = () => {
     try {
