@@ -1143,8 +1143,8 @@
     return null;
   }
 
-  const COMBAT_LOG_HEADER_REGEX = /^\s*time\s+attacker\s+id\s+target\s+id\s+weapon\s+ammo\s+area\s+distance\s+old_hp\s+new_hp\s+info\s+hits\s+integrity\s+travel\s+mismatch\s+desync\s*$/i;
-  const COMBAT_LOG_ENTRY_REGEX = /^(?<time>-?\d+(?:\.\d+)?)s\s+(?<attacker>\S+)\s+(?<attackerId>-?\d+)\s+(?<target>\S+)\s+(?<targetId>-?\d+)\s+(?<weapon>\S+)\s+(?<ammo>\S+)\s+(?<area>\S+)\s+(?<distance>-?\d+(?:\.\d+)?)(?<distanceUnit>m)?\s+(?<oldHp>-?\d+(?:\.\d+)?)\s+(?<newHp>-?\d+(?:\.\d+)?)\s+(?<info>\S+)\s+(?<hits>-?\d+)\s+(?<integrity>-?\d+(?:\.\d+)?)\s+(?<travel>-?\d+(?:\.\d+)?)(?<travelUnit>s|m)?\s+(?<mismatch>-?\d+(?:\.\d+)?)(?<mismatchUnit>m|s)?\s+(?<desync>-?\d+(?:\.\d+)?)\s*$/i;
+  const COMBAT_LOG_HEADER_REGEX = /^\s*time\s+attacker\s+id\s+target\s+id\s+weapon\s+ammo\s+area\s+distance\s+old[_\s]*hp\s+new[_\s]*hp\s+info\s+hits\s+integrity\s+travel\s+mismatch\s+desync\s*$/i;
+  const COMBAT_LOG_ENTRY_REGEX = /^(?<time>-?\d+(?:\.\d+)?)s\s+(?<attacker>\S+)\s+(?<attackerId>-?\d+)\s+(?<target>\S+)\s+(?<targetId>-?\d+)\s+(?<weapon>\S+)\s+(?<ammo>\S+)\s+(?<area>\S+)\s+(?<distance>-?\d+(?:\.\d+)?)(?:\s*(?<distanceUnit>m))?\s+(?<oldHp>-?\d+(?:\.\d+)?)\s+(?<newHp>-?\d+(?:\.\d+)?)\s+(?:(?<info>\S+?)(?=\s+-?\d+\s))?\s*(?<hits>-?\d+)\s+(?<integrity>-?\d+(?:\.\d+)?)\s+(?<travel>-?\d+(?:\.\d+)?)(?:\s*(?<travelUnit>s|m))?\s+(?<mismatch>-?\d+(?:\.\d+)?)(?:\s*(?<mismatchUnit>m|s))?\s+(?<desync>-?\d+(?:\.\d+)?)\s*$/i;
 
   function parseKillRawLog(raw) {
     if (typeof raw !== 'string') return null;
