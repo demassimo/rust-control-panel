@@ -451,10 +451,15 @@
                 <div class="card-controls reports-scope-controls" role="tablist" aria-label="Report scope">
                   <button type="button" class="reports-scope-btn active" data-scope="new" role="tab" aria-selected="true">New</button>
                   <button type="button" class="reports-scope-btn" data-scope="all" role="tab" aria-selected="false">All</button>
+                  <p id="f7ReportsCount" class="reports-count muted small" aria-live="polite"></p>
                 </div>
               </div>
               <div class="reports-body">
                 <aside class="reports-list" aria-label="F7 reports">
+                  <label class="reports-search">
+                    <span class="sr-only">Filter F7 reports</span>
+                    <input type="search" id="f7ReportsSearch" name="f7ReportsSearch" placeholder="Search by player, reporter, or reason" autocomplete="off" />
+                  </label>
                   <p id="f7ReportsLoading" class="reports-loading muted small hidden">Loading reports…</p>
                   <p id="f7ReportsError" class="notice warning hidden" role="alert"></p>
                   <p id="f7ReportsEmpty" class="reports-empty muted small hidden">No F7 reports yet.</p>
@@ -487,6 +492,67 @@
                         <dd id="f7ReportId"></dd>
                       </div>
                     </dl>
+                    <section id="f7ReportTargetSummary" class="reports-summary hidden" aria-live="polite">
+                      <h5>Player summary</h5>
+                      <dl class="reports-summary-grid">
+                        <div>
+                          <dt>Total reports</dt>
+                          <dd id="f7ReportSummaryTotal">—</dd>
+                        </div>
+                        <div>
+                          <dt id="f7ReportSummaryRecentLabel">Reports this week</dt>
+                          <dd id="f7ReportSummaryRecent">—</dd>
+                        </div>
+                        <div>
+                          <dt>Unique reporters</dt>
+                          <dd id="f7ReportSummaryReporters">—</dd>
+                        </div>
+                        <div>
+                          <dt>First report</dt>
+                          <dd id="f7ReportSummaryFirst">—</dd>
+                        </div>
+                        <div>
+                          <dt>Latest report</dt>
+                          <dd id="f7ReportSummaryLast">—</dd>
+                        </div>
+                      </dl>
+                      <div id="f7ReportSummaryCategories" class="reports-summary-tags" aria-live="polite"></div>
+                    </section>
+                    <section id="f7ReportTargetProfile" class="reports-profile hidden" aria-live="polite">
+                      <div class="reports-profile-header">
+                        <div id="f7ReportProfileAvatar" class="reports-profile-avatar" aria-hidden="true"></div>
+                        <div class="reports-profile-meta">
+                          <strong id="f7ReportProfileName">—</strong>
+                          <p id="f7ReportProfileSteam" class="muted small">—</p>
+                        </div>
+                      </div>
+                      <dl class="reports-summary-grid">
+                        <div>
+                          <dt>Country</dt>
+                          <dd id="f7ReportProfileCountry">—</dd>
+                        </div>
+                        <div>
+                          <dt>VAC status</dt>
+                          <dd id="f7ReportProfileVac">—</dd>
+                        </div>
+                        <div>
+                          <dt>Game bans</dt>
+                          <dd id="f7ReportProfileGameBans">—</dd>
+                        </div>
+                        <div>
+                          <dt>Last ban</dt>
+                          <dd id="f7ReportProfileLastBan">—</dd>
+                        </div>
+                        <div>
+                          <dt>Rust playtime</dt>
+                          <dd id="f7ReportProfilePlaytime">—</dd>
+                        </div>
+                      </dl>
+                      <p id="f7ReportProfileStatus" class="muted small hidden" role="status"></p>
+                      <div class="reports-actions profile-actions">
+                        <button type="button" id="f7ReportOpenProfile" class="ghost small">Open full player profile</button>
+                      </div>
+                    </section>
                     <section class="reports-message">
                       <h5>Message</h5>
                       <p id="f7ReportMessage" class="reports-message-body muted"></p>
