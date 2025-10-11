@@ -18,6 +18,7 @@ This document summarizes the purpose of the key files and directories that make 
 - `src/auth.js` – JWT-based authentication helpers used by HTTP routes and WebSocket handshakes, including middleware for enforcing admin access.【F:backend/src/auth.js†L1-L36】
 - `src/permissions.js` – Normalises role definitions, checks per-server capabilities, filters data by access level, and serialises permission payloads.【F:backend/src/permissions.js†L1-L120】
 - `src/db/index.js` – Chooses the configured database driver (SQLite or MySQL), ensures schema migrations, seeds default roles, and provisions the first admin account.【F:backend/src/db/index.js†L1-L63】
+- `src/db/combat-log.js` – Shared helper that serialises combat log payloads for database storage while trimming them to fit the 8 KB column limit without corrupting the JSON structure.【F:backend/src/db/combat-log.js†L1-L72】
 - `src/db/sqlite.js` – SQLite-backed implementation of the database API, providing CRUD helpers for users, servers, roles, telemetry records, and chat logs (including scope and colour metadata).【F:backend/src/db/sqlite.js†L1-L220】
 - `src/db/mysql.js` – MySQL-backed implementation of the database API, including table creation statements and query helpers for user, server, player, and chat history data.【F:backend/src/db/mysql.js†L1-L200】
 - `src/rcon.js` – Robust WebRCON client that maintains persistent connections, queues commands, handles keepalive traffic, and emits structured events for the rest of the app.【F:backend/src/rcon.js†L1-L120】
