@@ -2479,7 +2479,7 @@
       detail.targetName,
       steamId
     ) || steamId;
-    const payload = { ...cached?.profile };
+    const payload = { ...(cached?.profile || {}) };
     payload.steamid = payload.steamid || steamId;
     payload.display_name = payload.display_name || baseName;
     payload.persona = payload.persona || baseName;
