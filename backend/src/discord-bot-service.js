@@ -636,13 +636,6 @@ function buildCommandDefinitions() {
           description: 'Close an existing ticket channel',
           options: [
             {
-              type: ApplicationCommandOptionType.Channel,
-              name: 'channel',
-              description: 'Ticket channel to close',
-              required: false,
-              channel_types: [ChannelType.GuildText]
-            },
-            {
               type: ApplicationCommandOptionType.String,
               name: 'reason',
               description: 'Reason for closing the ticket',
@@ -3050,10 +3043,9 @@ async function handleTicketCloseCommand(state, interaction) {
     return;
   }
 
-  const providedChannel = interaction.options.getChannel('channel', false);
-  const targetChannel = providedChannel ?? interaction.channel;
+  const targetChannel = interaction.channel;
   if (!targetChannel?.isTextBased?.()) {
-    await interaction.editReply('Select a text channel to close.');
+    await interaction.editReply('Run this command from the ticket channel you want to close.');
     return;
   }
   if (targetChannel.guildId && targetChannel.guildId !== state.guildId) {
