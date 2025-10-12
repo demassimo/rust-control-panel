@@ -1803,6 +1803,51 @@ button.menu-tab.active {
   white-space: pre-wrap;
 }
 
+.aq-ticket-reply {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aq-ticket-reply-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.aq-ticket-reply textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+}
+
+.aq-ticket-reply textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.aq-ticket-reply-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.aq-ticket-reply-actions button {
+  min-width: 140px;
+}
+
+.aq-ticket-reply .notice {
+  margin: 0;
+}
+
 .reports-detail-card {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--card-border);
