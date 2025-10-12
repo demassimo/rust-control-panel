@@ -3036,7 +3036,8 @@ button.chat-filter-btn:focus-visible {
 
 .player-moderation-menu-list {
   position: absolute;
-  top: calc(100% + 6px);
+  top: auto;
+  bottom: calc(100% + 6px);
   right: 0;
   min-width: 200px;
   margin: 0;
@@ -3049,7 +3050,7 @@ button.chat-filter-btn:focus-visible {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-md);
   box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
-  z-index: 20;
+  z-index: 9999;
 }
 
 .player-moderation-menu-row { width: 100%; }
