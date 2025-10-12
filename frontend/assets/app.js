@@ -149,6 +149,12 @@
   const aqTicketDialogLoading = $('#aqTicketDialogLoading');
   const aqTicketDialogEmpty = $('#aqTicketDialogEmpty');
   const aqTicketDialogError = $('#aqTicketDialogError');
+  const aqTicketReply = $('#aqTicketReply');
+  const aqTicketReplyForm = $('#aqTicketReplyForm');
+  const aqTicketReplyInput = $('#aqTicketReplyInput');
+  const aqTicketReplySubmit = $('#aqTicketReplySubmit');
+  const aqTicketReplyError = $('#aqTicketReplyError');
+  const aqTicketReplyNotice = $('#aqTicketReplyNotice');
   const f7ReportsList = $('#f7ReportsList');
   const f7ReportsLoading = $('#f7ReportsLoading');
   const f7ReportsEmpty = $('#f7ReportsEmpty');
@@ -290,7 +296,9 @@
     listRequestToken: null,
     detailRequests: new Map(),
     detailLoading: false,
-    detailError: null
+    detailError: null,
+    replying: false,
+    replyError: null
   };
 
   function emitWorkspaceEvent(name, detail) {
@@ -3118,6 +3126,68 @@
     }
   }
 
+  function getActiveAqTicketDetail() {
+    const id = Number(aqState.selectedId);
+    if (!Number.isFinite(id)) return null;
+    return aqState.detailCache.get(id) || null;
+  }
+
+  function renderAqTicketReply(detail) {
+    if (!aqTicketReply) return;
+    const activeDetail = detail && detail.ticket ? detail : null;
+    if (!activeDetail) {
+      aqTicketReply.classList.add('hidden');
+      if (aqTicketReplyInput) {
+        aqTicketReplyInput.value = '';
+        aqTicketReplyInput.disabled = true;
+      }
+      if (aqTicketReplySubmit) {
+        aqTicketReplySubmit.disabled = true;
+        aqTicketReplySubmit.textContent = 'Send reply';
+      }
+      if (aqTicketReplyError) {
+        aqTicketReplyError.textContent = '';
+        aqTicketReplyError.classList.add('hidden');
+      }
+      if (aqTicketReplyNotice) {
+        aqTicketReplyNotice.textContent = '';
+        aqTicketReplyNotice.classList.add('hidden');
+      }
+      return;
+    }
+    const ticket = normalizeAqTicket(activeDetail.ticket);
+    const isClosed = (ticket?.status || '').toLowerCase() === 'closed';
+    const sending = aqState.replying;
+    const message = aqTicketReplyInput?.value || '';
+    const hasMessage = message.trim().length > 0;
+    aqTicketReply.classList.remove('hidden');
+    if (aqTicketReplyInput) {
+      aqTicketReplyInput.disabled = sending || isClosed;
+    }
+    if (aqTicketReplySubmit) {
+      aqTicketReplySubmit.disabled = sending || isClosed || !hasMessage;
+      aqTicketReplySubmit.textContent = sending ? 'Sending…' : 'Send reply';
+    }
+    if (aqTicketReplyError) {
+      if (aqState.replyError) {
+        aqTicketReplyError.textContent = aqState.replyError;
+        aqTicketReplyError.classList.remove('hidden');
+      } else {
+        aqTicketReplyError.textContent = '';
+        aqTicketReplyError.classList.add('hidden');
+      }
+    }
+    if (aqTicketReplyNotice) {
+      if (isClosed) {
+        aqTicketReplyNotice.textContent = 'This ticket is closed. Replies are disabled.';
+        aqTicketReplyNotice.classList.remove('hidden');
+      } else {
+        aqTicketReplyNotice.textContent = '';
+        aqTicketReplyNotice.classList.add('hidden');
+      }
+    }
+  }
+
   function renderAqTicketDetail(detail) {
     const hasServer = Number.isFinite(aqState.serverId);
     const activeDetail = detail && detail.ticket ? detail : null;
@@ -3152,6 +3222,7 @@
       }
       if (aqTicketDialogEmpty) aqTicketDialogEmpty.classList.add('hidden');
       if (aqTicketDialog) aqTicketDialog.innerHTML = '';
+      renderAqTicketReply(null);
       return;
     }
 
@@ -3212,6 +3283,41 @@
         const showEmpty = dialogEntries.length === 0 && !aqState.detailLoading && !aqState.detailError;
         aqTicketDialogEmpty.classList.toggle('hidden', !showEmpty);
       }
+    }
+    renderAqTicketReply(activeDetail);
+  }
+
+  async function submitAqTicketReply(event) {
+    event.preventDefault();
+    if (aqState.replying) return;
+    const serverId = Number(aqState.serverId);
+    const ticketId = Number(aqState.selectedId);
+    if (!Number.isFinite(serverId) || !Number.isFinite(ticketId)) return;
+    if (!aqTicketReplyInput) return;
+    const message = aqTicketReplyInput.value || '';
+    if (!message.trim()) {
+      aqState.replyError = describeError('message_required');
+      renderAqTicketReply(getActiveAqTicketDetail());
+      aqTicketReplyInput.focus();
+      return;
+    }
+    aqState.replying = true;
+    aqState.replyError = null;
+    renderAqTicketReply(getActiveAqTicketDetail());
+    try {
+      await api(`/servers/${serverId}/aq-tickets/${ticketId}/reply`, { message }, 'POST');
+      aqTicketReplyInput.value = '';
+      aqState.replyError = null;
+      await loadAqTicketDetail(ticketId, { force: true });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        handleUnauthorized();
+        return;
+      }
+      aqState.replyError = describeError(err);
+    } finally {
+      aqState.replying = false;
+      renderAqTicketReply(getActiveAqTicketDetail());
     }
   }
 
@@ -3330,6 +3436,9 @@
       return;
     }
     aqState.selectedId = numericId;
+    aqState.replying = false;
+    aqState.replyError = null;
+    if (aqTicketReplyInput) aqTicketReplyInput.value = '';
     renderAqTickets();
     if (aqState.detailCache.has(numericId)) {
       aqState.detailError = null;
@@ -3355,6 +3464,8 @@
     aqState.detailLoading = false;
     aqState.detailCache.clear();
     aqState.detailRequests.clear();
+    aqState.replying = false;
+    aqState.replyError = null;
     renderAqTickets();
     renderAqTicketDetail(null);
     if (!Number.isFinite(numeric) || !hasServerCapability('view')) {
@@ -3374,6 +3485,8 @@
     aqState.detailLoading = false;
     aqState.detailCache.clear();
     aqState.detailRequests.clear();
+    aqState.replying = false;
+    aqState.replyError = null;
     renderAqTickets();
     renderAqTicketDetail(null);
   }
@@ -3396,6 +3509,14 @@
       setAqSelectedTicket(id);
     });
   }
+
+  aqTicketReplyForm?.addEventListener('submit', submitAqTicketReply);
+  aqTicketReplyInput?.addEventListener('input', () => {
+    if (aqState.replyError) {
+      aqState.replyError = null;
+    }
+    renderAqTicketReply(getActiveAqTicketDetail());
+  });
 
   if (typeof window !== 'undefined') {
     window.addEventListener('workspace:server-selected', (event) => {
@@ -4532,7 +4653,16 @@
       'The server rejected the image as too large. The control panel accepts files up to 40 MB, but your hosting provider may enforce a smaller limit. Try a smaller image or contact your host to raise the cap.',
     map_upload_failed: 'Uploading the map image failed. Please try again.',
     invalid_current_password: 'The current password you entered is incorrect.',
-    password_mismatch: 'New password and confirmation do not match.'
+    password_mismatch: 'New password and confirmation do not match.',
+    message_required: 'Enter a reply before sending.',
+    message_too_long: 'Your reply is too long for Discord. Try a shorter message.',
+    discord_not_configured: 'Link the Discord bot in Settings before replying to tickets.',
+    ticket_closed: 'This ticket is closed. Replies are disabled.',
+    ticket_channel_missing: 'The Discord channel for this ticket no longer exists.',
+    discord_unavailable: 'Discord messaging is not available on this server.',
+    discord_post_failed: 'Discord rejected the reply. Check the bot permissions and try again.',
+    discord_unreachable: 'Unable to reach Discord right now. Try again shortly.',
+    discord_rate_limited: 'Discord rate limited the bot. Wait a few moments and try again.'
   };
 
   function errorCode(err) {
