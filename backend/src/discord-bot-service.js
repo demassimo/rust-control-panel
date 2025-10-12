@@ -8,6 +8,7 @@ import {
   GatewayIntentBits,
   ActivityType,
   EmbedBuilder,
+  AttachmentBuilder,
   ApplicationCommandOptionType,
   PermissionFlagsBits,
   ChannelType,
@@ -788,20 +789,6 @@ function buildCommandDefinitions() {
                   name: 'category',
                   description: 'Category channel for new tickets',
                   required: true,
-                  channel_types: [ChannelType.GuildCategory]
-                }
-              ]
-            },
-            {
-              type: ApplicationCommandOptionType.Subcommand,
-              name: 'setarchive',
-              description: 'Set or clear the archive category for closed tickets',
-              options: [
-                {
-                  type: ApplicationCommandOptionType.Channel,
-                  name: 'channel',
-                  description: 'Category used to archive closed tickets',
-                  required: false,
                   channel_types: [ChannelType.GuildCategory]
                 }
               ]
@@ -2037,7 +2024,7 @@ async function handleHelpCommand(interaction, { state = null, teamState = null }
     '• `/rustlookup steamid <id>` — Retrieve the detailed record for a specific SteamID64.',
     '',
     '• `/ticket open` — Open a support ticket for the staff team.',
-    '• `/ticket close` — Close a ticket channel and optionally archive it.',
+    '• `/ticket close` — Close a ticket channel, log it, and remove it.',
     '• `/ticket panel` — Post or update the interactive ticket panel.',
     '• `/ticket config` — Configure ticket categories, logging, staff roles, and messages.',
     '',
@@ -2235,7 +2222,6 @@ function buildConfigSummaryEmbed(state) {
   const ticketLines = [
     `Status: ${ticketing.enabled ? '✅ Enabled' : '❌ Disabled'}`,
     `Category: ${formatChannelMention(ticketing.categoryId)}`,
-    `Archive: ${formatChannelMention(ticketing.archiveChannelId)}`,
     `Log channel: ${formatChannelMention(ticketing.logChannelId)}`,
     `Staff role: ${formatRoleMention(ticketing.staffRoleId)}`,
     `Ping staff: ${ticketing.pingStaffOnOpen ? 'Enabled' : 'Disabled'}`,
@@ -2428,27 +2414,6 @@ async function handleTicketConfigCommand(state, interaction, sub) {
     });
     await persistIntegration(state);
     await interaction.editReply(`New tickets will now be created in ${category}.`);
-    return;
-  }
-
-  if (sub === 'setarchive') {
-    const archive = interaction.options.getChannel('channel', false);
-    if (archive) {
-      if (archive.type !== ChannelType.GuildCategory) {
-        await interaction.editReply('The archive must be a category channel.');
-        return;
-      }
-      if (archive.guildId && archive.guildId !== state.guildId) {
-        await interaction.editReply('That category belongs to a different guild.');
-        return;
-      }
-    }
-    updateTicketConfig(state, (ticket) => {
-      ticket.archiveChannelId = archive ? archive.id : null;
-      return ticket;
-    });
-    await persistIntegration(state);
-    await interaction.editReply(archive ? `Closed tickets will be moved to ${archive}.` : 'Archive category cleared.');
     return;
   }
 
@@ -3136,6 +3101,153 @@ async function handleTicketServerSelect(state, interaction) {
   return true;
 }
 
+async function createTicketTranscript(channel, context = {}) {
+  if (!channel?.isTextBased?.()) {
+    throw new Error('Cannot generate transcript for a non text-based channel.');
+  }
+
+  const {
+    ticketNumber,
+    channelName,
+    subject,
+    closedBy,
+    reason,
+    openedBy,
+    openedByTag
+  } = context ?? {};
+
+  const safeChannelName = (typeof channelName === 'string' && channelName.trim().length)
+    ? channelName.trim()
+    : channel?.name ?? `channel-${channel?.id ?? 'unknown'}`;
+  const safeSubject = typeof subject === 'string' && subject.trim().length
+    ? subject.trim().replace(/\r\n?/g, ' ')
+    : null;
+  const safeReason = typeof reason === 'string' && reason.trim().length
+    ? reason.trim()
+    : 'No reason provided.';
+
+  const header = [
+    'Ticket transcript',
+    `Generated at: ${new Date().toISOString()}`,
+    `Channel: ${safeChannelName}`,
+    `Channel ID: ${channel?.id ?? 'unknown'}`
+  ];
+
+  if (ticketNumber != null) {
+    header.push(`Ticket number: ${ticketNumber}`);
+  }
+  if (safeSubject) {
+    header.push(`Subject: ${safeSubject.slice(0, 240)}`);
+  }
+  if (openedBy || openedByTag) {
+    const openerParts = [];
+    if (openedByTag) openerParts.push(openedByTag);
+    if (openedBy) openerParts.push(`ID ${openedBy}`);
+    header.push(`Opened by: ${openerParts.join(' • ')}`);
+  } else {
+    header.push('Opened by: Unknown');
+  }
+
+  if (closedBy) {
+    const closerParts = [];
+    if (closedBy.tag) {
+      closerParts.push(closedBy.tag);
+    } else if (closedBy.username) {
+      closerParts.push(closedBy.username);
+    }
+    if (closedBy.id) {
+      closerParts.push(`ID ${closedBy.id}`);
+    }
+    header.push(`Closed by: ${closerParts.join(' • ') || 'Unknown'}`);
+  } else {
+    header.push('Closed by: Unknown');
+  }
+
+  header.push(`Reason: ${safeReason}`);
+
+  const lines = [];
+  let messageCount = 0;
+  const seen = new Set();
+  let before;
+
+  while (true) {
+    const fetchOptions = { limit: 100 };
+    if (before) fetchOptions.before = before;
+
+    const batch = await channel.messages.fetch(fetchOptions);
+    if (!batch?.size) break;
+
+    const sorted = [...batch.values()].sort(
+      (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0)
+    );
+
+    for (const message of sorted) {
+      if (!message || seen.has(message.id)) continue;
+      seen.add(message.id);
+      messageCount += 1;
+
+      const timestamp = new Date(message.createdTimestamp ?? Date.now()).toISOString();
+      const authorTag = message.author?.tag ?? message.author?.username ?? 'Unknown user';
+      const authorId = message.author?.id ?? 'unknown';
+      const botLabel = message.author?.bot ? ' [BOT]' : '';
+      const baseLine = `[${timestamp}] ${authorTag} (${authorId})${botLabel}`;
+
+      const contentRaw = message.cleanContent ?? message.content ?? '';
+      const content = String(contentRaw ?? '').replace(/\r\n?/g, '\n').trim();
+      if (content) {
+        const [firstLine, ...rest] = content.split('\n');
+        lines.push(`${baseLine}: ${firstLine}`);
+        for (const extra of rest) {
+          lines.push(`  ${extra}`);
+        }
+      } else {
+        lines.push(baseLine);
+      }
+
+      lines.push(`  Message ID: ${message.id}`);
+
+      if (message.reference?.messageId) {
+        lines.push(`  Replying to message ID: ${message.reference.messageId}`);
+      }
+
+      const attachments = message.attachments?.size ? [...message.attachments.values()] : [];
+      for (const attachment of attachments) {
+        const attachmentName = attachment.name ?? 'attachment';
+        lines.push(`  [Attachment] ${attachmentName} — ${attachment.url}`);
+      }
+
+      if (message.embeds?.length) {
+        lines.push(`  [Embeds] ${message.embeds.length} embed(s).`);
+      }
+
+      if (message.stickers?.size) {
+        lines.push(`  [Stickers] ${message.stickers.size} sticker(s).`);
+      }
+
+      if (message.components?.length) {
+        lines.push(`  [Components] ${message.components.length} component(s).`);
+      }
+
+      lines.push('');
+    }
+
+    const oldest = sorted[0];
+    const newBefore = oldest?.id;
+    if (!newBefore || newBefore === before) break;
+    before = newBefore;
+  }
+
+  header.push(`Messages captured: ${messageCount}`);
+  header.push('');
+
+  if (lines.length === 0) {
+    lines.push('No messages were found in this ticket.');
+  }
+
+  const transcriptLines = [...header, ...lines];
+  return `${transcriptLines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+}
+
 async function handleTicketCloseCommand(state, interaction) {
   if (!interaction.deferred && !interaction.replied) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -3227,13 +3339,62 @@ async function handleTicketCloseCommand(state, interaction) {
   }
 
   const config = getTicketConfig(state);
-  if (config.archiveChannelId && targetChannel.parentId !== config.archiveChannelId) {
+
+  let transcriptBuffer = null;
+  let transcriptFileName = null;
+  const ticketNumberDisplay = ticketRecord.ticket_number ?? 'unknown';
+  const channelName = targetChannel.name ?? `ticket-${ticketNumberDisplay}`;
+
+  try {
+    const transcriptText = await createTicketTranscript(targetChannel, {
+      ticketNumber: ticketNumberDisplay,
+      channelName,
+      subject: ticketRecord.subject,
+      closedBy: interaction.user,
+      reason,
+      openedBy: ticketRecord.created_by,
+      openedByTag: ticketRecord.created_by_tag
+    });
+    transcriptBuffer = Buffer.from(transcriptText, 'utf8');
+    transcriptFileName = `ticket-${ticketNumberDisplay}.txt`;
+  } catch (err) {
+    console.error(`failed to generate transcript for ticket ${targetChannel.id}`, err);
+  }
+
+  let dmSuccess = false;
+  if (ticketRecord.created_by && transcriptBuffer) {
     try {
-      await targetChannel.setParent(config.archiveChannelId, { lockPermissions: false });
+      const user = await interaction.client.users.fetch(String(ticketRecord.created_by));
+      if (user) {
+        const attachment = new AttachmentBuilder(transcriptBuffer, {
+          name: transcriptFileName ?? 'ticket-transcript.txt'
+        });
+        const dmLines = [`Your ticket #${ticketNumberDisplay} has been closed.`];
+        const safeSubject = typeof ticketRecord.subject === 'string' && ticketRecord.subject.trim().length
+          ? ticketRecord.subject.trim().replace(/\r\n?/g, ' ')
+          : null;
+        if (safeSubject) {
+          dmLines.push(`Subject: ${safeSubject}`);
+        }
+        const safeReason = reason.replace(/\r\n?/g, ' ');
+        dmLines.push(`Reason: ${safeReason}`);
+        await user.send({
+          content: dmLines.join('\n'),
+          files: [attachment]
+        });
+        dmSuccess = true;
+      }
     } catch (err) {
-      console.error(`failed to move ticket ${targetChannel.id} to archive`, err);
+      console.error(`failed to DM ticket requester ${ticketRecord.created_by}`, err);
     }
   }
+
+  const dmStatusMessage = ticketRecord.created_by
+    ? (dmSuccess ? 'Transcript DM sent to requester.' : 'Could not DM requester.')
+    : 'No requester recorded for this ticket.';
+  const dmLogMessage = ticketRecord.created_by
+    ? (dmSuccess ? 'DM sent to requester.' : 'Could not DM requester or DM disabled.')
+    : 'No requester recorded for this ticket.';
 
   if (config.logChannelId) {
     try {
@@ -3241,26 +3402,54 @@ async function handleTicketCloseCommand(state, interaction) {
       if (logChannel?.isTextBased?.()) {
         const logEmbed = new EmbedBuilder()
           .setColor(0xed4245)
-          .setTitle(`Ticket closed (#${ticketRecord.ticket_number ?? 'unknown'})`)
+          .setTitle(`Ticket closed (#${ticketNumberDisplay})`)
           .addFields(
-            { name: 'Channel', value: `<#${targetChannel.id}>`, inline: true },
+            { name: 'Channel name', value: escapeMarkdown(channelName).slice(0, 200), inline: true },
             { name: 'Closed by', value: `<@${interaction.user.id}>`, inline: true }
           )
           .setTimestamp(now);
+        if (ticketRecord.created_by) {
+          logEmbed.addFields({ name: 'Opened by', value: `<@${ticketRecord.created_by}>`, inline: true });
+        }
         if (ticketRecord.subject) {
           logEmbed.addFields({ name: 'Subject', value: escapeMarkdown(ticketRecord.subject).slice(0, 200), inline: false });
         }
         if (reason) {
           logEmbed.addFields({ name: 'Reason', value: escapeMarkdown(reason).slice(0, 1000), inline: false });
         }
-        await logChannel.send({ embeds: [logEmbed] });
+        logEmbed.addFields({ name: 'Transcript delivery', value: dmLogMessage });
+
+        const payload = { embeds: [logEmbed] };
+        if (transcriptBuffer) {
+          payload.files = [
+            new AttachmentBuilder(transcriptBuffer, {
+              name: transcriptFileName ?? 'ticket-transcript.txt'
+            })
+          ];
+        } else {
+          logEmbed.addFields({ name: 'Transcript status', value: 'Unable to generate transcript.', inline: false });
+        }
+
+        await logChannel.send(payload);
       }
     } catch (err) {
       console.error(`failed to send ticket close log for ${targetChannel.id}`, err);
     }
   }
 
-  await interaction.editReply(`Closed ticket <#${targetChannel.id}>.`);
+  try {
+    await targetChannel.delete('Ticket closed and logged');
+  } catch (err) {
+    console.error(`failed to delete ticket channel ${targetChannel.id}`, err);
+  }
+
+  const transcriptStatusMessage = transcriptBuffer
+    ? 'Transcript archived.'
+    : 'Transcript could not be generated.';
+
+  await interaction.editReply(
+    `Closed ticket ${channelName} (#${ticketNumberDisplay}). ${transcriptStatusMessage} ${dmStatusMessage}`
+  );
 }
 
 async function handleTicketCommand(state, interaction) {
