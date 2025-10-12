@@ -119,8 +119,14 @@
       let searchInput = null;
       if (ctx.actions) {
         ctx.actions.classList.add('module-header-actions');
-        const searchWrap = document.createElement('div');
+        const searchWrap = document.createElement('form');
         searchWrap.className = 'module-search';
+        searchWrap.setAttribute('role', 'search');
+        searchWrap.setAttribute('autocomplete', 'off');
+        searchWrap.setAttribute('data-form-type', 'other');
+        searchWrap.setAttribute('data-lpignore', 'true');
+        searchWrap.setAttribute('data-1p-ignore', 'true');
+        searchWrap.addEventListener('submit', (event) => event.preventDefault());
         searchInput = document.createElement('input');
         searchInput.type = 'search';
         searchInput.placeholder = 'Search players, Steam ID or IP';
@@ -128,6 +134,12 @@
         searchInput.setAttribute('inputmode', 'search');
         searchInput.setAttribute('role', 'searchbox');
         searchInput.setAttribute('autocomplete', 'off');
+        searchInput.setAttribute('name', 'livePlayersSearch');
+        searchInput.setAttribute('data-form-type', 'other');
+        searchInput.setAttribute('data-lpignore', 'true');
+        searchInput.setAttribute('data-1p-ignore', 'true');
+        searchInput.setAttribute('autocapitalize', 'none');
+        searchInput.setAttribute('autocorrect', 'off');
         searchInput.setAttribute('aria-label', 'Search connected players by name, Steam ID, or IP address');
         searchWrap.appendChild(searchInput);
         ctx.actions.appendChild(searchWrap);
