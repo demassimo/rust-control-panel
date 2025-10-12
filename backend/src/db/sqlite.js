@@ -214,6 +214,7 @@ function createApi(dbh, dialect) {
       CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INTEGER PRIMARY KEY,
         bot_token TEXT,
+        command_bot_token TEXT,
         guild_id TEXT,
         channel_id TEXT,
         status_message_id TEXT,
@@ -222,8 +223,34 @@ function createApi(dbh, dialect) {
         updated_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS discord_tickets(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER,
+        server_id INTEGER,
+        guild_id TEXT,
+        channel_id TEXT UNIQUE,
+        ticket_number INTEGER,
+        subject TEXT,
+        details TEXT,
+        created_by TEXT,
+        created_by_tag TEXT,
+        status TEXT DEFAULT 'open',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        closed_at TEXT,
+        closed_by TEXT,
+        closed_by_tag TEXT,
+        close_reason TEXT,
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE SET NULL,
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_discord_tickets_guild_number ON discord_tickets(guild_id, ticket_number);
+      CREATE INDEX IF NOT EXISTS idx_discord_tickets_team ON discord_tickets(team_id);
       `);
       const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
+      if (!discordCols.some((c) => c.name === 'command_bot_token')) {
+        await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN command_bot_token TEXT");
+      }
       if (!discordCols.some((c) => c.name === 'status_message_id')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN status_message_id TEXT");
       }
@@ -1250,15 +1277,66 @@ function createApi(dbh, dialect) {
         [serverId]
       );
     },
-    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null,config_json=null }){
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,command_bot_token=null,guild_id=null,channel_id=null,status_message_id=null,config_json=null }){
       await dbh.run(
-        "INSERT INTO server_discord_integrations(server_id,bot_token,guild_id,channel_id,status_message_id,config_json,created_at,updated_at) VALUES(?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, status_message_id=excluded.status_message_id, config_json=excluded.config_json, updated_at=excluded.updated_at",
-        [serverId, bot_token, guild_id, channel_id, status_message_id, config_json]
+        "INSERT INTO server_discord_integrations(server_id,bot_token,command_bot_token,guild_id,channel_id,status_message_id,config_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(server_id) DO UPDATE SET bot_token=excluded.bot_token, command_bot_token=excluded.command_bot_token, guild_id=excluded.guild_id, channel_id=excluded.channel_id, status_message_id=excluded.status_message_id, config_json=excluded.config_json, updated_at=excluded.updated_at",
+        [serverId, bot_token, command_bot_token, guild_id, channel_id, status_message_id, config_json]
       );
     },
     async deleteServerDiscordIntegration(serverId){
       const result = await dbh.run('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
       return result?.changes ? Number(result.changes) : 0;
+    },
+    async getNextDiscordTicketNumber(guildId){
+      if (!guildId) return 1;
+      const row = await dbh.get('SELECT MAX(ticket_number) AS max_number FROM discord_tickets WHERE guild_id=?', [String(guildId)]);
+      const current = Number(row?.max_number);
+      return Number.isFinite(current) ? current + 1 : 1;
+    },
+    async createDiscordTicket({ team_id=null, server_id=null, guild_id=null, channel_id=null, ticket_number=null, subject=null, details=null, created_by=null, created_by_tag=null }){
+      const guildId = guild_id ? String(guild_id) : null;
+      let number = Number(ticket_number);
+      if (!Number.isFinite(number) || number <= 0) {
+        number = await this.getNextDiscordTicketNumber(guildId);
+      }
+      const now = new Date().toISOString();
+      const result = await dbh.run(
+        `INSERT INTO discord_tickets(team_id, server_id, guild_id, channel_id, ticket_number, subject, details, created_by, created_by_tag, status, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,'open',?,?)`,
+        [
+          team_id ?? null,
+          server_id ?? null,
+          guildId,
+          channel_id ?? null,
+          number,
+          subject ?? null,
+          details ?? null,
+          created_by ?? null,
+          created_by_tag ?? null,
+          now,
+          now
+        ]
+      );
+      const id = result?.lastID;
+      if (!Number.isFinite(id)) {
+        return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channel_id ?? null]);
+      }
+      return await dbh.get('SELECT * FROM discord_tickets WHERE id=?', [id]);
+    },
+    async getDiscordTicketByChannel(channelId){
+      if (!channelId) return null;
+      return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
+    },
+    async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
+      if (!channelId) return null;
+      const now = new Date().toISOString();
+      await dbh.run(
+        `UPDATE discord_tickets
+         SET status='closed', closed_at=?, closed_by=?, closed_by_tag=?, close_reason=?, updated_at=?
+         WHERE channel_id=?`,
+        [now, closed_by ?? null, closed_by_tag ?? null, close_reason ?? null, now, channelId]
+      );
+      return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
     },
     async listRoles(){
       const rows = await dbh.all(`SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC`);

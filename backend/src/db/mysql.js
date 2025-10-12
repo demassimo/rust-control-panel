@@ -242,6 +242,7 @@ function createApi(pool, dialect) {
       await exec(`CREATE TABLE IF NOT EXISTS server_discord_integrations(
         server_id INT PRIMARY KEY,
         bot_token TEXT NULL,
+        command_bot_token TEXT NULL,
         guild_id VARCHAR(64) NULL,
         channel_id VARCHAR(64) NULL,
         status_message_id VARCHAR(64) NULL,
@@ -250,8 +251,32 @@ function createApi(pool, dialect) {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_server_discord FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
+      await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN command_bot_token TEXT NULL');
       await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN status_message_id VARCHAR(64) NULL');
       await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN config_json TEXT NULL');
+      await exec(`CREATE TABLE IF NOT EXISTS discord_tickets(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        team_id INT NULL,
+        server_id INT NULL,
+        guild_id VARCHAR(64) NULL,
+        channel_id VARCHAR(64) UNIQUE,
+        ticket_number INT NOT NULL,
+        subject TEXT NULL,
+        details TEXT NULL,
+        created_by VARCHAR(64) NULL,
+        created_by_tag VARCHAR(190) NULL,
+        status VARCHAR(32) DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        closed_at TIMESTAMP NULL,
+        closed_by VARCHAR(64) NULL,
+        closed_by_tag VARCHAR(190) NULL,
+        close_reason TEXT NULL,
+        INDEX idx_discord_tickets_guild_number (guild_id, ticket_number),
+        INDEX idx_discord_tickets_team (team_id),
+        CONSTRAINT fk_discord_ticket_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
+        CONSTRAINT fk_discord_ticket_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB;`);
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
@@ -1162,17 +1187,18 @@ function createApi(pool, dialect) {
       );
       return rows?.[0] ?? null;
     },
-    async saveServerDiscordIntegration(serverId,{ bot_token=null,guild_id=null,channel_id=null,status_message_id=null,config_json=null }){
+    async saveServerDiscordIntegration(serverId,{ bot_token=null,command_bot_token=null,guild_id=null,channel_id=null,status_message_id=null,config_json=null }){
       await exec(`
-        INSERT INTO server_discord_integrations(server_id, bot_token, guild_id, channel_id, status_message_id, config_json)
-        VALUES(?,?,?,?,?,?)
+        INSERT INTO server_discord_integrations(server_id, bot_token, command_bot_token, guild_id, channel_id, status_message_id, config_json)
+        VALUES(?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE
           bot_token=VALUES(bot_token),
+          command_bot_token=VALUES(command_bot_token),
           guild_id=VALUES(guild_id),
           channel_id=VALUES(channel_id),
           status_message_id=VALUES(status_message_id),
           config_json=VALUES(config_json)
-      `,[serverId, bot_token, guild_id, channel_id, status_message_id, config_json]);
+      `,[serverId, bot_token, command_bot_token, guild_id, channel_id, status_message_id, config_json]);
     },
     async deleteServerDiscordIntegration(serverId){
       const result = await exec('DELETE FROM server_discord_integrations WHERE server_id=?',[serverId]);
@@ -1180,6 +1206,62 @@ function createApi(pool, dialect) {
       if (typeof result.affectedRows === 'number') return result.affectedRows;
       if (Array.isArray(result) && typeof result[0]?.affectedRows === 'number') return result[0].affectedRows;
       return 0;
+    },
+    async getNextDiscordTicketNumber(guildId){
+      if (!guildId) return 1;
+      const rows = await exec('SELECT MAX(ticket_number) AS max_number FROM discord_tickets WHERE guild_id=?', [String(guildId)]);
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      const current = Number(row?.max_number ?? row?.MAX_NUMBER);
+      return Number.isFinite(current) ? current + 1 : 1;
+    },
+    async createDiscordTicket({ team_id=null, server_id=null, guild_id=null, channel_id=null, ticket_number=null, subject=null, details=null, created_by=null, created_by_tag=null }){
+      const guildId = guild_id ? String(guild_id) : null;
+      let number = Number(ticket_number);
+      if (!Number.isFinite(number) || number <= 0) {
+        number = await this.getNextDiscordTicketNumber(guildId);
+      }
+      const result = await exec(
+        `INSERT INTO discord_tickets(team_id, server_id, guild_id, channel_id, ticket_number, subject, details, created_by, created_by_tag, status)
+         VALUES(?,?,?,?,?,?,?,?,?,'open')`,
+        [
+          team_id ?? null,
+          server_id ?? null,
+          guildId,
+          channel_id ?? null,
+          number,
+          subject ?? null,
+          details ?? null,
+          created_by ?? null,
+          created_by_tag ?? null
+        ]
+      );
+      const insertedId = typeof result?.insertId === 'number'
+        ? result.insertId
+        : Array.isArray(result) && typeof result[0]?.insertId === 'number'
+          ? result[0].insertId
+          : null;
+      if (Number.isFinite(insertedId)) {
+        const rows = await exec('SELECT * FROM discord_tickets WHERE id=?', [insertedId]);
+        return rows[0] || null;
+      }
+      const fallback = await exec('SELECT * FROM discord_tickets WHERE channel_id=?', [channel_id ?? null]);
+      return Array.isArray(fallback) ? fallback[0] || null : fallback || null;
+    },
+    async getDiscordTicketByChannel(channelId){
+      if (!channelId) return null;
+      const rows = await exec('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
+      return Array.isArray(rows) ? rows[0] || null : rows || null;
+    },
+    async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
+      if (!channelId) return null;
+      await exec(
+        `UPDATE discord_tickets
+         SET status='closed', closed_at=CURRENT_TIMESTAMP, closed_by=?, closed_by_tag=?, close_reason=?, updated_at=CURRENT_TIMESTAMP
+         WHERE channel_id=?`,
+        [closed_by ?? null, closed_by_tag ?? null, close_reason ?? null, channelId]
+      );
+      const rows = await exec('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
+      return Array.isArray(rows) ? rows[0] || null : rows || null;
     },
     async listRoles(){
       const rows = await exec('SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC');
