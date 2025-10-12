@@ -3969,11 +3969,30 @@
     return null;
   }
 
+  const PLACEHOLDER_STRINGS = new Set(['-', '--', 'n/a', 'na', 'none', 'null', 'undefined']);
+
+  function normalizePlaceholderCandidate(str) {
+    const trimmed = str.replace(/[\u2013\u2014\u2212]/g, '-').trim();
+    if (!trimmed) return '';
+    const normalized = trimmed.replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ').toLowerCase();
+    return normalized;
+  }
+
   function pickString(...values) {
     for (const value of values) {
       if (value == null) continue;
       const str = String(value).trim();
-      if (str) return str;
+      if (!str) continue;
+      const normalized = normalizePlaceholderCandidate(str);
+      if (!normalized) continue;
+      const collapsed = normalized.replace(/[^a-z0-9]/g, '');
+      const dashNormalized = str.replace(/[\u2013\u2014\u2212]/g, '-');
+      const bareNa = collapsed === 'na' && !/[\/\.\-\s]/.test(dashNormalized);
+      const isPlaceholder =
+        (PLACEHOLDER_STRINGS.has(normalized) && !(normalized === 'na' && bareNa)) ||
+        (collapsed && PLACEHOLDER_STRINGS.has(collapsed) && !bareNa);
+      if (isPlaceholder) continue;
+      return str;
     }
     return null;
   }
