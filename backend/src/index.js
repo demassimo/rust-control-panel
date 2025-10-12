@@ -386,6 +386,72 @@ function projectF7Report(row, fallback = {}) {
   };
 }
 
+function projectDiscordTicket(row) {
+  if (!row) return null;
+  const idCandidate = Number(row.id ?? row.ticketId);
+  const serverIdCandidate = Number(row.server_id ?? row.serverId);
+  const teamIdCandidate = Number(row.team_id ?? row.teamId);
+  const ticketNumberCandidate = Number(row.ticket_number ?? row.ticketNumber);
+  const createdAt = row.created_at ?? row.createdAt ?? null;
+  const updatedAt = row.updated_at ?? row.updatedAt ?? createdAt;
+  const closedAt = row.closed_at ?? row.closedAt ?? null;
+  return {
+    id: Number.isFinite(idCandidate) ? idCandidate : null,
+    serverId: Number.isFinite(serverIdCandidate) ? serverIdCandidate : null,
+    teamId: Number.isFinite(teamIdCandidate) ? teamIdCandidate : null,
+    guildId: typeof row.guild_id === 'string' ? row.guild_id : (typeof row.guildId === 'string' ? row.guildId : null),
+    channelId: typeof row.channel_id === 'string' ? row.channel_id : (typeof row.channelId === 'string' ? row.channelId : null),
+    ticketNumber: Number.isFinite(ticketNumberCandidate) ? ticketNumberCandidate : null,
+    subject: typeof row.subject === 'string' ? row.subject : null,
+    details: typeof row.details === 'string' ? row.details : null,
+    createdBy: typeof row.created_by === 'string' ? row.created_by : (typeof row.createdBy === 'string' ? row.createdBy : null),
+    createdByTag: typeof row.created_by_tag === 'string'
+      ? row.created_by_tag
+      : (typeof row.createdByTag === 'string' ? row.createdByTag : null),
+    status: typeof row.status === 'string' ? row.status : 'open',
+    createdAt,
+    updatedAt,
+    closedAt,
+    closedBy: typeof row.closed_by === 'string' ? row.closed_by : (typeof row.closedBy === 'string' ? row.closedBy : null),
+    closedByTag: typeof row.closed_by_tag === 'string'
+      ? row.closed_by_tag
+      : (typeof row.closedByTag === 'string' ? row.closedByTag : null),
+    closeReason: typeof row.close_reason === 'string'
+      ? row.close_reason
+      : (typeof row.closeReason === 'string' ? row.closeReason : null)
+  };
+}
+
+function buildTicketDialogEntries(row) {
+  const entries = [];
+  if (!row) return entries;
+  const ticketId = Number(row.id ?? row.ticket_number ?? Date.now());
+  const createdAt = row.created_at ?? null;
+  const details = typeof row.details === 'string' ? row.details.trim() : '';
+  if (details) {
+    entries.push({
+      id: `ticket-${ticketId}-request`,
+      role: 'requester',
+      authorId: typeof row.created_by === 'string' ? row.created_by : null,
+      authorTag: typeof row.created_by_tag === 'string' ? row.created_by_tag : null,
+      content: details,
+      postedAt: createdAt
+    });
+  }
+  const closeReason = typeof row.close_reason === 'string' ? row.close_reason.trim() : '';
+  if (closeReason) {
+    entries.push({
+      id: `ticket-${ticketId}-close`,
+      role: 'staff',
+      authorId: typeof row.closed_by === 'string' ? row.closed_by : null,
+      authorTag: typeof row.closed_by_tag === 'string' ? row.closed_by_tag : null,
+      content: closeReason,
+      postedAt: row.closed_at ?? row.updated_at ?? null
+    });
+  }
+  return entries;
+}
+
 const ROLE_KEY_PATTERN = /^[a-z0-9_\-]{3,32}$/i;
 const RESERVED_ROLE_KEYS = new Set(['admin', 'user']);
 
@@ -5422,6 +5488,56 @@ app.get('/api/servers/:id/f7-reports/:reportId', auth, async (req, res) => {
     res.json({ report, recentForTarget: history, targetSummary });
   } catch (err) {
     console.error('failed to load f7 report', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/aq-tickets', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  if (typeof db?.listDiscordTicketsForServer !== 'function') {
+    return res.json({ tickets: [] });
+  }
+  const limitParam = Number(req.query?.limit);
+  const limit = Number.isFinite(limitParam) && limitParam > 0
+    ? Math.min(Math.max(Math.floor(limitParam), 1), 100)
+    : 25;
+  const statusParam = typeof req.query?.status === 'string' ? req.query.status.trim().toLowerCase() : 'open';
+  const status = statusParam === 'all' ? 'all' : (statusParam || 'open');
+  try {
+    const rows = await db.listDiscordTicketsForServer(id, { status, limit });
+    const tickets = Array.isArray(rows)
+      ? rows.map((row) => projectDiscordTicket(row)).filter(Boolean)
+      : [];
+    res.json({ tickets });
+  } catch (err) {
+    console.error('failed to list aq tickets', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/aq-tickets/:ticketId', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  if (typeof db?.getDiscordTicketById !== 'function') {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const ticketId = Number(req.params?.ticketId);
+  if (!Number.isFinite(ticketId)) {
+    res.status(400).json({ error: 'invalid_ticket' });
+    return;
+  }
+  try {
+    const row = await db.getDiscordTicketById(id, ticketId);
+    if (!row) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const ticket = projectDiscordTicket(row);
+    const dialog = buildTicketDialogEntries(row);
+    res.json({ ticket, dialog });
+  } catch (err) {
+    console.error('failed to load aq ticket', err);
     res.status(500).json({ error: 'db_error' });
   }
 });

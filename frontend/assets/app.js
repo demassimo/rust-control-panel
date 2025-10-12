@@ -135,6 +135,20 @@
   const workspaceChatEmpty = $('#workspaceChatEmpty');
   const workspaceChatLoading = $('#workspaceChatLoading');
   const workspaceChatNotice = $('#workspaceChatNotice');
+  const aqTicketsList = $('#aqTicketsList');
+  const aqTicketsLoading = $('#aqTicketsLoading');
+  const aqTicketsError = $('#aqTicketsError');
+  const aqTicketsEmpty = $('#aqTicketsEmpty');
+  const aqTicketsCount = $('#aqTicketsCount');
+  const aqTicketPlaceholder = $('#aqTicketPlaceholder');
+  const aqTicketDetail = $('#aqTicketDetail');
+  const aqTicketSubject = $('#aqTicketSubject');
+  const aqTicketMeta = $('#aqTicketMeta');
+  const aqTicketNumber = $('#aqTicketNumber');
+  const aqTicketDialog = $('#aqTicketDialog');
+  const aqTicketDialogLoading = $('#aqTicketDialogLoading');
+  const aqTicketDialogEmpty = $('#aqTicketDialogEmpty');
+  const aqTicketDialogError = $('#aqTicketDialogError');
   const f7ReportsList = $('#f7ReportsList');
   const f7ReportsLoading = $('#f7ReportsLoading');
   const f7ReportsEmpty = $('#f7ReportsEmpty');
@@ -265,6 +279,19 @@
   let f7FilterTimer = null;
   const f7ProfileCache = new Map();
   const f7ProfileRequests = new Map();
+
+  const aqState = {
+    serverId: null,
+    list: [],
+    loadingList: false,
+    listError: null,
+    selectedId: null,
+    detailCache: new Map(),
+    listRequestToken: null,
+    detailRequests: new Map(),
+    detailLoading: false,
+    detailError: null
+  };
 
   function emitWorkspaceEvent(name, detail) {
     if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
@@ -2058,6 +2085,46 @@
     };
   }
 
+  function normalizeAqTicket(ticket) {
+    if (!ticket) return null;
+    const id = Number(ticket.id ?? ticket.ticketId);
+    const serverId = Number(ticket.serverId ?? ticket.server_id ?? aqState.serverId);
+    const ticketNumber = Number(ticket.ticketNumber ?? ticket.ticket_number);
+    const createdAt = pickString(ticket.createdAt ?? ticket.created_at) || null;
+    const updatedAt = pickString(ticket.updatedAt ?? ticket.updated_at) || createdAt;
+    return {
+      id: Number.isFinite(id) ? id : null,
+      serverId: Number.isFinite(serverId) ? serverId : aqState.serverId,
+      ticketNumber: Number.isFinite(ticketNumber) ? ticketNumber : null,
+      subject: pickString(ticket.subject) || 'No subject provided',
+      details: pickString(ticket.details) || '',
+      createdBy: pickString(ticket.createdBy ?? ticket.created_by) || null,
+      createdByTag: pickString(ticket.createdByTag ?? ticket.created_by_tag) || null,
+      status: pickString(ticket.status) || 'open',
+      createdAt,
+      updatedAt,
+      closedAt: pickString(ticket.closedAt ?? ticket.closed_at) || null
+    };
+  }
+
+  function normalizeAqDialogEntry(entry) {
+    if (!entry) return null;
+    const id = pickString(entry.id);
+    const role = (pickString(entry.role) || 'requester').toLowerCase();
+    const postedAt = pickString(entry.postedAt ?? entry.timestamp) || null;
+    const content = pickString(entry.content) || '';
+    const authorTag = pickString(entry.authorTag ?? entry.author_tag ?? entry.author) || null;
+    const authorId = pickString(entry.authorId ?? entry.author_id) || null;
+    return {
+      id: id || (authorId && postedAt ? `${authorId}:${postedAt}` : null),
+      role,
+      postedAt,
+      content,
+      authorTag,
+      authorId
+    };
+  }
+
   function normaliseF7FilterTokens(value) {
     if (value == null) return [];
     const text = String(value).trim().toLowerCase();
@@ -2964,6 +3031,390 @@
     renderF7FocusBanner();
     renderF7Reports();
   }
+
+  function renderAqTickets() {
+    if (aqTicketsLoading) {
+      aqTicketsLoading.classList.toggle('hidden', !aqState.loadingList);
+    }
+    if (aqTicketsError) {
+      if (aqState.listError) {
+        aqTicketsError.textContent = aqState.listError;
+        aqTicketsError.classList.remove('hidden');
+      } else {
+        aqTicketsError.textContent = '';
+        aqTicketsError.classList.add('hidden');
+      }
+    }
+    const hasServer = Number.isFinite(aqState.serverId);
+    if (aqTicketsEmpty) {
+      const showEmpty = hasServer && !aqState.loadingList && !aqState.listError && aqState.list.length === 0;
+      aqTicketsEmpty.classList.toggle('hidden', !showEmpty);
+    }
+    if (aqTicketsCount) {
+      if (!hasServer) {
+        aqTicketsCount.textContent = '';
+      } else if (aqState.loadingList && aqState.list.length === 0) {
+        aqTicketsCount.textContent = 'Loading…';
+      } else if (aqState.listError) {
+        aqTicketsCount.textContent = 'Unable to load tickets';
+      } else {
+        const total = aqState.list.length;
+        if (total === 0) {
+          aqTicketsCount.textContent = 'No open tickets';
+        } else {
+          const label = total === 1 ? 'ticket' : 'tickets';
+          aqTicketsCount.textContent = `Showing ${total} ${label}`;
+        }
+      }
+    }
+    if (!aqTicketsList) return;
+    aqTicketsList.innerHTML = '';
+    const list = Array.isArray(aqState.list) ? aqState.list : [];
+    list.forEach((ticket) => {
+      const normalized = normalizeAqTicket(ticket);
+      if (!normalized) return;
+      const li = document.createElement('li');
+      li.className = 'aq-item';
+      if (normalized.id != null) li.dataset.ticketId = String(normalized.id);
+      li.setAttribute('role', 'option');
+      li.setAttribute('tabindex', '0');
+      const active = normalized.id != null && normalized.id === aqState.selectedId;
+      li.classList.toggle('active', active);
+      li.setAttribute('aria-selected', active ? 'true' : 'false');
+
+      const title = document.createElement('div');
+      title.className = 'aq-item-title';
+      title.textContent = normalized.subject || 'No subject provided';
+      li.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'aq-item-meta';
+      const parts = [];
+      if (normalized.ticketNumber != null) parts.push(`#${normalized.ticketNumber}`);
+      const opener = normalized.createdByTag || normalized.createdBy;
+      if (opener) parts.push(opener);
+      if (normalized.createdAt) {
+        parts.push(formatRelativeTime(normalized.createdAt) || formatDateTime(normalized.createdAt));
+      }
+      meta.textContent = parts.join(' • ');
+      li.appendChild(meta);
+
+      if (normalized.details) {
+        const preview = document.createElement('div');
+        preview.className = 'aq-item-preview';
+        preview.textContent = normalized.details;
+        li.appendChild(preview);
+      }
+
+      aqTicketsList.appendChild(li);
+    });
+    if (aqTicketPlaceholder && !Number.isFinite(aqState.serverId)) {
+      aqTicketPlaceholder.textContent = 'Select a server to view AQ tickets.';
+      aqTicketPlaceholder.classList.remove('hidden');
+      if (aqTicketDetail) {
+        aqTicketDetail.classList.add('hidden');
+        aqTicketDetail.setAttribute('aria-hidden', 'true');
+      }
+    }
+  }
+
+  function renderAqTicketDetail(detail) {
+    const hasServer = Number.isFinite(aqState.serverId);
+    const activeDetail = detail && detail.ticket ? detail : null;
+    if (aqTicketDialogLoading) {
+      aqTicketDialogLoading.classList.toggle('hidden', !aqState.detailLoading);
+    }
+    if (aqTicketDialogError) {
+      if (aqState.detailError) {
+        aqTicketDialogError.textContent = aqState.detailError;
+        aqTicketDialogError.classList.remove('hidden');
+      } else {
+        aqTicketDialogError.textContent = '';
+        aqTicketDialogError.classList.add('hidden');
+      }
+    }
+    if (!activeDetail) {
+      if (aqTicketDetail) {
+        aqTicketDetail.classList.add('hidden');
+        aqTicketDetail.setAttribute('aria-hidden', 'true');
+      }
+      if (aqTicketPlaceholder) {
+        if (!hasServer) {
+          aqTicketPlaceholder.textContent = 'Select a server to view AQ tickets.';
+        } else if (aqState.loadingList) {
+          aqTicketPlaceholder.textContent = 'Loading tickets…';
+        } else {
+          aqTicketPlaceholder.textContent = aqState.list.length > 0
+            ? 'Select a ticket to view the conversation.'
+            : 'No open tickets for this server.';
+        }
+        aqTicketPlaceholder.classList.remove('hidden');
+      }
+      if (aqTicketDialogEmpty) aqTicketDialogEmpty.classList.add('hidden');
+      if (aqTicketDialog) aqTicketDialog.innerHTML = '';
+      return;
+    }
+
+    if (aqTicketPlaceholder) aqTicketPlaceholder.classList.add('hidden');
+    if (aqTicketDetail) {
+      aqTicketDetail.classList.remove('hidden');
+      aqTicketDetail.setAttribute('aria-hidden', 'false');
+    }
+
+    const ticket = normalizeAqTicket(activeDetail.ticket);
+    if (aqTicketSubject) {
+      aqTicketSubject.textContent = ticket?.subject || 'No subject provided';
+    }
+    if (aqTicketNumber) {
+      aqTicketNumber.textContent = ticket?.ticketNumber != null ? `#${ticket.ticketNumber}` : '';
+    }
+    if (aqTicketMeta) {
+      const status = (ticket?.status || 'open').replace(/^[a-z]/, (char) => char.toUpperCase());
+      const opener = ticket?.createdByTag || ticket?.createdBy || 'Unknown requester';
+      const when = ticket?.createdAt
+        ? formatRelativeTime(ticket.createdAt) || formatDateTime(ticket.createdAt)
+        : 'Unknown time';
+      aqTicketMeta.textContent = `${status} • Opened ${when} by ${opener}`;
+    }
+
+    if (aqTicketDialog) {
+      aqTicketDialog.innerHTML = '';
+      const dialogEntries = Array.isArray(activeDetail.dialog) ? activeDetail.dialog : [];
+      dialogEntries.forEach((entry) => {
+        const normalized = normalizeAqDialogEntry(entry);
+        if (!normalized || !normalized.content) return;
+        const li = document.createElement('li');
+        li.className = 'aq-dialog-entry';
+        if (normalized.role === 'staff') li.classList.add('staff');
+
+        const meta = document.createElement('div');
+        meta.className = 'aq-dialog-meta';
+        const author = document.createElement('span');
+        author.textContent = normalized.authorTag || normalized.authorId || (normalized.role === 'staff' ? 'Staff' : 'Requester');
+        meta.appendChild(author);
+        if (normalized.postedAt) {
+          const when = document.createElement('span');
+          when.textContent = formatRelativeTime(normalized.postedAt) || formatDateTime(normalized.postedAt);
+          meta.appendChild(when);
+        }
+        li.appendChild(meta);
+
+        const contentWrap = document.createElement('div');
+        contentWrap.className = 'aq-dialog-content';
+        const paragraph = document.createElement('p');
+        paragraph.textContent = normalized.content;
+        contentWrap.appendChild(paragraph);
+        li.appendChild(contentWrap);
+
+        aqTicketDialog.appendChild(li);
+      });
+      if (aqTicketDialogEmpty) {
+        const showEmpty = dialogEntries.length === 0 && !aqState.detailLoading && !aqState.detailError;
+        aqTicketDialogEmpty.classList.toggle('hidden', !showEmpty);
+      }
+    }
+  }
+
+  async function refreshAqTickets({ force = false } = {}) {
+    const serverId = Number(aqState.serverId);
+    if (!Number.isFinite(serverId) || !hasServerCapability('view')) {
+      aqState.list = [];
+      aqState.listError = null;
+      aqState.loadingList = false;
+      aqState.selectedId = null;
+      renderAqTickets();
+      renderAqTicketDetail(null);
+      return;
+    }
+    if (aqState.loadingList && !force) return;
+    aqState.loadingList = true;
+    aqState.listError = null;
+    const requestToken = Symbol('aqTicketsList');
+    aqState.listRequestToken = requestToken;
+    renderAqTickets();
+    try {
+      const data = await api(`/servers/${serverId}/aq-tickets`);
+      if (aqState.listRequestToken !== requestToken || Number(aqState.serverId) !== serverId) return;
+      const list = Array.isArray(data?.tickets)
+        ? data.tickets.map((item) => normalizeAqTicket(item)).filter(Boolean)
+        : [];
+      aqState.list = list;
+      if (list.length === 0) {
+        aqState.selectedId = null;
+      } else if (aqState.selectedId == null || !list.some((ticket) => ticket.id === aqState.selectedId)) {
+        aqState.selectedId = list[0]?.id ?? null;
+      }
+      aqState.listError = null;
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      if (aqState.listRequestToken === requestToken && Number(aqState.serverId) === serverId) {
+        aqState.listError = 'Failed to load tickets: ' + describeError(err);
+      }
+    } finally {
+      if (aqState.listRequestToken !== requestToken || Number(aqState.serverId) !== serverId) return;
+      aqState.loadingList = false;
+      aqState.listRequestToken = null;
+      renderAqTickets();
+      if (aqState.selectedId != null) {
+        loadAqTicketDetail(aqState.selectedId).catch(() => {});
+      } else {
+        renderAqTicketDetail(null);
+      }
+    }
+  }
+
+  async function loadAqTicketDetail(ticketId, { force = false } = {}) {
+    const serverId = Number(aqState.serverId);
+    if (!Number.isFinite(serverId)) return;
+    const numericId = Number(ticketId);
+    if (!Number.isFinite(numericId)) return;
+    if (!force && aqState.detailCache.has(numericId)) {
+      const cached = aqState.detailCache.get(numericId);
+      aqState.detailLoading = false;
+      aqState.detailError = null;
+      if (numericId === aqState.selectedId) renderAqTicketDetail(cached);
+      return;
+    }
+    aqState.detailLoading = true;
+    aqState.detailError = null;
+    if (numericId === aqState.selectedId) renderAqTicketDetail(aqState.detailCache.get(numericId) || null);
+    const requestToken = Symbol('aqTicketDetail');
+    aqState.detailRequests.set(numericId, requestToken);
+    try {
+      const data = await api(`/servers/${serverId}/aq-tickets/${numericId}`);
+      if (aqState.detailRequests.get(numericId) !== requestToken || Number(aqState.serverId) !== serverId) return;
+      const ticket = normalizeAqTicket(data?.ticket);
+      const dialog = Array.isArray(data?.dialog)
+        ? data.dialog.map((entry) => normalizeAqDialogEntry(entry)).filter((entry) => entry && entry.content)
+        : [];
+      const detail = { ticket, dialog };
+      aqState.detailCache.set(numericId, detail);
+      aqState.detailError = null;
+      aqState.detailLoading = false;
+      if (numericId === aqState.selectedId) {
+        renderAqTicketDetail(detail);
+      }
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      if (aqState.detailRequests.get(numericId) === requestToken && Number(aqState.serverId) === serverId) {
+        aqState.detailError = 'Failed to load conversation: ' + describeError(err);
+        aqState.detailLoading = false;
+        if (numericId === aqState.selectedId) {
+          renderAqTicketDetail(aqState.detailCache.get(numericId) || null);
+        }
+      }
+    } finally {
+      if (aqState.detailRequests.get(numericId) === requestToken) {
+        aqState.detailRequests.delete(numericId);
+      }
+      if (aqState.detailRequests.size === 0) {
+        aqState.detailLoading = false;
+      }
+    }
+  }
+
+  function setAqSelectedTicket(ticketId, { force = false } = {}) {
+    const numericId = Number(ticketId);
+    if (!Number.isFinite(numericId)) {
+      aqState.selectedId = null;
+      renderAqTickets();
+      renderAqTicketDetail(null);
+      return;
+    }
+    if (aqState.selectedId === numericId && !force) {
+      if (aqState.detailCache.has(numericId)) {
+        renderAqTicketDetail(aqState.detailCache.get(numericId));
+      } else {
+        loadAqTicketDetail(numericId).catch(() => {});
+      }
+      return;
+    }
+    aqState.selectedId = numericId;
+    renderAqTickets();
+    if (aqState.detailCache.has(numericId)) {
+      aqState.detailError = null;
+      aqState.detailLoading = false;
+      renderAqTicketDetail(aqState.detailCache.get(numericId));
+    } else {
+      aqState.detailLoading = true;
+      aqState.detailError = null;
+      renderAqTicketDetail(null);
+    }
+    loadAqTicketDetail(numericId, { force }).catch(() => {});
+  }
+
+  function prepareAqTicketsForServer(serverId) {
+    const numeric = Number(serverId);
+    aqState.serverId = Number.isFinite(numeric) ? numeric : null;
+    aqState.list = [];
+    aqState.listError = null;
+    aqState.loadingList = false;
+    aqState.selectedId = null;
+    aqState.listRequestToken = null;
+    aqState.detailError = null;
+    aqState.detailLoading = false;
+    aqState.detailCache.clear();
+    aqState.detailRequests.clear();
+    renderAqTickets();
+    renderAqTicketDetail(null);
+    if (!Number.isFinite(numeric) || !hasServerCapability('view')) {
+      return;
+    }
+    refreshAqTickets({ force: true }).catch(() => {});
+  }
+
+  function resetAqTickets() {
+    aqState.serverId = null;
+    aqState.list = [];
+    aqState.listError = null;
+    aqState.loadingList = false;
+    aqState.selectedId = null;
+    aqState.listRequestToken = null;
+    aqState.detailError = null;
+    aqState.detailLoading = false;
+    aqState.detailCache.clear();
+    aqState.detailRequests.clear();
+    renderAqTickets();
+    renderAqTicketDetail(null);
+  }
+
+  if (aqTicketsList) {
+    aqTicketsList.addEventListener('click', (event) => {
+      const target = event.target.closest('.aq-item');
+      if (!target) return;
+      const id = Number(target.dataset.ticketId);
+      if (!Number.isFinite(id)) return;
+      setAqSelectedTicket(id);
+    });
+    aqTicketsList.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const target = event.target.closest('.aq-item');
+      if (!target) return;
+      const id = Number(target.dataset.ticketId);
+      if (!Number.isFinite(id)) return;
+      event.preventDefault();
+      setAqSelectedTicket(id);
+    });
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('workspace:server-selected', (event) => {
+      const id = Number(event?.detail?.serverId);
+      if (!Number.isFinite(id)) return;
+      if (Number(aqState.serverId) === id) {
+        if (event?.detail?.repeat) {
+          refreshAqTickets({ force: true }).catch(() => {});
+        }
+        return;
+      }
+      prepareAqTicketsForServer(id);
+    });
+    window.addEventListener('workspace:server-cleared', () => {
+      resetAqTickets();
+    });
+  }
+
+  resetAqTickets();
 
   function handleIncomingF7Report(payload) {
     if (!payload) return;
@@ -4329,6 +4780,7 @@
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
     emitWorkspaceEvent('workspace:server-cleared', { reason });
     resetF7Reports();
+    resetAqTickets();
     highlightSelectedServer();
     renderChatMessages();
     renderKillFeed();
@@ -5155,6 +5607,7 @@
       scheduleChatRefresh(numericId);
       refreshKillFeedForServer(numericId).catch(() => {});
       scheduleKillFeedRefresh(numericId);
+      refreshAqTickets({ force: true }).catch(() => {});
       return;
     }
     if (previous != null && previous !== numericId) {
@@ -5168,6 +5621,7 @@
     clearKillFeedRefreshTimer();
     state.currentServerId = numericId;
     prepareF7ForServer(numericId);
+    prepareAqTicketsForServer(numericId);
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
     emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
     highlightSelectedServer();
@@ -5178,6 +5632,7 @@
     scheduleChatRefresh(numericId);
     refreshKillFeedForServer(numericId, { force: true }).catch(() => {});
     scheduleKillFeedRefresh(numericId);
+    refreshAqTickets({ force: true }).catch(() => {});
 
     const name = entry?.data?.name || `Server #${numericId}`;
     const consoleAccess = hasServerCapability('console');

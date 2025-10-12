@@ -385,6 +385,7 @@
           <button type="button" class="menu-tab" data-view="settings" data-capability="manage" aria-pressed="false">Settings</button>
           <button type="button" class="menu-tab" data-view="chat" data-capability="console" aria-pressed="false">Chat</button>
           <button type="button" class="menu-tab" data-view="reports" data-capability="view" aria-pressed="false">Reports</button>
+          <button type="button" class="menu-tab" data-view="aq-tickets" data-capability="view" aria-pressed="false">AQ Tickets</button>
           <button type="button" class="menu-tab" data-view="kills" data-capability="console" aria-pressed="false">Kill Feed</button>
           <button type="button" class="menu-tab" data-view="console" data-capability="console" aria-pressed="false">Console</button>
           <button type="button" class="menu-tab" data-view="dashboard" data-capability="view" aria-pressed="false">Dashboard</button>
@@ -619,6 +620,42 @@
                     </div>
                   </div>
                 </article>
+              </div>
+            </div>
+          </section>
+
+          <section id="workspaceViewAqTickets" class="workspace-view" data-view="aq-tickets" data-capability="view" aria-hidden="true">
+            <div class="card aq-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3>AQ Tickets</h3>
+                  <p class="muted small">Review Discord support tickets linked to this server.</p>
+                </div>
+                <p id="aqTicketsCount" class="muted small"></p>
+              </div>
+              <div class="aq-body">
+                <aside class="aq-list" aria-label="Open AQ tickets">
+                  <p id="aqTicketsLoading" class="muted small hidden">Loading tickets…</p>
+                  <p id="aqTicketsError" class="notice warning hidden" role="alert"></p>
+                  <p id="aqTicketsEmpty" class="muted small hidden">No open tickets for this server.</p>
+                  <ol id="aqTicketsList" class="aq-items" role="listbox" aria-label="Open AQ tickets"></ol>
+                </aside>
+                <section class="aq-detail" aria-live="polite">
+                  <div id="aqTicketPlaceholder" class="muted small">Select a ticket to view the conversation.</div>
+                  <div id="aqTicketDetail" class="aq-ticket hidden" aria-hidden="true">
+                    <header class="aq-ticket-header">
+                      <div class="aq-ticket-title">
+                        <h4 id="aqTicketSubject">Ticket subject</h4>
+                        <p id="aqTicketMeta" class="muted small"></p>
+                      </div>
+                      <span id="aqTicketNumber" class="aq-ticket-number"></span>
+                    </header>
+                    <div id="aqTicketDialogLoading" class="muted small hidden">Loading conversation…</div>
+                    <p id="aqTicketDialogError" class="notice warning hidden" role="alert"></p>
+                    <p id="aqTicketDialogEmpty" class="muted small hidden">No messages in this ticket yet.</p>
+                    <ol id="aqTicketDialog" class="aq-dialog" aria-live="polite"></ol>
+                  </div>
+                </section>
               </div>
             </div>
           </section>
