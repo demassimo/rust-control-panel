@@ -764,8 +764,10 @@ const steamProfileCache = new Map();
 const TEAM_INFO_CACHE_TTL = 30 * 1000;
 const TEAM_INFO_ERROR_RETRY_INTERVAL_MS = 10 * 1000;
 const TEAM_INFO_COMMAND_TIMEOUT_MS = 5000;
+const TEAM_INFO_LOOKUP_CONCURRENCY = 4;
 const POSITION_CACHE_TTL = 30 * 1000;
 const POSITION_COMMAND_TIMEOUT_MS = 5000;
+const POSITION_LOOKUP_CONCURRENCY = 5;
 const MANUAL_REFRESH_MIN_INTERVAL_MS = 20 * 1000;
 const teamInfoCache = new Map();
 const positionCache = new Map();
@@ -3803,55 +3805,66 @@ async function enrichPlayersWithTeamInfo(
   }
 
   let lookupsPerformed = false;
-  for (const steamId of pending) {
-    try {
-      const reply = await sendRconCommand(serverRow, `teaminfo ${steamId}`, {
-        silent: true,
-        timeoutMs: TEAM_INFO_COMMAND_TIMEOUT_MS
-      });
-      lookupsPerformed = true;
-      const info = parseTeamInfoMessage(reply, steamId);
-      if (info?.hasTeam) {
-        cacheTeamInfoForServer(numeric, info, Date.now());
-        if (logger?.debug) {
-          logger.debug('teaminfo resolved', { steamId, teamId: info.teamId || 0, hasTeam: info.hasTeam });
-        }
-      } else if (info) {
-        const timestamp = Date.now();
-        const targets = new Set();
-        if (info.requestedSteamId && STEAM_ID_REGEX.test(info.requestedSteamId)) {
-          targets.add(info.requestedSteamId);
-        }
-        if (Array.isArray(info.members)) {
-          for (const member of info.members) {
-            if (member?.steamId && STEAM_ID_REGEX.test(member.steamId)) {
-              targets.add(member.steamId);
+  const queue = [...pending];
+  const concurrency = Math.min(TEAM_INFO_LOOKUP_CONCURRENCY, queue.length);
+  const workers = [];
+  const runNext = async () => {
+    while (queue.length > 0) {
+      const steamId = queue.shift();
+      if (!steamId) continue;
+      try {
+        const reply = await sendRconCommand(serverRow, `teaminfo ${steamId}`, {
+          silent: true,
+          timeoutMs: TEAM_INFO_COMMAND_TIMEOUT_MS
+        });
+        lookupsPerformed = true;
+        const info = parseTeamInfoMessage(reply, steamId);
+        if (info?.hasTeam) {
+          cacheTeamInfoForServer(numeric, info, Date.now());
+          if (logger?.debug) {
+            logger.debug('teaminfo resolved', { steamId, teamId: info.teamId || 0, hasTeam: info.hasTeam });
+          }
+        } else if (info) {
+          const timestamp = Date.now();
+          const targets = new Set();
+          if (info.requestedSteamId && STEAM_ID_REGEX.test(info.requestedSteamId)) {
+            targets.add(info.requestedSteamId);
+          }
+          if (Array.isArray(info.members)) {
+            for (const member of info.members) {
+              if (member?.steamId && STEAM_ID_REGEX.test(member.steamId)) {
+                targets.add(member.steamId);
+              }
             }
           }
+          if (targets.size === 0 && STEAM_ID_REGEX.test(steamId)) {
+            targets.add(steamId);
+          }
+          for (const target of targets) {
+            cacheTeamInfoMiss(numeric, target, timestamp);
+          }
+          if (logger?.debug) {
+            logger.debug('teaminfo reported no team', { steamId, requestedSteamId: info.requestedSteamId, memberCount: info.members?.length || 0 });
+          }
+        } else {
+          cacheTeamInfoMiss(numeric, steamId, Date.now());
+          if (logger?.debug) {
+            logger.debug('teaminfo returned no data', { steamId });
+          }
         }
-        if (targets.size === 0 && STEAM_ID_REGEX.test(steamId)) {
-          targets.add(steamId);
-        }
-        for (const target of targets) {
-          cacheTeamInfoMiss(numeric, target, timestamp);
-        }
-        if (logger?.debug) {
-          logger.debug('teaminfo reported no team', { steamId, requestedSteamId: info.requestedSteamId, memberCount: info.members?.length || 0 });
-        }
-      } else {
+      } catch (err) {
+        lookupsPerformed = true;
         cacheTeamInfoMiss(numeric, steamId, Date.now());
-        if (logger?.debug) {
-          logger.debug('teaminfo returned no data', { steamId });
+        if (logger?.warn) {
+          logger.warn('teaminfo command failed', { steamId, error: err?.message || err });
         }
-      }
-    } catch (err) {
-      lookupsPerformed = true;
-      cacheTeamInfoMiss(numeric, steamId, Date.now());
-      if (logger?.warn) {
-        logger.warn('teaminfo command failed', { steamId, error: err?.message || err });
       }
     }
+  };
+  for (let index = 0; index < concurrency; index += 1) {
+    workers.push(runNext());
   }
+  await Promise.all(workers);
 
   const refreshTime = Date.now();
   applyTeamInfoToPlayers(numeric, players, refreshTime);
@@ -3915,31 +3928,42 @@ async function enrichPlayersWithPositions(
   }
 
   let lookupsPerformed = false;
-  for (const steamId of pending) {
-    try {
-      const reply = await sendRconCommand(serverRow, `printpos ${steamId}`, {
-        silent: true,
-        timeoutMs: POSITION_COMMAND_TIMEOUT_MS
-      });
-      lookupsPerformed = true;
-      const position = parsePrintPosMessage(reply?.Message ?? reply);
-      if (position) {
-        cachePlayerPosition(numeric, steamId, position, Date.now());
-        const player = playerMap.get(steamId);
-        if (player) player.position = position;
-        if (logger?.debug) logger.debug('printpos resolved', { steamId });
-      } else {
+  const queue = [...pending];
+  const concurrency = Math.min(POSITION_LOOKUP_CONCURRENCY, queue.length);
+  const workers = [];
+  const runNext = async () => {
+    while (queue.length > 0) {
+      const steamId = queue.shift();
+      if (!steamId) continue;
+      try {
+        const reply = await sendRconCommand(serverRow, `printpos ${steamId}`, {
+          silent: true,
+          timeoutMs: POSITION_COMMAND_TIMEOUT_MS
+        });
+        lookupsPerformed = true;
+        const position = parsePrintPosMessage(reply?.Message ?? reply);
+        if (position) {
+          cachePlayerPosition(numeric, steamId, position, Date.now());
+          const player = playerMap.get(steamId);
+          if (player) player.position = position;
+          if (logger?.debug) logger.debug('printpos resolved', { steamId });
+        } else {
+          cachePlayerPositionMiss(numeric, steamId, Date.now());
+          if (logger?.debug) logger.debug('printpos returned no position', { steamId });
+        }
+      } catch (err) {
+        lookupsPerformed = true;
         cachePlayerPositionMiss(numeric, steamId, Date.now());
-        if (logger?.debug) logger.debug('printpos returned no position', { steamId });
-      }
-    } catch (err) {
-      lookupsPerformed = true;
-      cachePlayerPositionMiss(numeric, steamId, Date.now());
-      if (logger?.warn) {
-        logger.warn('printpos command failed', { steamId, error: err?.message || err });
+        if (logger?.warn) {
+          logger.warn('printpos command failed', { steamId, error: err?.message || err });
+        }
       }
     }
+  };
+  for (let index = 0; index < concurrency; index += 1) {
+    workers.push(runNext());
   }
+  await Promise.all(workers);
 
   const refreshTime = Date.now();
   applyPositionCacheToPlayers(numeric, players, refreshTime);
