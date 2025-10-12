@@ -897,6 +897,7 @@ label.inline input[type="checkbox"]:focus-visible,
 }
 
 .team-panel { display: flex; flex-direction: column; gap: 32px; }
+.discord-panel { display: flex; flex-direction: column; gap: 32px; }
 
 .team-card {
   position: relative;

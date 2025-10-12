@@ -138,6 +138,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN total_playtime_seconds BIGINT NULL');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_token TEXT NULL');
+      await ensureColumn('ALTER TABLE teams ADD COLUMN discord_guild_id TEXT NULL');
       await ensureColumn('ALTER TABLE servers ADD COLUMN team_id INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN queued INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN sleepers INT NULL');
@@ -326,7 +327,7 @@ function createApi(pool, dialect) {
       const numeric = Number(userId);
       if (!Number.isFinite(numeric)) return [];
       return await exec(
-        `SELECT t.id, t.name, t.owner_user_id, t.discord_token, t.created_at, tm.role, tm.joined_at
+        `SELECT t.id, t.name, t.owner_user_id, t.discord_token, t.discord_guild_id, t.created_at, tm.role, tm.joined_at
          FROM team_members tm
          JOIN teams t ON t.id = tm.team_id
          WHERE tm.user_id=?
@@ -390,17 +391,23 @@ function createApi(pool, dialect) {
       );
     },
     async getTeamDiscordSettings(teamId){
-      const rows = await exec('SELECT discord_token FROM teams WHERE id=?', [teamId]);
-      const token = Array.isArray(rows) && rows.length ? rows[0].discord_token : rows?.discord_token;
-      return { hasToken: Boolean(token) };
+      const rows = await exec('SELECT discord_token, discord_guild_id FROM teams WHERE id=?', [teamId]);
+      const row = Array.isArray(rows) && rows.length ? rows[0] : rows;
+      const token = row?.discord_token;
+      const guild = row?.discord_guild_id;
+      return {
+        hasToken: Boolean(token),
+        guildId: guild != null && guild !== '' ? String(guild) : null
+      };
     },
-    async setTeamDiscordToken(teamId, token){
+    async setTeamDiscordToken(teamId, token, guildId){
       const value = trimOrNull(token);
-      const res = await exec('UPDATE teams SET discord_token=? WHERE id=?', [value, teamId]);
+      const guildValue = trimOrNull(guildId);
+      const res = await exec('UPDATE teams SET discord_token=?, discord_guild_id=? WHERE id=?', [value, guildValue, teamId]);
       return res?.affectedRows || 0;
     },
     async clearTeamDiscordToken(teamId){
-      return await this.setTeamDiscordToken(teamId, null);
+      return await this.setTeamDiscordToken(teamId, null, null);
     },
     async countAdmins(){ const r = await exec("SELECT COUNT(*) c FROM users WHERE role='admin'"); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
