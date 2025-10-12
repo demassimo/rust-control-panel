@@ -83,6 +83,7 @@
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
             <button id="navTeam" type="button" class="nav-btn">Team</button>
+            <button id="navDiscord" type="button" class="nav-btn">Discord</button>
           </nav>
         </div>
       </header>
@@ -238,34 +239,53 @@
                   </section>
                 </div>
               </section>
-              <section id="teamDiscordSection" class="team-section" aria-labelledby="teamDiscordTitle">
-                <div class="team-section-head">
-                  <h4 id="teamDiscordTitle">Discord token</h4>
-                  <p class="muted small">Store a team-wide Discord bot token for shared automation.</p>
-                </div>
-                <form id="teamDiscordForm" class="team-discord-form" autocomplete="off">
-                  <label for="teamDiscordToken">Bot token
-                    <input
-                      type="password"
-                      id="teamDiscordToken"
-                      name="token"
-                      autocomplete="off"
-                      placeholder="Paste Discord bot token"
-                    />
-                  </label>
-                  <p id="teamDiscordHelp" class="muted small">
-                    The stored value stays hidden. Paste a new token to replace the existing one.
-                  </p>
-                  <div class="row">
-                    <button type="submit" class="accent" id="btnSaveTeamDiscord">Save token</button>
-                    <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove token</button>
-                  </div>
-                  <p id="teamDiscordStatus" class="notice hidden"></p>
-                </form>
-              </section>
             </div>
           </div>
         </div>
+      </section>
+
+      <section id="discordPanel" class="discord-panel hidden" aria-labelledby="discordPanelTitle">
+        <div class="section-head">
+          <div>
+            <h2 id="discordPanelTitle">Discord</h2>
+            <p class="muted">Manage the shared Discord bot connection for your team.</p>
+          </div>
+        </div>
+        <section id="teamDiscordSection" class="team-section" aria-labelledby="teamDiscordTitle">
+          <div class="team-section-head">
+            <h4 id="teamDiscordTitle">Team bot settings</h4>
+            <p class="muted small">Store the bot token and guild ID used by your team automations.</p>
+          </div>
+          <form id="teamDiscordForm" class="team-discord-form" autocomplete="off">
+            <label for="teamDiscordGuildId">Guild ID
+              <input
+                type="text"
+                id="teamDiscordGuildId"
+                name="guildId"
+                inputmode="numeric"
+                autocomplete="off"
+                placeholder="Enter Discord guild ID"
+              />
+            </label>
+            <label for="teamDiscordToken">Bot token
+              <input
+                type="password"
+                id="teamDiscordToken"
+                name="token"
+                autocomplete="off"
+                placeholder="Paste Discord bot token"
+              />
+            </label>
+            <p id="teamDiscordHelp" class="muted small">
+              The stored token stays hidden. Paste a new value to replace the existing one.
+            </p>
+            <div class="row">
+              <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
+              <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
+            </div>
+            <p id="teamDiscordStatus" class="notice hidden"></p>
+          </form>
+        </section>
       </section>
 
       <div id="userDetailsOverlay" class="modal-overlay hidden" aria-hidden="true"></div>

@@ -9,12 +9,14 @@
   const mainNav = $('#mainNav');
   const navDashboard = $('#navDashboard');
   const navTeam = $('#navTeam');
+  const navDiscord = $('#navDiscord');
   const navSettings = $('#navSettings');
   const teamSwitcher = $('#teamSwitcher');
   const teamSelect = $('#teamSelect');
   const teamSelectLabel = $('#teamSelectLabel');
   const dashboardPanel = $('#dashboardPanel');
   const teamPanel = $('#teamPanel');
+  const discordPanel = $('#discordPanel');
   const workspacePanel = $('#workspacePanel');
   const settingsPanel = $('#settingsPanel');
   const loginError = $('#loginError');
@@ -54,7 +56,7 @@
     teams: [],
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] },
-    teamDiscord: { hasToken: false, loading: false, loadedTeamId: null }
+    teamDiscord: { hasToken: false, guildId: null, loading: false, loadedTeamId: null }
   };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
@@ -78,6 +80,7 @@
   const rolesSection = roleManager?.closest('.team-section') || null;
   const teamDiscordSection = $('#teamDiscordSection');
   const teamDiscordForm = $('#teamDiscordForm');
+  const teamDiscordGuildId = $('#teamDiscordGuildId');
   const teamDiscordToken = $('#teamDiscordToken');
   const btnSaveTeamDiscord = $('#btnSaveTeamDiscord');
   const btnRemoveTeamDiscord = $('#btnRemoveTeamDiscord');
@@ -3204,10 +3207,20 @@
       let appliedFromContext = false;
       if (context.teamDiscord && typeof context.teamDiscord === 'object') {
         state.teamDiscord.hasToken = Boolean(context.teamDiscord.hasToken);
+        state.teamDiscord.guildId =
+          context.teamDiscord.guildId != null && context.teamDiscord.guildId !== ''
+            ? String(context.teamDiscord.guildId)
+            : null;
         state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
         appliedFromContext = true;
       } else if (typeof context.activeTeamHasDiscordToken !== 'undefined') {
         state.teamDiscord.hasToken = Boolean(context.activeTeamHasDiscordToken);
+        if (typeof context.activeTeamDiscordGuildId !== 'undefined') {
+          state.teamDiscord.guildId =
+            context.activeTeamDiscordGuildId != null && context.activeTeamDiscordGuildId !== ''
+              ? String(context.activeTeamDiscordGuildId)
+              : null;
+        }
         state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
         appliedFromContext = true;
       }
@@ -3215,10 +3228,14 @@
         if (!appliedFromContext) {
           state.teamDiscord.loadedTeamId = null;
           state.teamDiscord.hasToken = false;
+          state.teamDiscord.guildId = null;
         }
         state.teamDiscord.loading = false;
         hideNotice(teamDiscordStatus);
         if (teamDiscordToken) teamDiscordToken.value = '';
+        if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
+          teamDiscordGuildId.value = state.teamDiscord.guildId || '';
+        }
       }
     }
     updateTeamDiscordUi();
@@ -3907,33 +3924,47 @@
   function switchPanel(panel = 'dashboard') {
     const canAccessTeam = hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
     let nextPanel = panel;
-    if (nextPanel === 'team' && !canAccessTeam) nextPanel = 'dashboard';
+    const canAccessDiscord = canManageTeamDiscord();
+    if ((nextPanel === 'team' && !canAccessTeam) || (nextPanel === 'discord' && !canAccessDiscord)) {
+      nextPanel = 'dashboard';
+    }
     state.activePanel = nextPanel;
 
     const isDashboard = nextPanel === 'dashboard';
     const isSettings = nextPanel === 'settings';
     const isTeam = nextPanel === 'team';
+    const isDiscord = nextPanel === 'discord';
 
     if (isSettings) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      discordPanel?.classList.add('hidden');
       settingsPanel?.classList.remove('hidden');
+    } else if (isDiscord) {
+      dashboardPanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
+      settingsPanel?.classList.add('hidden');
+      teamPanel?.classList.add('hidden');
+      discordPanel?.classList.remove('hidden');
     } else if (isTeam) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
+      discordPanel?.classList.add('hidden');
       teamPanel?.classList.remove('hidden');
     } else {
       dashboardPanel?.classList.remove('hidden');
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      discordPanel?.classList.add('hidden');
     }
 
     navDashboard?.classList.toggle('active', isDashboard);
     navSettings?.classList.toggle('active', isSettings);
     navTeam?.classList.toggle('active', isTeam);
+    navDiscord?.classList.toggle('active', isDiscord);
 
     if (!isSettings) {
       hideNotice(settingsStatus);
@@ -3941,6 +3972,9 @@
     }
 
     updateTeamAccessView({ refreshUsers: isTeam });
+    if (isDiscord && state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
+      loadTeamDiscord().catch(() => {});
+    }
   }
 
   function createModuleCard({ id, title, icon } = {}) {
@@ -4029,6 +4063,7 @@
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
     missing_token: 'Add the team Discord token before saving.',
+    missing_guild_id: 'Add the Discord guild ID before saving.',
     no_server_selected: 'Select a server before sending commands.',
     forbidden: 'You do not have permission to perform this action.',
     not_supported: 'This feature is not available on the current server.',
@@ -5335,12 +5370,13 @@
     state.activePanel = 'dashboard';
     state.roles = [];
     state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
-    state.teamDiscord = { hasToken: false, loading: false, loadedTeamId: null };
+    state.teamDiscord = { hasToken: false, guildId: null, loading: false, loadedTeamId: null };
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
     hideNotice(teamDiscordStatus);
     if (teamDiscordToken) teamDiscordToken.value = '';
+    if (teamDiscordGuildId) teamDiscordGuildId.value = '';
     updateTeamDiscordUi();
     updateTeamAccessView();
     renderTeamSwitcher();
@@ -6251,14 +6287,25 @@
     const stateObj = state.teamDiscord || {};
     const hasToken = !!stateObj.hasToken;
     const loading = !!stateObj.loading;
+    let guildIdStored = '';
+    if (typeof stateObj.guildId === 'string') {
+      guildIdStored = stateObj.guildId;
+    } else if (stateObj.guildId != null) {
+      guildIdStored = String(stateObj.guildId);
+    }
+    const hasSettings = hasToken || (!!guildIdStored && guildIdStored.length > 0);
     teamDiscordSection.classList.toggle('hidden', !canManage);
     teamDiscordSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    if (teamDiscordGuildId) {
+      teamDiscordGuildId.placeholder = hasSettings ? 'Guild ID stored — enter to replace' : 'Enter Discord guild ID';
+      teamDiscordGuildId.disabled = !canManage || loading;
+    }
     if (teamDiscordToken) {
       teamDiscordToken.placeholder = hasToken ? 'Token stored — enter to replace' : 'Paste Discord bot token';
       teamDiscordToken.disabled = !canManage || loading;
     }
     if (btnSaveTeamDiscord) btnSaveTeamDiscord.disabled = !canManage || loading;
-    if (btnRemoveTeamDiscord) btnRemoveTeamDiscord.disabled = !canManage || loading || !hasToken;
+    if (btnRemoveTeamDiscord) btnRemoveTeamDiscord.disabled = !canManage || loading || !hasSettings;
   }
 
   async function loadTeamDiscord({ force = false } = {}) {
@@ -6266,6 +6313,7 @@
     if (!state.TOKEN) return;
     if (!canManageTeamDiscord()) {
       state.teamDiscord.hasToken = false;
+      state.teamDiscord.guildId = null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       updateTeamDiscordUi();
       return;
@@ -6281,9 +6329,16 @@
     try {
       const data = await api('/team/discord');
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
+      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       if (!state.teamDiscord.hasToken && teamDiscordToken) {
         teamDiscordToken.value = '';
+      }
+      if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
+        teamDiscordGuildId.value = state.teamDiscord.guildId || '';
+      }
+      if (!state.teamDiscord.guildId && teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
+        teamDiscordGuildId.value = '';
       }
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
@@ -6309,16 +6364,26 @@
       showNotice(teamDiscordStatus, describeError('missing_token'), 'error');
       return;
     }
+    const guildInput = teamDiscordGuildId ? teamDiscordGuildId.value.trim() : '';
+    const cleanedGuildId = guildInput.replace(/[^0-9]/g, '');
+    if (!cleanedGuildId) {
+      showNotice(teamDiscordStatus, describeError('missing_guild_id'), 'error');
+      return;
+    }
     state.teamDiscord.loading = true;
     updateTeamDiscordUi();
     hideNotice(teamDiscordStatus);
     let unauthorized = false;
     try {
-      const data = await api('/team/discord', { token: value }, 'POST');
+      const data = await api('/team/discord', { token: value, guildId: cleanedGuildId }, 'POST');
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
+      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : cleanedGuildId;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       teamDiscordToken.value = '';
-      showNotice(teamDiscordStatus, 'Discord token saved.', 'success');
+      if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
+        teamDiscordGuildId.value = state.teamDiscord.guildId || '';
+      }
+      showNotice(teamDiscordStatus, 'Discord settings saved.', 'success');
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
@@ -6336,8 +6401,15 @@
   async function handleTeamDiscordRemove(ev) {
     ev?.preventDefault();
     if (!canManageTeamDiscord()) return;
-    if (!state.teamDiscord.hasToken) {
-      showNotice(teamDiscordStatus, 'No Discord token is stored for this team.', 'error');
+    const guildIdStored =
+      typeof state.teamDiscord.guildId === 'string'
+        ? state.teamDiscord.guildId
+        : state.teamDiscord.guildId != null
+          ? String(state.teamDiscord.guildId)
+          : '';
+    const hasSettings = state.teamDiscord.hasToken || (guildIdStored && guildIdStored.length > 0);
+    if (!hasSettings) {
+      showNotice(teamDiscordStatus, 'No Discord settings are stored for this team.', 'error');
       return;
     }
     state.teamDiscord.loading = true;
@@ -6347,9 +6419,13 @@
     try {
       const data = await api('/team/discord', null, 'DELETE');
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
+      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       if (teamDiscordToken) teamDiscordToken.value = '';
-      showNotice(teamDiscordStatus, 'Removed the stored Discord token.', 'success');
+      if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
+        teamDiscordGuildId.value = state.teamDiscord.guildId || '';
+      }
+      showNotice(teamDiscordStatus, 'Removed the stored Discord settings.', 'success');
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
@@ -6368,6 +6444,7 @@
     const canUsers = hasGlobalPermission('manageUsers');
     const canRoles = hasGlobalPermission('manageRoles');
     const canAccessTeam = canUsers || canRoles;
+    const canManageDiscord = canManageTeamDiscord();
 
     if (navTeam) {
       navTeam.classList.toggle('hidden', !canAccessTeam);
@@ -6376,19 +6453,34 @@
       if (!canAccessTeam) navTeam.classList.remove('active');
     }
 
+    if (navDiscord) {
+      navDiscord.classList.toggle('hidden', !canManageDiscord);
+      navDiscord.setAttribute('aria-hidden', canManageDiscord ? 'false' : 'true');
+      navDiscord.disabled = !canManageDiscord;
+      if (!canManageDiscord) navDiscord.classList.remove('active');
+    }
+
     if (!canAccessTeam) {
       if (teamPanel) teamPanel.classList.add('hidden');
       if (state.activePanel === 'team') switchPanel('dashboard');
+      if (!canManageDiscord) {
+        if (discordPanel) discordPanel.classList.add('hidden');
+        if (state.activePanel === 'discord') switchPanel('dashboard');
+      }
       if (userCard) userCard.classList.add('hidden');
-      userList.innerHTML = '';
+      if (userList) userList.innerHTML = '';
       closeUserDetails();
       if (userCreateSection) userCreateSection.classList.add('hidden');
       updateRoleManagerVisibility(false);
       state.teamDiscord.hasToken = false;
+      state.teamDiscord.guildId = null;
       state.teamDiscord.loadedTeamId = null;
       state.teamDiscord.loading = false;
       hideNotice(teamDiscordStatus);
       if (teamDiscordToken) teamDiscordToken.value = '';
+      if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
+        teamDiscordGuildId.value = '';
+      }
       updateTeamDiscordUi();
       return;
     }
@@ -6399,7 +6491,7 @@
     if (canUsers && refreshUsers) {
       loadUsers();
     } else if (!canUsers) {
-      userList.innerHTML = '';
+      if (userList) userList.innerHTML = '';
       closeUserDetails();
       if (userCreateSection) userCreateSection.classList.add('hidden');
       updateRoleManagerVisibility(false);
@@ -6407,7 +6499,7 @@
 
     updateRoleManagerVisibility(canRoles);
     updateTeamDiscordUi();
-    if (canAccessTeam && state.activeTeamId != null) {
+    if (canManageDiscord && state.activeTeamId != null) {
       if (state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
         loadTeamDiscord().catch(() => {});
       }
@@ -6638,6 +6730,12 @@
       switchPanel('team');
       closeProfileMenu();
     });
+    navDiscord?.addEventListener('click', () => {
+      if (navDiscord.disabled) return;
+      hideWorkspace('nav');
+      switchPanel('discord');
+      closeProfileMenu();
+    });
     navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); closeProfileMenu(); });
     profileMenuTrigger?.addEventListener('click', (ev) => {
       ev.preventDefault();
@@ -6686,6 +6784,7 @@
     teamDiscordForm?.addEventListener('submit', handleTeamDiscordSubmit);
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
+    teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     btnCreateUser?.addEventListener('click', async () => {
       if (!hasGlobalPermission('manageUsers')) return;
       hideNotice(userFeedback);

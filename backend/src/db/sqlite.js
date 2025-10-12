@@ -252,6 +252,9 @@ function createApi(dbh, dialect) {
       if (!teamCols.some((c) => c.name === 'discord_token')) {
         await dbh.run("ALTER TABLE teams ADD COLUMN discord_token TEXT");
       }
+      if (!teamCols.some((c) => c.name === 'discord_guild_id')) {
+        await dbh.run("ALTER TABLE teams ADD COLUMN discord_guild_id TEXT");
+      }
       const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
       if (!discordCols.some((c) => c.name === 'command_bot_token')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN command_bot_token TEXT");
@@ -393,7 +396,7 @@ function createApi(dbh, dialect) {
       const numeric = Number(userId);
       if (!Number.isFinite(numeric)) return [];
       return await dbh.all(
-        `SELECT t.id, t.name, t.owner_user_id, t.discord_token, t.created_at, tm.role, tm.joined_at
+        `SELECT t.id, t.name, t.owner_user_id, t.discord_token, t.discord_guild_id, t.created_at, tm.role, tm.joined_at
          FROM team_members tm
          JOIN teams t ON t.id = tm.team_id
          WHERE tm.user_id=?
@@ -474,19 +477,23 @@ function createApi(dbh, dialect) {
     },
     async getTeamDiscordSettings(teamId){
       const numeric = Number(teamId);
-      if (!Number.isFinite(numeric)) return { hasToken: false };
-      const row = await dbh.get('SELECT discord_token FROM teams WHERE id=?', [numeric]);
-      return { hasToken: Boolean(row?.discord_token) };
+      if (!Number.isFinite(numeric)) return { hasToken: false, guildId: null };
+      const row = await dbh.get('SELECT discord_token, discord_guild_id FROM teams WHERE id=?', [numeric]);
+      return {
+        hasToken: Boolean(row?.discord_token),
+        guildId: row?.discord_guild_id != null && row.discord_guild_id !== '' ? String(row.discord_guild_id) : null
+      };
     },
-    async setTeamDiscordToken(teamId, token){
+    async setTeamDiscordToken(teamId, token, guildId){
       const numeric = Number(teamId);
       if (!Number.isFinite(numeric)) return 0;
       const value = trimOrNull(token);
-      const result = await dbh.run('UPDATE teams SET discord_token=? WHERE id=?', [value, numeric]);
+      const guildValue = trimOrNull(guildId);
+      const result = await dbh.run('UPDATE teams SET discord_token=?, discord_guild_id=? WHERE id=?', [value, guildValue, numeric]);
       return result?.changes ? Number(result.changes) : 0;
     },
     async clearTeamDiscordToken(teamId){
-      return await this.setTeamDiscordToken(teamId, null);
+      return await this.setTeamDiscordToken(teamId, null, null);
     },
     async countAdmins(){ const r = await dbh.get("SELECT COUNT(*) c FROM users WHERE role='admin'"); return r.c; },
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
