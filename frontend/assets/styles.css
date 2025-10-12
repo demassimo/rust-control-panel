@@ -989,6 +989,37 @@ label.inline input[type="checkbox"]:focus-visible,
 .team-section-head h4 { font-size: 1.15rem; }
 .team-section-head p { margin: 0; }
 
+.team-discord-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 420px;
+}
+
+.team-discord-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.team-discord-form input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.team-discord-form input:focus {
+  outline: 2px solid rgba(59, 130, 246, 0.35);
+  outline-offset: 2px;
+}
+
+.team-discord-form .row {
+  margin-top: 0;
+}
+
 .roles-manager {
   display: grid;
   gap: 24px;

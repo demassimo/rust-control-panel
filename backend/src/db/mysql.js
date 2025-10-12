@@ -65,6 +65,7 @@ function createApi(pool, dialect) {
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(190) NOT NULL,
         owner_user_id INT NOT NULL,
+        discord_token TEXT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX(owner_user_id),
         CONSTRAINT fk_team_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -136,6 +137,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN total_playtime_seconds BIGINT NULL');
+      await ensureColumn('ALTER TABLE teams ADD COLUMN discord_token TEXT NULL');
       await ensureColumn('ALTER TABLE servers ADD COLUMN team_id INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN queued INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN sleepers INT NULL');
@@ -324,7 +326,7 @@ function createApi(pool, dialect) {
       const numeric = Number(userId);
       if (!Number.isFinite(numeric)) return [];
       return await exec(
-        `SELECT t.id, t.name, t.owner_user_id, t.created_at, tm.role, tm.joined_at
+        `SELECT t.id, t.name, t.owner_user_id, t.discord_token, t.created_at, tm.role, tm.joined_at
          FROM team_members tm
          JOIN teams t ON t.id = tm.team_id
          WHERE tm.user_id=?
@@ -386,6 +388,19 @@ function createApi(pool, dialect) {
          ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`,
         [userId, 'active_team', String(teamId)]
       );
+    },
+    async getTeamDiscordSettings(teamId){
+      const rows = await exec('SELECT discord_token FROM teams WHERE id=?', [teamId]);
+      const token = Array.isArray(rows) && rows.length ? rows[0].discord_token : rows?.discord_token;
+      return { hasToken: Boolean(token) };
+    },
+    async setTeamDiscordToken(teamId, token){
+      const value = trimOrNull(token);
+      const res = await exec('UPDATE teams SET discord_token=? WHERE id=?', [value, teamId]);
+      return res?.affectedRows || 0;
+    },
+    async clearTeamDiscordToken(teamId){
+      return await this.setTeamDiscordToken(teamId, null);
     },
     async countAdmins(){ const r = await exec("SELECT COUNT(*) c FROM users WHERE role='admin'"); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },

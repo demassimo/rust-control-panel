@@ -237,6 +237,7 @@ async function loadUserContext(userId) {
   let rolePermissions = row.role_permissions;
   let activeTeamName = null;
   let activeTeamRoleName = null;
+  let activeTeamHasDiscordToken = false;
   const roleCache = new Map();
   let teamServers = [];
   if (activeTeamId && Array.isArray(teams)) {
@@ -257,6 +258,7 @@ async function loadUserContext(userId) {
     }
     if (membership) {
       activeTeamName = membership.name || null;
+      activeTeamHasDiscordToken = Boolean(membership.discord_token);
     }
     if (typeof db.listTeamServerIds === 'function') {
       try {
@@ -300,7 +302,8 @@ async function loadUserContext(userId) {
         name: team.name,
         ownerId: team.owner_user_id,
         role: team.role,
-        roleName
+        roleName,
+        hasDiscordToken: Boolean(team.discord_token)
       });
     }
   }
@@ -313,7 +316,9 @@ async function loadUserContext(userId) {
     activeTeamId,
     activeTeamName,
     teams: projectedTeams,
-    created_at: row.created_at
+    created_at: row.created_at,
+    activeTeamHasDiscordToken,
+    teamDiscord: { hasToken: activeTeamHasDiscordToken }
   };
 }
 
@@ -4761,6 +4766,8 @@ app.post('/api/login', async (req, res) => {
       permissions: context?.permissions || normaliseRolePermissions(row.role_permissions, row.role),
       activeTeamId: context?.activeTeamId || null,
       activeTeamName: context?.activeTeamName || null,
+      activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken || false,
+      teamDiscord: context?.teamDiscord || { hasToken: false },
       teams: context?.teams || []
     });
   } catch (e) {
@@ -4799,6 +4806,8 @@ app.get('/api/me', auth, async (req, res) => {
       created_at: context.created_at || null,
       activeTeamId: context.activeTeamId,
       activeTeamName: context.activeTeamName,
+      activeTeamHasDiscordToken: context.activeTeamHasDiscordToken || false,
+      teamDiscord: context.teamDiscord || { hasToken: false },
       teams: context.teams
     });
   } catch (e) {
@@ -4842,10 +4851,172 @@ app.get('/api/teams', auth, async (req, res) => {
     res.json({
       activeTeamId: context?.activeTeamId ?? null,
       activeTeamName: context?.activeTeamName ?? null,
+      activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken ?? false,
+      teamDiscord: context?.teamDiscord || { hasToken: false },
       teams: context?.teams || []
     });
   } catch (err) {
     console.error('failed to load teams', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/team/discord', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.getTeamDiscordSettings !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const info = await db.getTeamDiscordSettings(teamId);
+    const hasToken = Boolean(info?.hasToken);
+    res.json({
+      hasToken,
+      teamDiscord: { hasToken },
+      activeTeamHasDiscordToken: hasToken
+    });
+  } catch (err) {
+    console.error('failed to load team discord token', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/team/discord', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.setTeamDiscordToken !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const body = req.body || {};
+    const token = sanitizeDiscordToken(body.token ?? body.discordToken ?? body.botToken);
+    if (!token) return res.status(400).json({ error: 'missing_token' });
+    await db.setTeamDiscordToken(teamId, token);
+    let hasToken = true;
+    if (typeof db.getTeamDiscordSettings === 'function') {
+      try {
+        const info = await db.getTeamDiscordSettings(teamId);
+        hasToken = Boolean(info?.hasToken);
+      } catch (err) {
+        console.warn('failed to refresh team discord token state', err);
+      }
+    }
+    const numericTeamId = Number(teamId);
+    if (req.authUser?.id && typeof loadUserContext === 'function') {
+      try {
+        const refreshed = await loadUserContext(req.authUser.id);
+        if (refreshed) req.authUser = refreshed;
+      } catch (err) {
+        console.warn('failed to refresh auth context after team token update', err);
+        req.authUser.activeTeamHasDiscordToken = hasToken;
+        req.authUser.teamDiscord = { hasToken };
+        if (Array.isArray(req.authUser.teams)) {
+          req.authUser.teams = req.authUser.teams.map((team) => {
+            if (!team) return team;
+            const id = Number(team.id);
+            if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
+              return { ...team, hasDiscordToken: hasToken };
+            }
+            if (team.id === teamId) return { ...team, hasDiscordToken: hasToken };
+            return team;
+          });
+        }
+      }
+    } else if (req.authUser) {
+      req.authUser.activeTeamHasDiscordToken = hasToken;
+      req.authUser.teamDiscord = { hasToken };
+      if (Array.isArray(req.authUser.teams)) {
+        req.authUser.teams = req.authUser.teams.map((team) => {
+          if (!team) return team;
+          const id = Number(team.id);
+          if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
+            return { ...team, hasDiscordToken: hasToken };
+          }
+          if (team.id === teamId) return { ...team, hasDiscordToken: hasToken };
+          return team;
+        });
+      }
+    }
+    res.json({
+      hasToken,
+      teamDiscord: { hasToken },
+      activeTeamHasDiscordToken: hasToken
+    });
+  } catch (err) {
+    console.error('failed to save team discord token', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/team/discord', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.clearTeamDiscordToken !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    await db.clearTeamDiscordToken(teamId);
+    let hasToken = false;
+    if (typeof db.getTeamDiscordSettings === 'function') {
+      try {
+        const info = await db.getTeamDiscordSettings(teamId);
+        hasToken = Boolean(info?.hasToken);
+      } catch (err) {
+        console.warn('failed to refresh team discord token state', err);
+      }
+    }
+    const numericTeamId = Number(teamId);
+    if (req.authUser?.id && typeof loadUserContext === 'function') {
+      try {
+        const refreshed = await loadUserContext(req.authUser.id);
+        if (refreshed) req.authUser = refreshed;
+      } catch (err) {
+        console.warn('failed to refresh auth context after team token removal', err);
+        req.authUser.activeTeamHasDiscordToken = hasToken;
+        req.authUser.teamDiscord = { hasToken };
+        if (Array.isArray(req.authUser.teams)) {
+          req.authUser.teams = req.authUser.teams.map((team) => {
+            if (!team) return team;
+            const id = Number(team.id);
+            if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
+              return { ...team, hasDiscordToken: hasToken };
+            }
+            if (team.id === teamId) return { ...team, hasDiscordToken: hasToken };
+            return team;
+          });
+        }
+      }
+    } else if (req.authUser) {
+      req.authUser.activeTeamHasDiscordToken = hasToken;
+      req.authUser.teamDiscord = { hasToken };
+      if (Array.isArray(req.authUser.teams)) {
+        req.authUser.teams = req.authUser.teams.map((team) => {
+          if (!team) return team;
+          const id = Number(team.id);
+          if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
+            return { ...team, hasDiscordToken: hasToken };
+          }
+          if (team.id === teamId) return { ...team, hasDiscordToken: hasToken };
+          return team;
+        });
+      }
+    }
+    res.json({
+      hasToken,
+      teamDiscord: { hasToken },
+      activeTeamHasDiscordToken: hasToken
+    });
+  } catch (err) {
+    console.error('failed to clear team discord token', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
@@ -4872,6 +5043,8 @@ app.post('/api/me/active-team', auth, async (req, res) => {
       role: context?.role,
       roleName: context?.roleName,
       permissions: context?.permissions,
+      activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken ?? false,
+      teamDiscord: context?.teamDiscord || { hasToken: false },
       teams: context?.teams || []
     });
   } catch (err) {

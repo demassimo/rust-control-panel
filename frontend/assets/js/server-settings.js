@@ -193,6 +193,7 @@
       case 'missing_fields':
         return 'Provide both the guild and channel IDs.';
       case 'missing_bot_token':
+      case 'missing_token':
         return 'Add the Discord bot token before saving.';
       case 'unauthorized':
         return 'Sign in to configure Discord integration.';

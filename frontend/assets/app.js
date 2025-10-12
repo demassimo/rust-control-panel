@@ -53,7 +53,8 @@
     activeTeamName: null,
     teams: [],
     roles: [],
-    roleTemplates: { serverCapabilities: [], globalPermissions: [] }
+    roleTemplates: { serverCapabilities: [], globalPermissions: [] },
+    teamDiscord: { hasToken: false, loading: false, loadedTeamId: null }
   };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
@@ -75,6 +76,12 @@
   const rolesHeader = $('#rolesHeader');
   const rolesDescription = $('#rolesDescription');
   const rolesSection = roleManager?.closest('.team-section') || null;
+  const teamDiscordSection = $('#teamDiscordSection');
+  const teamDiscordForm = $('#teamDiscordForm');
+  const teamDiscordToken = $('#teamDiscordToken');
+  const btnSaveTeamDiscord = $('#btnSaveTeamDiscord');
+  const btnRemoveTeamDiscord = $('#btnRemoveTeamDiscord');
+  const teamDiscordStatus = $('#teamDiscordStatus');
   const roleSelect = $('#roleSelect');
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
@@ -2865,6 +2872,7 @@
   }
 
   function applyTeamContext(context = {}) {
+    const previousTeamId = state.activeTeamId;
     if (typeof context.activeTeamId !== 'undefined') {
       state.activeTeamId = context.activeTeamId == null ? null : Number(context.activeTeamId);
     }
@@ -2881,6 +2889,28 @@
       state.currentUser.activeTeamId = state.activeTeamId;
       state.currentUser.activeTeamName = state.activeTeamName;
     }
+    if (state.teamDiscord) {
+      let appliedFromContext = false;
+      if (context.teamDiscord && typeof context.teamDiscord === 'object') {
+        state.teamDiscord.hasToken = Boolean(context.teamDiscord.hasToken);
+        state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+        appliedFromContext = true;
+      } else if (typeof context.activeTeamHasDiscordToken !== 'undefined') {
+        state.teamDiscord.hasToken = Boolean(context.activeTeamHasDiscordToken);
+        state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+        appliedFromContext = true;
+      }
+      if (state.activeTeamId !== previousTeamId) {
+        if (!appliedFromContext) {
+          state.teamDiscord.loadedTeamId = null;
+          state.teamDiscord.hasToken = false;
+        }
+        state.teamDiscord.loading = false;
+        hideNotice(teamDiscordStatus);
+        if (teamDiscordToken) teamDiscordToken.value = '';
+      }
+    }
+    updateTeamDiscordUi();
     renderTeamSwitcher();
   }
 
@@ -3687,8 +3717,10 @@
     manual_refresh_cooldown: 'Manual live map refresh is cooling down. Try again in a few seconds.',
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
+    missing_token: 'Add the team Discord token before saving.',
     no_server_selected: 'Select a server before sending commands.',
     forbidden: 'You do not have permission to perform this action.',
+    not_supported: 'This feature is not available on the current server.',
     invalid_role_key: 'Provide a valid role key (letters, numbers, hyphens or underscores).',
     invalid_name: 'Role name cannot be empty.',
     reserved_role: 'This role key is reserved by the system.',
@@ -4992,9 +5024,13 @@
     state.activePanel = 'dashboard';
     state.roles = [];
     state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
+    state.teamDiscord = { hasToken: false, loading: false, loadedTeamId: null };
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
+    hideNotice(teamDiscordStatus);
+    if (teamDiscordToken) teamDiscordToken.value = '';
+    updateTeamDiscordUi();
     updateTeamAccessView();
     renderTeamSwitcher();
     serversEl.innerHTML = '';
@@ -5894,6 +5930,129 @@
     }
   }
 
+  function canManageTeamDiscord() {
+    return hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
+  }
+
+  function updateTeamDiscordUi() {
+    if (!teamDiscordSection) return;
+    const canManage = canManageTeamDiscord();
+    const stateObj = state.teamDiscord || {};
+    const hasToken = !!stateObj.hasToken;
+    const loading = !!stateObj.loading;
+    teamDiscordSection.classList.toggle('hidden', !canManage);
+    teamDiscordSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    if (teamDiscordToken) {
+      teamDiscordToken.placeholder = hasToken ? 'Token stored — enter to replace' : 'Paste Discord bot token';
+      teamDiscordToken.disabled = !canManage || loading;
+    }
+    if (btnSaveTeamDiscord) btnSaveTeamDiscord.disabled = !canManage || loading;
+    if (btnRemoveTeamDiscord) btnRemoveTeamDiscord.disabled = !canManage || loading || !hasToken;
+  }
+
+  async function loadTeamDiscord({ force = false } = {}) {
+    if (!teamDiscordSection) return;
+    if (!state.TOKEN) return;
+    if (!canManageTeamDiscord()) {
+      state.teamDiscord.hasToken = false;
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      updateTeamDiscordUi();
+      return;
+    }
+    if (!force && state.teamDiscord.loadedTeamId === state.activeTeamId) {
+      updateTeamDiscordUi();
+      return;
+    }
+    state.teamDiscord.loading = true;
+    updateTeamDiscordUi();
+    hideNotice(teamDiscordStatus);
+    let unauthorized = false;
+    try {
+      const data = await api('/team/discord');
+      state.teamDiscord.hasToken = Boolean(data?.hasToken);
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      if (!state.teamDiscord.hasToken && teamDiscordToken) {
+        teamDiscordToken.value = '';
+      }
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        unauthorized = true;
+        handleUnauthorized();
+      } else {
+        state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+        showNotice(teamDiscordStatus, describeError(err), 'error');
+      }
+    } finally {
+      state.teamDiscord.loading = false;
+      updateTeamDiscordUi();
+    }
+    if (unauthorized) return;
+  }
+
+  async function handleTeamDiscordSubmit(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    if (!teamDiscordToken) return;
+    const value = teamDiscordToken.value.trim();
+    if (!value) {
+      showNotice(teamDiscordStatus, describeError('missing_token'), 'error');
+      return;
+    }
+    state.teamDiscord.loading = true;
+    updateTeamDiscordUi();
+    hideNotice(teamDiscordStatus);
+    let unauthorized = false;
+    try {
+      const data = await api('/team/discord', { token: value }, 'POST');
+      state.teamDiscord.hasToken = Boolean(data?.hasToken);
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      teamDiscordToken.value = '';
+      showNotice(teamDiscordStatus, 'Discord token saved.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        unauthorized = true;
+        handleUnauthorized();
+      } else {
+        showNotice(teamDiscordStatus, describeError(err), 'error');
+      }
+    } finally {
+      state.teamDiscord.loading = false;
+      updateTeamDiscordUi();
+    }
+    if (unauthorized) return;
+  }
+
+  async function handleTeamDiscordRemove(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    if (!state.teamDiscord.hasToken) {
+      showNotice(teamDiscordStatus, 'No Discord token is stored for this team.', 'error');
+      return;
+    }
+    state.teamDiscord.loading = true;
+    updateTeamDiscordUi();
+    hideNotice(teamDiscordStatus);
+    let unauthorized = false;
+    try {
+      const data = await api('/team/discord', null, 'DELETE');
+      state.teamDiscord.hasToken = Boolean(data?.hasToken);
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      if (teamDiscordToken) teamDiscordToken.value = '';
+      showNotice(teamDiscordStatus, 'Removed the stored Discord token.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        unauthorized = true;
+        handleUnauthorized();
+      } else {
+        showNotice(teamDiscordStatus, describeError(err), 'error');
+      }
+    } finally {
+      state.teamDiscord.loading = false;
+      updateTeamDiscordUi();
+    }
+    if (unauthorized) return;
+  }
+
   function updateTeamAccessView({ refreshUsers = false } = {}) {
     const canUsers = hasGlobalPermission('manageUsers');
     const canRoles = hasGlobalPermission('manageRoles');
@@ -5914,6 +6073,12 @@
       closeUserDetails();
       if (userCreateSection) userCreateSection.classList.add('hidden');
       updateRoleManagerVisibility(false);
+      state.teamDiscord.hasToken = false;
+      state.teamDiscord.loadedTeamId = null;
+      state.teamDiscord.loading = false;
+      hideNotice(teamDiscordStatus);
+      if (teamDiscordToken) teamDiscordToken.value = '';
+      updateTeamDiscordUi();
       return;
     }
 
@@ -5930,6 +6095,12 @@
     }
 
     updateRoleManagerVisibility(canRoles);
+    updateTeamDiscordUi();
+    if (canAccessTeam && state.activeTeamId != null) {
+      if (state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
+        loadTeamDiscord().catch(() => {});
+      }
+    }
   }
 
   async function loadSettings() {
@@ -6201,6 +6372,9 @@
     addServerPrompt?.addEventListener('click', () => toggleAddServerCardVisibility());
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     teamSelect?.addEventListener('change', onTeamSelectionChange);
+    teamDiscordForm?.addEventListener('submit', handleTeamDiscordSubmit);
+    btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
+    teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     btnCreateUser?.addEventListener('click', async () => {
       if (!hasGlobalPermission('manageUsers')) return;
       hideNotice(userFeedback);
