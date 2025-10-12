@@ -2970,6 +2970,82 @@ button.chat-filter-btn:focus-visible {
   gap: 10px;
 }
 
+.player-moderation-menu {
+  position: relative;
+}
+
+.player-moderation-menu-toggle {
+  min-width: 190px;
+}
+
+.player-moderation-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel-strong);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.45);
+  z-index: 20;
+}
+
+.player-moderation-menu-row { width: 100%; }
+
+.player-moderation-menu-item {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 9px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.player-moderation-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.player-moderation-menu-item.danger {
+  color: #fee2e2;
+  background: rgba(248, 113, 113, 0.18);
+}
+
+.player-moderation-menu-item.danger:hover {
+  background: rgba(248, 113, 113, 0.28);
+}
+
+.player-moderation-menu-item.ghost {
+  color: var(--muted-strong);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.player-moderation-menu-item.ghost:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-moderation-menu-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: saturate(0.6);
+}
+
 .player-notes-backdrop {
   position: absolute;
   inset: 0;

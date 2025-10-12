@@ -297,6 +297,7 @@
         details: null,
         refreshing: false,
         updatingName: false,
+        moderating: false,
         notes: createNotesState()
       };
 
@@ -901,6 +902,7 @@
         modalState.open = true;
         modalState.steamid = steamid || null;
         modalState.updatingName = false;
+        modalState.moderating = false;
         renderModal(player, null);
         setModalStatus('');
         setModalLoading(false);
@@ -920,6 +922,7 @@
         modalState.details = null;
         modalState.refreshing = false;
         modalState.updatingName = false;
+        modalState.moderating = false;
         closeNotesDialog({ reset: true, restoreFocus: false });
         setModalStatus('');
         setModalLoading(false);
@@ -1146,11 +1149,19 @@
           const busy = modalState.notes.loading || modalState.notes.submitting;
           modal.elements.notesBtn.disabled = !hasSteam || busy;
         }
+        const hasSteamForModeration = Boolean(combined.steamid);
+        const moderationDisabled = moderationBusy() || !hasSteamForModeration;
+        if (modal.elements.moderationMenuToggle) {
+          modal.elements.moderationMenuToggle.disabled = moderationDisabled;
+          if (moderationDisabled) {
+            if (typeof modal.closeModerationMenu === 'function') {
+              modal.closeModerationMenu();
+            }
+          }
+        }
         if (Array.isArray(modal.elements.moderationButtons)) {
-          const hasSteam = Boolean(combined.steamid);
-          const busy = moderationBusy();
           for (const btn of modal.elements.moderationButtons) {
-            if (btn) btn.disabled = busy || !hasSteam;
+            if (btn) btn.disabled = moderationDisabled;
           }
         }
       }
@@ -1273,11 +1284,88 @@
       }
 
       function moderationBusy() {
-        return modalState.refreshing || modalState.updatingName;
+        return modalState.moderating || modalState.refreshing || modalState.updatingName;
+      }
+
+      function setModerationInProgress(active) {
+        modalState.moderating = !!active;
+        if (typeof modal.closeModerationMenu === 'function') {
+          modal.closeModerationMenu();
+        }
+        const combined = { ...(modalState.base || {}), ...(modalState.details || {}) };
+        updateActions(combined);
+      }
+
+      function sanitizeModerationReason(value) {
+        return String(value ?? '')
+          .replace(/[\r\n]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+      function escapeCommandArgument(value) {
+        return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      }
+
+      function buildEventNote(descriptor, reason) {
+        const parts = [];
+        if (descriptor) parts.push(descriptor.charAt(0).toUpperCase() + descriptor.slice(1));
+        if (reason) parts.push(`Reason: ${reason}`);
+        return parts.join(' — ').slice(0, 1800);
+      }
+
+      function buildBanCommand(steamId, reason, minutes) {
+        if (!steamId) return null;
+        const escapedReason = escapeCommandArgument(reason);
+        if (Number.isFinite(minutes) && minutes > 0) {
+          const duration = Math.max(1, Math.round(minutes));
+          return `tempban ${steamId} ${duration} "${escapedReason}"`;
+        }
+        return `ban ${steamId} "${escapedReason}"`;
+      }
+
+      function buildKickCommand(steamId, reason) {
+        if (!steamId) return null;
+        const escapedReason = escapeCommandArgument(reason);
+        return `kick ${steamId} "${escapedReason}"`;
+      }
+
+      function buildMuteCommand(steamId, reason, minutes) {
+        if (!steamId) return null;
+        const escapedReason = escapeCommandArgument(reason);
+        if (Number.isFinite(minutes) && minutes > 0) {
+          const duration = Math.max(1, Math.round(minutes));
+          return `mute ${steamId} ${duration} "${escapedReason}"`;
+        }
+        return `mute ${steamId} "${escapedReason}"`;
+      }
+
+      function resolveModerationContext(actionDescription) {
+        const serverId = resolveActiveServerId();
+        if (serverId == null) {
+          setModalStatus(`Select a server to ${actionDescription}.`, 'warn');
+          return null;
+        }
+        const globalState = ctx.getState?.();
+        const currentServerId = Number(globalState?.currentServerId);
+        if (!Number.isFinite(currentServerId) || Math.trunc(currentServerId) !== serverId) {
+          setModalStatus(`Switch to the active server before attempting to ${actionDescription}.`, 'warn');
+          return null;
+        }
+        if (typeof ctx.runCommand !== 'function') {
+          setModalStatus('RCON command execution is unavailable in this build.', 'error');
+          return null;
+        }
+        if (typeof ctx.api !== 'function') {
+          setModalStatus('API client unavailable in this build.', 'error');
+          return null;
+        }
+        return { serverId };
       }
 
       async function handleBanModeration() {
         if (!modalState.open || moderationBusy()) return;
+        if (!resolveModerationContext('issue a ban')) return;
         const target = getSelectedPlayerContext();
         if (!target.steamId) {
           setModalStatus('Steam ID is required to issue a ban.', 'error');
@@ -1301,16 +1389,60 @@
             'Enter a positive number of minutes or leave the field blank for a permanent ban.'
         });
         if (duration.cancelled) return;
+        const context = resolveModerationContext('issue a ban');
+        if (!context) return;
+        const sanitizedReason = sanitizeModerationReason(reason);
         const descriptor = duration.minutes
           ? `temporary ban for ${describeDuration(duration.minutes)}`
           : 'permanent ban';
-        const logLine = `Ban issued for ${target.name} [${target.steamId}] (${descriptor}). Reason: ${reason}`;
-        ctx.log?.(logLine);
-        setModalStatus(`Logged ${descriptor} for ${target.name}.`, 'success');
+        const command = buildBanCommand(target.steamId, sanitizedReason, duration.minutes);
+        if (!command) {
+          setModalStatus('Unable to prepare ban command.', 'error');
+          return;
+        }
+        const logLine = `Ban issued for ${target.name} [${target.steamId}] (${descriptor}). Reason: ${sanitizedReason}`;
+        const eventNote = buildEventNote(descriptor, sanitizedReason);
+        setModerationInProgress(true);
+        setModalStatus(`Issuing ${descriptor} for ${target.name}…`);
+        try {
+          const reply = await ctx.runCommand(command);
+          ctx.log?.(logLine);
+          if (reply?.Message) {
+            const trimmedReply = String(reply.Message).trim();
+            if (trimmedReply) ctx.log?.(trimmedReply);
+          }
+          try {
+            await ctx.api(`/players/${encodeURIComponent(target.steamId)}/event`, {
+              server_id: context.serverId,
+              event: 'ban',
+              note: eventNote || null
+            }, 'POST');
+            setModalStatus(`Issued ${descriptor} for ${target.name}.`, 'success');
+            if (modalState.steamid) {
+              loadPlayerDetails(modalState.steamid, { showLoading: false }).catch(() => {});
+            }
+          } catch (eventErr) {
+            if (ctx.errorCode?.(eventErr) === 'unauthorized') {
+              ctx.handleUnauthorized?.();
+              closeModal();
+            } else {
+              const message = ctx.describeError?.(eventErr) || eventErr?.message || 'Unknown error';
+              ctx.log?.(`Failed to log ban for ${target.name}: ${message}`);
+              setModalStatus(`Ban sent, but logging failed: ${message}`, 'warn');
+            }
+          }
+        } catch (err) {
+          const message = ctx.describeError?.(err) || err?.message || 'Unknown error';
+          ctx.log?.(`Ban command failed for ${target.name}: ${message}`);
+          setModalStatus(`Failed to issue ban for ${target.name}: ${message}`, 'error');
+        } finally {
+          setModerationInProgress(false);
+        }
       }
 
       async function handleKickModeration() {
         if (!modalState.open || moderationBusy()) return;
+        if (!resolveModerationContext('issue a kick')) return;
         const target = getSelectedPlayerContext();
         if (!target.steamId) {
           setModalStatus('Steam ID is required to issue a kick.', 'error');
@@ -1324,13 +1456,57 @@
           requiredMessage: 'Kick reason is required.'
         });
         if (!reason) return;
-        const logLine = `Kick issued for ${target.name} [${target.steamId}]. Reason: ${reason}`;
-        ctx.log?.(logLine);
-        setModalStatus(`Logged kick for ${target.name}.`, 'success');
+        const context = resolveModerationContext('issue a kick');
+        if (!context) return;
+        const sanitizedReason = sanitizeModerationReason(reason);
+        const command = buildKickCommand(target.steamId, sanitizedReason);
+        if (!command) {
+          setModalStatus('Unable to prepare kick command.', 'error');
+          return;
+        }
+        const logLine = `Kick issued for ${target.name} [${target.steamId}]. Reason: ${sanitizedReason}`;
+        const eventNote = buildEventNote('kick', sanitizedReason);
+        setModerationInProgress(true);
+        setModalStatus(`Issuing kick for ${target.name}…`);
+        try {
+          const reply = await ctx.runCommand(command);
+          ctx.log?.(logLine);
+          if (reply?.Message) {
+            const trimmedReply = String(reply.Message).trim();
+            if (trimmedReply) ctx.log?.(trimmedReply);
+          }
+          try {
+            await ctx.api(`/players/${encodeURIComponent(target.steamId)}/event`, {
+              server_id: context.serverId,
+              event: 'kick',
+              note: eventNote || null
+            }, 'POST');
+            setModalStatus(`Kick issued for ${target.name}.`, 'success');
+            if (modalState.steamid) {
+              loadPlayerDetails(modalState.steamid, { showLoading: false }).catch(() => {});
+            }
+          } catch (eventErr) {
+            if (ctx.errorCode?.(eventErr) === 'unauthorized') {
+              ctx.handleUnauthorized?.();
+              closeModal();
+            } else {
+              const message = ctx.describeError?.(eventErr) || eventErr?.message || 'Unknown error';
+              ctx.log?.(`Failed to log kick for ${target.name}: ${message}`);
+              setModalStatus(`Kick sent, but logging failed: ${message}`, 'warn');
+            }
+          }
+        } catch (err) {
+          const message = ctx.describeError?.(err) || err?.message || 'Unknown error';
+          ctx.log?.(`Kick command failed for ${target.name}: ${message}`);
+          setModalStatus(`Failed to issue kick for ${target.name}: ${message}`, 'error');
+        } finally {
+          setModerationInProgress(false);
+        }
       }
 
       async function handleMuteModeration() {
         if (!modalState.open || moderationBusy()) return;
+        if (!resolveModerationContext('apply a mute')) return;
         const target = getSelectedPlayerContext();
         if (!target.steamId) {
           setModalStatus('Steam ID is required to apply a mute.', 'error');
@@ -1354,12 +1530,55 @@
             'Enter a positive number of minutes or leave the field blank for an indefinite mute.'
         });
         if (duration.cancelled) return;
+        const context = resolveModerationContext('apply a mute');
+        if (!context) return;
+        const sanitizedReason = sanitizeModerationReason(reason);
         const descriptor = duration.minutes
           ? `temporary mute for ${describeDuration(duration.minutes)}`
           : 'indefinite mute';
-        const logLine = `Mute issued for ${target.name} [${target.steamId}] (${descriptor}). Reason: ${reason}`;
-        ctx.log?.(logLine);
-        setModalStatus(`Logged ${descriptor} for ${target.name}.`, 'success');
+        const command = buildMuteCommand(target.steamId, sanitizedReason, duration.minutes);
+        if (!command) {
+          setModalStatus('Unable to prepare mute command.', 'error');
+          return;
+        }
+        const logLine = `Mute issued for ${target.name} [${target.steamId}] (${descriptor}). Reason: ${sanitizedReason}`;
+        const eventNote = buildEventNote(descriptor, sanitizedReason);
+        setModerationInProgress(true);
+        setModalStatus(`Issuing ${descriptor} for ${target.name}…`);
+        try {
+          const reply = await ctx.runCommand(command);
+          ctx.log?.(logLine);
+          if (reply?.Message) {
+            const trimmedReply = String(reply.Message).trim();
+            if (trimmedReply) ctx.log?.(trimmedReply);
+          }
+          try {
+            await ctx.api(`/players/${encodeURIComponent(target.steamId)}/event`, {
+              server_id: context.serverId,
+              event: 'mute',
+              note: eventNote || null
+            }, 'POST');
+            setModalStatus(`Issued ${descriptor} for ${target.name}.`, 'success');
+            if (modalState.steamid) {
+              loadPlayerDetails(modalState.steamid, { showLoading: false }).catch(() => {});
+            }
+          } catch (eventErr) {
+            if (ctx.errorCode?.(eventErr) === 'unauthorized') {
+              ctx.handleUnauthorized?.();
+              closeModal();
+            } else {
+              const message = ctx.describeError?.(eventErr) || eventErr?.message || 'Unknown error';
+              ctx.log?.(`Failed to log mute for ${target.name}: ${message}`);
+              setModalStatus(`Mute sent, but logging failed: ${message}`, 'warn');
+            }
+          }
+        } catch (err) {
+          const message = ctx.describeError?.(err) || err?.message || 'Unknown error';
+          ctx.log?.(`Mute command failed for ${target.name}: ${message}`);
+          setModalStatus(`Failed to issue mute for ${target.name}: ${message}`, 'error');
+        } finally {
+          setModerationInProgress(false);
+        }
       }
 
       async function handleUnbanModeration() {
@@ -1891,31 +2110,40 @@
         notesBtn.className = 'btn ghost small';
         notesBtn.textContent = 'Player notes';
         moderationActions.appendChild(notesBtn);
-        const banBtn = document.createElement('button');
-        banBtn.type = 'button';
-        banBtn.className = 'btn danger small';
-        banBtn.textContent = 'Ban player';
-        moderationActions.appendChild(banBtn);
-        const kickBtn = document.createElement('button');
-        kickBtn.type = 'button';
-        kickBtn.className = 'btn danger small';
-        kickBtn.textContent = 'Kick player';
-        moderationActions.appendChild(kickBtn);
-        const muteBtn = document.createElement('button');
-        muteBtn.type = 'button';
-        muteBtn.className = 'btn danger small';
-        muteBtn.textContent = 'Mute player';
-        moderationActions.appendChild(muteBtn);
-        const unbanBtn = document.createElement('button');
-        unbanBtn.type = 'button';
-        unbanBtn.className = 'btn ghost small';
-        unbanBtn.textContent = 'Unban player';
-        moderationActions.appendChild(unbanBtn);
-        const unmuteBtn = document.createElement('button');
-        unmuteBtn.type = 'button';
-        unmuteBtn.className = 'btn ghost small';
-        unmuteBtn.textContent = 'Unmute player';
-        moderationActions.appendChild(unmuteBtn);
+        const moderationMenu = document.createElement('div');
+        moderationMenu.className = 'player-moderation-menu';
+        const moderationMenuToggle = document.createElement('button');
+        moderationMenuToggle.type = 'button';
+        moderationMenuToggle.className = 'btn danger small player-moderation-menu-toggle';
+        moderationMenuToggle.textContent = 'Moderation actions';
+        moderationMenuToggle.setAttribute('aria-haspopup', 'true');
+        moderationMenuToggle.setAttribute('aria-expanded', 'false');
+        const moderationMenuList = document.createElement('ul');
+        moderationMenuList.className = 'player-moderation-menu-list hidden';
+        moderationMenuList.setAttribute('role', 'menu');
+        const moderationMenuListId = `player-moderation-menu-${Math.random().toString(36).slice(2, 10)}`;
+        moderationMenuToggle.setAttribute('aria-controls', moderationMenuListId);
+        moderationMenuList.id = moderationMenuListId;
+        const createModerationMenuItem = (label, toneClass) => {
+          const item = document.createElement('li');
+          item.className = 'player-moderation-menu-row';
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = `player-moderation-menu-item${toneClass ? ` ${toneClass}` : ''}`;
+          button.textContent = label;
+          button.setAttribute('role', 'menuitem');
+          item.appendChild(button);
+          moderationMenuList.appendChild(item);
+          return button;
+        };
+        const banBtn = createModerationMenuItem('Ban player', 'danger');
+        const kickBtn = createModerationMenuItem('Kick player', 'danger');
+        const muteBtn = createModerationMenuItem('Mute player', 'danger');
+        const unbanBtn = createModerationMenuItem('Unban player', 'ghost');
+        const unmuteBtn = createModerationMenuItem('Unmute player', 'ghost');
+        moderationMenu.appendChild(moderationMenuToggle);
+        moderationMenu.appendChild(moderationMenuList);
+        moderationActions.appendChild(moderationMenu);
         footer.appendChild(moderationActions);
 
         const actions = document.createElement('div');
@@ -1941,6 +2169,48 @@
         serverArmourBtn.textContent = 'Server Armour';
         actions.appendChild(serverArmourBtn);
         footer.appendChild(actions);
+
+        const moderationMenuState = { open: false };
+
+        const onModerationMenuDocumentClick = (event) => {
+          if (!moderationMenu.contains(event.target)) {
+            closeModerationMenu();
+          }
+        };
+
+        function openModerationMenu() {
+          if (moderationMenuState.open || moderationMenuToggle.disabled) return;
+          moderationMenuState.open = true;
+          moderationMenuToggle.setAttribute('aria-expanded', 'true');
+          moderationMenuList.classList.remove('hidden');
+          document.addEventListener('click', onModerationMenuDocumentClick, true);
+        }
+
+        function closeModerationMenu() {
+          if (!moderationMenuState.open) return;
+          moderationMenuState.open = false;
+          moderationMenuToggle.setAttribute('aria-expanded', 'false');
+          moderationMenuList.classList.add('hidden');
+          document.removeEventListener('click', onModerationMenuDocumentClick, true);
+        }
+
+        const onModerationMenuToggle = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (moderationMenuState.open) {
+            closeModerationMenu();
+          } else {
+            openModerationMenu();
+          }
+        };
+
+        const onModerationMenuListKeydown = (event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            closeModerationMenu();
+            moderationMenuToggle.focus();
+          }
+        };
 
         const notesBackdrop = document.createElement('div');
         notesBackdrop.className = 'player-notes-backdrop hidden';
@@ -2003,6 +2273,10 @@
         const hide = () => closeModal();
         const onBackdrop = (ev) => {
           if (ev.target === overlay) {
+            if (moderationMenuState.open) {
+              closeModerationMenu();
+              return;
+            }
             if (modalState.notes?.open) {
               closeNotesDialog();
               return;
@@ -2012,6 +2286,11 @@
         };
         const onKeyDown = (ev) => {
           if (ev.key === 'Escape') {
+            if (moderationMenuState.open) {
+              closeModerationMenu();
+              moderationMenuToggle.focus();
+              return;
+            }
             if (modalState.notes?.open) {
               closeNotesDialog();
               return;
@@ -2030,6 +2309,19 @@
         const onNotesSave = () => handleAddNote();
         const onNotesInput = () => onNotesInputChange();
         const onNotesOpen = () => openNotesDialog();
+        const wrapModerationMenuAction = (handler) => {
+          return (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeModerationMenu();
+            handler(event);
+          };
+        };
+        const onBanMenuClick = wrapModerationMenuAction(handleBanModeration);
+        const onKickMenuClick = wrapModerationMenuAction(handleKickModeration);
+        const onMuteMenuClick = wrapModerationMenuAction(handleMuteModeration);
+        const onUnbanMenuClick = wrapModerationMenuAction(handleUnbanModeration);
+        const onUnmuteMenuClick = wrapModerationMenuAction(handleUnmuteModeration);
 
         const openSteamProfile = () => {
           const url = steamProfileBtn.dataset.url;
@@ -2054,14 +2346,17 @@
         notesSaveBtn.addEventListener('click', onNotesSave);
         notesInput.addEventListener('input', onNotesInput);
         notesBtn.addEventListener('click', onNotesOpen);
-        banBtn.addEventListener('click', handleBanModeration);
-        kickBtn.addEventListener('click', handleKickModeration);
-        muteBtn.addEventListener('click', handleMuteModeration);
-        unbanBtn.addEventListener('click', handleUnbanModeration);
-        unmuteBtn.addEventListener('click', handleUnmuteModeration);
+        moderationMenuToggle.addEventListener('click', onModerationMenuToggle);
+        moderationMenuList.addEventListener('keydown', onModerationMenuListKeydown);
+        banBtn.addEventListener('click', onBanMenuClick);
+        kickBtn.addEventListener('click', onKickMenuClick);
+        muteBtn.addEventListener('click', onMuteMenuClick);
+        unbanBtn.addEventListener('click', onUnbanMenuClick);
+        unmuteBtn.addEventListener('click', onUnmuteMenuClick);
 
         return {
           show() {
+            closeModerationMenu();
             overlay.classList.remove('hidden');
             overlay.setAttribute('aria-hidden', 'false');
             document.body.classList.add('modal-open');
@@ -2070,6 +2365,7 @@
             setTimeout(() => closeBtn.focus(), 50);
           },
           hide() {
+            closeModerationMenu();
             overlay.classList.add('hidden');
             overlay.setAttribute('aria-hidden', 'true');
             document.body.classList.remove('modal-open');
@@ -2085,6 +2381,9 @@
             events: eventsList,
             status,
             moderationActions,
+            moderationMenu,
+            moderationMenuToggle,
+            moderationMenuList,
             moderationButtons: [banBtn, kickBtn, muteBtn, unbanBtn, unmuteBtn],
             notesBtn,
             notesBackdrop,
@@ -2107,6 +2406,7 @@
             loading
           },
           overlay,
+          closeModerationMenu,
           destroy() {
             document.removeEventListener('keydown', onKeyDown);
             overlay.removeEventListener('click', onBackdrop);
@@ -2121,11 +2421,14 @@
             notesSaveBtn.removeEventListener('click', onNotesSave);
             notesInput.removeEventListener('input', onNotesInput);
             notesBtn.removeEventListener('click', onNotesOpen);
-            banBtn.removeEventListener('click', handleBanModeration);
-            kickBtn.removeEventListener('click', handleKickModeration);
-            muteBtn.removeEventListener('click', handleMuteModeration);
-            unbanBtn.removeEventListener('click', handleUnbanModeration);
-            unmuteBtn.removeEventListener('click', handleUnmuteModeration);
+            moderationMenuToggle.removeEventListener('click', onModerationMenuToggle);
+            moderationMenuList.removeEventListener('keydown', onModerationMenuListKeydown);
+            document.removeEventListener('click', onModerationMenuDocumentClick, true);
+            banBtn.removeEventListener('click', onBanMenuClick);
+            kickBtn.removeEventListener('click', onKickMenuClick);
+            muteBtn.removeEventListener('click', onMuteMenuClick);
+            unbanBtn.removeEventListener('click', onUnbanMenuClick);
+            unmuteBtn.removeEventListener('click', onUnmuteMenuClick);
             overlay.remove();
           }
         };
