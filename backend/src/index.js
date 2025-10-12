@@ -3272,11 +3272,11 @@ function scheduleCombatLogFetch({ serverId, victimSteamId, eventId = null, baseE
         silent: true,
         timeoutMs: 15000
       });
-      const combatLog = normaliseCombatLogReply(reply);
+      const { combatLog, error } = normaliseCombatLogReply(reply);
       await applyCombatLogToKillEvent(key, {
         eventId,
         combatLog,
-        error: null,
+        error,
         baseEvent
       });
     } catch (err) {
@@ -3334,14 +3334,61 @@ function normaliseCombatLogReply(reply) {
   const message = typeof reply?.Message === 'string'
     ? reply.Message
     : (typeof reply === 'string' ? reply : '');
-  if (!message) return null;
+  if (!message) {
+    return { combatLog: null, error: 'Combat log response was empty.' };
+  }
+
   const cleaned = stripAnsiSequences(message).replace(/\r/g, '');
-  const lines = cleaned.split('\n').map((line) => line.replace(/\s+$/g, '')).filter((line) => line);
-  if (lines.length === 0) return null;
+  if (/player\s+invalid/i.test(cleaned)) {
+    return { combatLog: null, error: 'Combat log player invalid.' };
+  }
+
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.replace(/\s+$/g, ''))
+    .filter((line) => line);
+
+  if (lines.length === 0) {
+    return { combatLog: null, error: 'Combat log response did not contain any lines.' };
+  }
+
+  const entryPattern = /^\s*(-?\d+(?:\.\d+)?)s\s+/i;
+  const MAX_ENTRY_AGE_SECONDS = 100;
+  let hasEntry = false;
+  let hasRecentEntry = false;
+  const filtered = [];
+
+  for (const line of lines) {
+    const entryMatch = line.match(entryPattern);
+    if (entryMatch) {
+      hasEntry = true;
+      const seconds = Number.parseFloat(entryMatch[1]);
+      if (Number.isFinite(seconds) && Math.abs(seconds) <= MAX_ENTRY_AGE_SECONDS) {
+        hasRecentEntry = true;
+        filtered.push(line);
+      }
+      continue;
+    }
+    filtered.push(line);
+  }
+
+  if (!hasEntry) {
+    return { combatLog: null, error: 'Combat log response did not include any entries.' };
+  }
+
+  if (!hasRecentEntry) {
+    return { combatLog: null, error: 'Combat log is older than 100 seconds.' };
+  }
+
+  const limitedLines = filtered.slice(0, 120);
+
   return {
-    text: lines.slice(0, 120).join('\n'),
-    lines: lines.slice(0, 120),
-    fetchedAt: new Date().toISOString()
+    combatLog: {
+      text: limitedLines.join('\n'),
+      lines: limitedLines,
+      fetchedAt: new Date().toISOString()
+    },
+    error: null
   };
 }
 
