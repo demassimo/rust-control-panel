@@ -1061,9 +1061,15 @@ function detachStateFromTeamBot(state) {
 }
 
 function selectTeamServerState(teamState, interaction) {
-  if (!interaction?.guildId) return null;
+  if (!interaction?.guildId) {
+    return { state: null, requiresExplicitSelection: false };
+  }
   const guildStates = teamState.guildServers.get(interaction.guildId);
-  if (!guildStates || guildStates.size === 0) return null;
+  if (!guildStates || guildStates.size === 0) {
+    return { state: null, requiresExplicitSelection: false };
+  }
+
+  const wrapState = (state) => ({ state, requiresExplicitSelection: false });
 
   const findStateByServerId = (serverId) => {
     const numeric = Number(serverId);
@@ -1079,16 +1085,16 @@ function selectTeamServerState(teamState, interaction) {
       const entry = getPendingTicketRequest(requestId);
       if (entry?.serverId != null) {
         const byServer = findStateByServerId(entry.serverId);
-        if (byServer) return byServer;
+        if (byServer) return wrapState(byServer);
       }
     }
   }
 
   if (interaction.isButton() && interaction.customId === TICKET_PANEL_BUTTON_ID) {
     for (const state of guildStates) {
-      if (state.channelId && interaction.channelId === state.channelId) return state;
+      if (state.channelId && interaction.channelId === state.channelId) return wrapState(state);
       const ticketing = getTicketConfig(state);
-      if (ticketing?.panelChannelId && ticketing.panelChannelId === interaction.channelId) return state;
+      if (ticketing?.panelChannelId && ticketing.panelChannelId === interaction.channelId) return wrapState(state);
     }
   }
 
@@ -1104,34 +1110,53 @@ function selectTeamServerState(teamState, interaction) {
     }
     if (Number.isFinite(requestedServer)) {
       const byServer = findStateByServerId(requestedServer);
-      if (byServer) return byServer;
+      if (byServer) return wrapState(byServer);
     }
   }
 
   for (const state of guildStates) {
     if (state.channelId && state.channelId === interaction.channelId) {
-      return state;
+      return wrapState(state);
     }
   }
 
   for (const state of guildStates) {
     const ticketing = getTicketConfig(state);
     if (ticketing?.panelChannelId && ticketing.panelChannelId === interaction.channelId) {
-      return state;
+      return wrapState(state);
     }
   }
 
   if (guildStates.size === 1) {
-    return guildStates.values().next().value;
+    return wrapState(guildStates.values().next().value);
   }
 
-  return guildStates.values().next().value;
+  return { state: null, requiresExplicitSelection: guildStates.size > 1 };
 }
 
 async function handleTeamInteraction(teamState, interaction) {
   if (!interaction?.guildId) return;
-  const state = selectTeamServerState(teamState, interaction);
-  if (!state) return;
+  const { state, requiresExplicitSelection } = selectTeamServerState(teamState, interaction);
+  if (!state) {
+    if (requiresExplicitSelection && typeof interaction.isChatInputCommand === 'function' && interaction.isChatInputCommand()) {
+      const canReply = typeof interaction.isRepliable === 'function'
+        ? interaction.isRepliable()
+        : Boolean(interaction.repliable);
+      if (canReply) {
+        const message = 'Multiple Rust servers are linked to this team in this guild. Please specify a server when using this command.';
+        try {
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply(message);
+          } else {
+            await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+          }
+        } catch (err) {
+          console.error('failed to notify user about ambiguous team interaction', err);
+        }
+      }
+    }
+    return;
+  }
   await handleInteraction(state, interaction);
 }
 
