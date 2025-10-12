@@ -654,6 +654,17 @@
                     <p id="aqTicketDialogError" class="notice warning hidden" role="alert"></p>
                     <p id="aqTicketDialogEmpty" class="muted small hidden">No messages in this ticket yet.</p>
                     <ol id="aqTicketDialog" class="aq-dialog" aria-live="polite"></ol>
+                    <div id="aqTicketReply" class="aq-ticket-reply hidden">
+                      <form id="aqTicketReplyForm" class="aq-ticket-reply-form" autocomplete="off">
+                        <label class="sr-only" for="aqTicketReplyInput">Reply to ticket</label>
+                        <textarea id="aqTicketReplyInput" name="message" rows="3" placeholder="Write a reply…"></textarea>
+                        <p id="aqTicketReplyNotice" class="muted small hidden"></p>
+                        <p id="aqTicketReplyError" class="notice error hidden" role="alert"></p>
+                        <div class="aq-ticket-reply-actions">
+                          <button type="submit" id="aqTicketReplySubmit" class="accent">Send reply</button>
+                        </div>
+                      </form>
+                    </div>
                   </div>
                 </section>
               </div>
