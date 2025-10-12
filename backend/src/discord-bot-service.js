@@ -327,6 +327,69 @@ async function loadTeamServers(state, { force = false } = {}) {
   return [...teamServers.values()];
 }
 
+function buildServerChoiceLabel(server) {
+  if (!server) return 'Unknown server';
+  const id = Number(server.id);
+  const name = typeof server.name === 'string' && server.name.trim()
+    ? server.name.trim()
+    : Number.isFinite(id)
+      ? `Server ${id}`
+      : 'Unknown server';
+  const suffix = Number.isFinite(id) ? ` (#${id})` : '';
+  return `${name}${suffix}`.slice(0, 100);
+}
+
+async function respondWithTeamServerChoices(state, interaction) {
+  const shouldForce = !state.teamServers || state.teamServerCacheUntil < Date.now();
+  try {
+    await loadTeamServers(state, { force: shouldForce });
+  } catch (err) {
+    console.error(`failed to load team servers for autocomplete (server ${state.serverId})`, err);
+  }
+
+  const focused = typeof interaction.options?.getFocused === 'function'
+    ? interaction.options.getFocused(true)
+    : null;
+  const rawQuery = focused?.value;
+  const query = typeof rawQuery === 'number'
+    ? String(rawQuery)
+    : typeof rawQuery === 'string'
+      ? rawQuery
+      : '';
+  const normalized = query.trim().toLowerCase();
+
+  const servers = Array.from(state.teamServers?.values() ?? []);
+  servers.sort((a, b) => {
+    const nameA = (a?.name ?? '').toLowerCase();
+    const nameB = (b?.name ?? '').toLowerCase();
+    if (nameA && nameB && nameA !== nameB) return nameA.localeCompare(nameB);
+    return Number(a?.id ?? 0) - Number(b?.id ?? 0);
+  });
+
+  const filtered = normalized
+    ? servers.filter((server) => {
+        const idText = String(server?.id ?? '').toLowerCase();
+        const nameText = (server?.name ?? '').toLowerCase();
+        return idText.includes(normalized) || nameText.includes(normalized);
+      })
+    : servers;
+
+  const choices = filtered
+    .slice(0, 25)
+    .map((server) => ({
+      name: buildServerChoiceLabel(server),
+      value: Number(server.id)
+    }))
+    .filter((choice) => Number.isFinite(choice.value));
+
+  try {
+    await interaction.respond(choices);
+  } catch (err) {
+    console.error(`failed to respond to autocomplete for server ${state.serverId}`, err);
+  }
+  return true;
+}
+
 function createStatusClient(state) {
   state.statusReady = false;
   const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
@@ -440,9 +503,10 @@ function buildCommandDefinitions() {
             {
               type: ApplicationCommandOptionType.Integer,
               name: 'id',
-              description: 'Server ID to query',
+              description: 'Select the server to query',
               required: true,
-              min_value: 1
+              min_value: 1,
+              autocomplete: true
             }
           ]
         },
@@ -619,9 +683,10 @@ function buildCommandDefinitions() {
             {
               type: ApplicationCommandOptionType.Integer,
               name: 'server',
-              description: 'Server ID to associate with the ticket',
+              description: 'Select the server to associate with the ticket',
               required: false,
-              min_value: 1
+              min_value: 1,
+              autocomplete: true
             }
           ]
         },
@@ -1912,7 +1977,7 @@ async function handleRustStatusCommand(state, interaction) {
     const serverId = Number(requestedId);
     if (!Number.isFinite(serverId) || serverId <= 0) {
       await interaction.reply({
-        content: 'Please provide a valid server ID.',
+        content: 'Please select a valid server.',
         flags: MessageFlags.Ephemeral
       });
       return;
@@ -3261,12 +3326,52 @@ async function handleRustLookupCommand(state, interaction) {
   await interaction.editReply('Unknown subcommand.');
 }
 
+async function handleAutocomplete(state, interaction) {
+  const focused = typeof interaction.options?.getFocused === 'function'
+    ? interaction.options.getFocused(true)
+    : null;
+  const optionName = focused?.name;
+
+  if (interaction.commandName === 'ruststatus') {
+    const group = typeof interaction.options?.getSubcommandGroup === 'function'
+      ? interaction.options.getSubcommandGroup(false)
+      : null;
+    const sub = typeof interaction.options?.getSubcommand === 'function'
+      ? interaction.options.getSubcommand(false)
+      : null;
+    if (!group && sub === 'server' && optionName === 'id') {
+      await respondWithTeamServerChoices(state, interaction);
+      return true;
+    }
+  }
+
+  if (interaction.commandName === 'ticket') {
+    const group = typeof interaction.options?.getSubcommandGroup === 'function'
+      ? interaction.options.getSubcommandGroup(false)
+      : null;
+    const sub = typeof interaction.options?.getSubcommand === 'function'
+      ? interaction.options.getSubcommand(false)
+      : null;
+    if (!group && sub === 'open' && optionName === 'server') {
+      await respondWithTeamServerChoices(state, interaction);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function handleInteraction(state, interaction) {
   if (interaction.guildId && state.guildId && interaction.guildId !== state.guildId) {
     return;
   }
 
   try {
+    if (typeof interaction.isAutocomplete === 'function' && interaction.isAutocomplete()) {
+      const handled = await handleAutocomplete(state, interaction);
+      if (handled) return;
+    }
+
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'ruststatus') {
         await handleRustStatusCommand(state, interaction);
