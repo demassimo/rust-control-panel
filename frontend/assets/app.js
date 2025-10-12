@@ -1144,7 +1144,7 @@
   }
 
   const COMBAT_LOG_HEADER_REGEX = /^\s*time\s+attacker\s+id\s+target\s+id\s+weapon\s+ammo\s+area\s+distance\s+old_hp\s+new_hp\s+info\s+hits\s+integrity\s+travel\s+mismatch\s+desync\s*$/i;
-  const COMBAT_LOG_ENTRY_REGEX = /^(?<time>-?\d+(?:\.\d+)?)s\s+(?<attacker>\S+)\s+(?<attackerId>-?\d+)\s+(?<target>\S+)\s+(?<targetId>-?\d+)\s+(?<weapon>\S+)\s+(?<ammo>\S+)\s+(?<area>\S+)\s+(?<distance>-?\d+(?:\.\d+)?)(?<distanceUnit>m)?\s+(?<oldHp>-?\d+(?:\.\d+)?)\s+(?<newHp>-?\d+(?:\.\d+)?)\s+(?<info>\S+)\s+(?<hits>-?\d+)\s+(?<integrity>-?\d+(?:\.\d+)?)\s+(?<travel>-?\d+(?:\.\d+)?)(?<travelUnit>s|m)?\s+(?<mismatch>-?\d+(?:\.\d+)?)(?<mismatchUnit>m|s)?\s+(?<desync>-?\d+(?:\.\d+)?)\s*$/i;
+  const COMBAT_LOG_ENTRY_REGEX = /^(?<time>-?\d+(?:\.\d+)?)s\s+(?<attacker>.+?)\s+(?<attackerId>-?\d+)\s+(?<target>.+?)\s+(?<targetId>-?\d+)\s+(?<weapon>\S+)\s+(?<ammo>\S+)\s+(?<area>\S+)\s+(?<distance>-?\d+(?:\.\d+)?)(?<distanceUnit>m)?\s+(?<oldHp>-?\d+(?:\.\d+)?)\s+(?<newHp>-?\d+(?:\.\d+)?)\s+(?<info>.*?)\s+(?<hits>-?\d+)\s+(?<integrity>-?\d+(?:\.\d+)?)\s+(?<travel>-?\d+(?:\.\d+)?)(?<travelUnit>s|m)?\s+(?<mismatch>-?\d+(?:\.\d+)?)(?<mismatchUnit>m|s)?\s+(?<desync>-?\d+(?:\.\d+)?)\s*$/i;
 
   function parseKillRawLog(raw) {
     if (typeof raw !== 'string') return null;
@@ -1235,6 +1235,8 @@
       return Number.isFinite(num) ? num : null;
     };
 
+    const trimValue = (value) => (typeof value === 'string' ? value.trim() : value);
+
     for (let i = startIndex; i < normalized.length; i += 1) {
       const rawLine = normalized[i].trim();
       if (!rawLine || rawLine.startsWith('+')) continue;
@@ -1245,18 +1247,18 @@
         raw: rawLine,
         timeSeconds: toNumber(groups.time),
         timeRaw: groups.time ? `${groups.time}s` : null,
-        attacker: groups.attacker || null,
+        attacker: trimValue(groups.attacker) || null,
         attackerId: groups.attackerId || null,
-        target: groups.target || null,
+        target: trimValue(groups.target) || null,
         targetId: groups.targetId || null,
-        weapon: groups.weapon || null,
-        ammo: groups.ammo || null,
-        area: groups.area || null,
+        weapon: trimValue(groups.weapon) || null,
+        ammo: trimValue(groups.ammo) || null,
+        area: trimValue(groups.area) || null,
         distanceMeters: toNumber(groups.distance),
         distanceRaw: groups.distance ? `${groups.distance}${groups.distanceUnit || ''}` : null,
         oldHp: toNumber(groups.oldHp),
         newHp: toNumber(groups.newHp),
-        info: groups.info || null,
+        info: trimValue(groups.info) || null,
         hits: toNumber(groups.hits),
         integrity: toNumber(groups.integrity),
         travelSeconds: toNumber(groups.travel),
