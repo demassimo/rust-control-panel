@@ -3978,7 +3978,7 @@
     return normalized;
   }
 
-  function pickString(...values) {
+  function pickServerInfoString(...values) {
     for (const value of values) {
       if (value == null) continue;
       const str = String(value).trim();
@@ -4104,9 +4104,9 @@
     const networkIn = pickNumber(serverInfo?.NetworkIn, serverInfo?.networkIn, serverInfo?.network_in);
     const networkOut = pickNumber(serverInfo?.NetworkOut, serverInfo?.networkOut, serverInfo?.network_out);
     const uptimeSeconds = pickNumber(serverInfo?.Uptime, serverInfo?.uptime, serverInfo?.uptimeSeconds, serverInfo?.UptimeSeconds);
-    const gameTime = pickString(serverInfo?.GameTime, serverInfo?.gameTime, serverInfo?.game_time);
-    const lastSave = pickString(serverInfo?.SaveCreatedTime, serverInfo?.saveCreatedTime, serverInfo?.save_created_time);
-    const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
+    const gameTime = pickServerInfoString(serverInfo?.GameTime, serverInfo?.gameTime, serverInfo?.game_time);
+    const lastSave = pickServerInfoString(serverInfo?.SaveCreatedTime, serverInfo?.saveCreatedTime, serverInfo?.save_created_time);
+    const hostname = pickServerInfoString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const online = !!status?.ok;
     if (pill) {
       let cls = 'status-pill';
@@ -4341,7 +4341,7 @@
     const players = pickNumber(status?.details?.players?.online, serverInfo?.Players, serverInfo?.players);
     const maxPlayers = pickNumber(status?.details?.players?.max, serverInfo?.MaxPlayers, serverInfo?.maxPlayers);
     const joining = pickNumber(status?.details?.joining, status?.details?.sleepers, serverInfo?.Joining, serverInfo?.joining);
-    const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
+    const hostname = pickServerInfoString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const lastCheck = status.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : null;
 
     if (pill) {
