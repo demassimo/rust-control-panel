@@ -418,6 +418,11 @@ function createCommandClient(state) {
 function buildCommandDefinitions() {
   return [
     {
+      name: 'help',
+      description: 'Show information about available commands',
+      dm_permission: false
+    },
+    {
       name: 'ruststatus',
       description: 'Manage the Rust server status message',
       dm_permission: false,
@@ -1136,6 +1141,10 @@ function selectTeamServerState(teamState, interaction) {
 
 async function handleTeamInteraction(teamState, interaction) {
   if (!interaction?.guildId) return;
+  if (interaction.isChatInputCommand?.() && interaction.commandName === 'help') {
+    await handleHelpCommand(interaction, { teamState });
+    return;
+  }
   const { state, requiresExplicitSelection } = selectTeamServerState(teamState, interaction);
   if (!state) {
     if (requiresExplicitSelection && typeof interaction.isChatInputCommand === 'function' && interaction.isChatInputCommand()) {
@@ -1861,6 +1870,105 @@ function buildDetailedPlayerEmbed(row) {
   }
 
   return embed;
+}
+
+function collectHelpServerSummaries({ state = null, teamState = null, guildId = null } = {}) {
+  const entries = new Map();
+
+  const recordServer = (serverState) => {
+    if (!serverState) return;
+    const primaryId = Number(serverState.serverId);
+    if (Number.isFinite(primaryId) && !entries.has(primaryId)) {
+      let name = null;
+      if (serverState.serverName) {
+        name = serverState.serverName;
+      } else if (serverState.teamServers instanceof Map && serverState.teamServers.has(primaryId)) {
+        name = serverState.teamServers.get(primaryId)?.name ?? null;
+      }
+      entries.set(primaryId, name);
+    }
+
+    if (serverState.teamServers instanceof Map) {
+      for (const [rawId, info] of serverState.teamServers.entries()) {
+        const numericId = Number(rawId);
+        if (!Number.isFinite(numericId) || entries.has(numericId)) continue;
+        entries.set(numericId, info?.name ?? null);
+      }
+    }
+  };
+
+  if (teamState) {
+    if (guildId && teamState.guildServers instanceof Map) {
+      const guildStates = teamState.guildServers.get(guildId);
+      if (guildStates && guildStates.size) {
+        for (const guildState of guildStates) {
+          recordServer(guildState);
+        }
+      }
+    }
+
+    if (entries.size === 0 && teamState.serverStates instanceof Map) {
+      for (const guildState of teamState.serverStates.values()) {
+        recordServer(guildState);
+      }
+    }
+  }
+
+  if (state) {
+    recordServer(state);
+  }
+
+  const servers = Array.from(entries.entries()).map(([id, name]) => ({
+    id,
+    name: name ?? `Server ${id}`
+  }));
+
+  servers.sort((a, b) => a.id - b.id);
+  return servers;
+}
+
+async function handleHelpCommand(interaction, { state = null, teamState = null } = {}) {
+  const description = [
+    'Use these commands to manage your Rust servers and support tickets:',
+    '',
+    '• `/ruststatus status` — Show the latest status snapshot.',
+    '• `/ruststatus listservers` — List the Rust servers linked to this team.',
+    '• `/ruststatus refresh` — Force an immediate status refresh in the configured channel.',
+    '• `/ruststatus config` — Adjust embed fields, colours, and the presence template.',
+    '',
+    '• `/rustlookup player <query>` — Search for player records by name or SteamID.',
+    '• `/rustlookup steamid <id>` — Retrieve the detailed record for a specific SteamID64.',
+    '',
+    '• `/ticket open` — Open a support ticket for the staff team.',
+    '• `/ticket close` — Close a ticket channel and optionally archive it.',
+    '• `/ticket panel` — Post or update the interactive ticket panel.',
+    '• `/ticket config` — Configure ticket categories, logging, staff roles, and messages.',
+    '',
+    'Most commands accept a **server** option when multiple servers are linked. Run `/ruststatus listservers` to see the available IDs.'
+  ].join('\n');
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('Rust Control Panel Bot Help')
+    .setDescription(description);
+
+  const servers = collectHelpServerSummaries({ state, teamState, guildId: interaction.guildId });
+  if (servers.length) {
+    const lines = servers
+      .map((server) => {
+        const label = escapeMarkdown(server.name ?? `Server ${server.id}`);
+        return `• **${label}** — ID \`${server.id}\``;
+      })
+      .join('\n');
+    embed.addFields({ name: 'Linked servers', value: lines });
+  }
+
+  const payload = { embeds: [embed], flags: MessageFlags.Ephemeral };
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(payload);
+  } else {
+    await interaction.reply(payload);
+  }
 }
 
 async function handleRustStatusCommand(state, interaction) {
@@ -3268,7 +3376,9 @@ async function handleInteraction(state, interaction) {
 
   try {
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'ruststatus') {
+      if (interaction.commandName === 'help') {
+        await handleHelpCommand(interaction, { state, teamState: state.teamCommandState });
+      } else if (interaction.commandName === 'ruststatus') {
         await handleRustStatusCommand(state, interaction);
       } else if (interaction.commandName === 'rustlookup') {
         await handleRustLookupCommand(state, interaction);
