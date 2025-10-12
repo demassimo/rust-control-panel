@@ -3037,7 +3037,8 @@ button.chat-filter-btn:focus-visible {
 
 .player-moderation-menu-list {
   position: absolute;
-  top: calc(100% + 6px);
+  top: auto;
+  bottom: calc(100% + 6px);
   right: 0;
   min-width: 200px;
   margin: 0;
