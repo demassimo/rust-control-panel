@@ -1398,6 +1398,30 @@ function createApi(dbh, dialect) {
       if (!channelId) return null;
       return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
     },
+    async listDiscordTicketsForServer(serverId, { status='open', limit=25 } = {}){
+      const numericServerId = Number(serverId);
+      if (!Number.isFinite(numericServerId)) return [];
+      const where = ['server_id=?'];
+      const params = [numericServerId];
+      const statusValue = typeof status === 'string' && status.trim().length ? status.trim().toLowerCase() : '';
+      if (statusValue && statusValue !== 'all') {
+        where.push('LOWER(status)=?');
+        params.push(statusValue);
+      }
+      const limitValue = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 100) : 25;
+      params.push(limitValue);
+      const sql = `SELECT * FROM discord_tickets WHERE ${where.join(' AND ')} ORDER BY datetime(created_at) DESC, id DESC LIMIT ?`;
+      return await dbh.all(sql, params);
+    },
+    async getDiscordTicketById(serverId, ticketId){
+      const numericServerId = Number(serverId);
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericServerId) || !Number.isFinite(numericTicketId)) return null;
+      return await dbh.get(
+        'SELECT * FROM discord_tickets WHERE server_id=? AND id=?',
+        [numericServerId, numericTicketId]
+      );
+    },
     async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
       if (!channelId) return null;
       const now = new Date().toISOString();
