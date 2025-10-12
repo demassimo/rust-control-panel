@@ -3969,11 +3969,30 @@
     return null;
   }
 
-  function pickString(...values) {
+  const PLACEHOLDER_STRINGS = new Set(['-', '--', 'n/a', 'na', 'none', 'null', 'undefined']);
+
+  function normalizePlaceholderCandidate(str) {
+    const trimmed = str.replace(/[\u2013\u2014\u2212]/g, '-').trim();
+    if (!trimmed) return '';
+    const normalized = trimmed.replace(/\s*\/\s*/g, '/').replace(/\s+/g, ' ').toLowerCase();
+    return normalized;
+  }
+
+  function pickServerInfoString(...values) {
     for (const value of values) {
       if (value == null) continue;
       const str = String(value).trim();
-      if (str) return str;
+      if (!str) continue;
+      const normalized = normalizePlaceholderCandidate(str);
+      if (!normalized) continue;
+      const collapsed = normalized.replace(/[^a-z0-9]/g, '');
+      const dashNormalized = str.replace(/[\u2013\u2014\u2212]/g, '-');
+      const bareNa = collapsed === 'na' && !/[\/\.\-\s]/.test(dashNormalized);
+      const isPlaceholder =
+        (PLACEHOLDER_STRINGS.has(normalized) && !(normalized === 'na' && bareNa)) ||
+        (collapsed && PLACEHOLDER_STRINGS.has(collapsed) && !bareNa);
+      if (isPlaceholder) continue;
+      return str;
     }
     return null;
   }
@@ -4085,9 +4104,9 @@
     const networkIn = pickNumber(serverInfo?.NetworkIn, serverInfo?.networkIn, serverInfo?.network_in);
     const networkOut = pickNumber(serverInfo?.NetworkOut, serverInfo?.networkOut, serverInfo?.network_out);
     const uptimeSeconds = pickNumber(serverInfo?.Uptime, serverInfo?.uptime, serverInfo?.uptimeSeconds, serverInfo?.UptimeSeconds);
-    const gameTime = pickString(serverInfo?.GameTime, serverInfo?.gameTime, serverInfo?.game_time);
-    const lastSave = pickString(serverInfo?.SaveCreatedTime, serverInfo?.saveCreatedTime, serverInfo?.save_created_time);
-    const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
+    const gameTime = pickServerInfoString(serverInfo?.GameTime, serverInfo?.gameTime, serverInfo?.game_time);
+    const lastSave = pickServerInfoString(serverInfo?.SaveCreatedTime, serverInfo?.saveCreatedTime, serverInfo?.save_created_time);
+    const hostname = pickServerInfoString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const online = !!status?.ok;
     if (pill) {
       let cls = 'status-pill';
@@ -4322,7 +4341,7 @@
     const players = pickNumber(status?.details?.players?.online, serverInfo?.Players, serverInfo?.players);
     const maxPlayers = pickNumber(status?.details?.players?.max, serverInfo?.MaxPlayers, serverInfo?.maxPlayers);
     const joining = pickNumber(status?.details?.joining, status?.details?.sleepers, serverInfo?.Joining, serverInfo?.joining);
-    const hostname = pickString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
+    const hostname = pickServerInfoString(status?.details?.hostname, serverInfo?.Hostname, serverInfo?.hostname);
     const lastCheck = status.lastCheck ? new Date(status.lastCheck).toLocaleTimeString() : null;
 
     if (pill) {
