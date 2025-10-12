@@ -9,7 +9,6 @@ const ALLOWED_PRESENCE_STATUSES = new Set(['online', 'idle', 'dnd', 'invisible']
 export const DEFAULT_TICKETING_CONFIG = Object.freeze({
   enabled: false,
   categoryId: null,
-  archiveChannelId: null,
   logChannelId: null,
   staffRoleId: null,
   welcomeMessage: 'Thanks for contacting the Rust server team! A staff member will be with you shortly.',
@@ -101,7 +100,6 @@ function normalizeTicketingConfig(ticketing = {}) {
   return {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : base.enabled,
     categoryId: sanitizeSnowflake(source.categoryId ?? source.category_id),
-    archiveChannelId: sanitizeSnowflake(source.archiveChannelId ?? source.archive_channel_id),
     logChannelId: sanitizeSnowflake(source.logChannelId ?? source.log_channel_id),
     staffRoleId: sanitizeSnowflake(source.staffRoleId ?? source.staff_role_id),
     welcomeMessage: sanitizeTicketMessage(source.welcomeMessage ?? source.welcome_message, base.welcomeMessage),
