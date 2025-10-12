@@ -1150,8 +1150,44 @@
     return null;
   }
 
-  const COMBAT_LOG_HEADER_REGEX = /^\s*time\s+attacker\s+id\s+target\s+id\s+weapon\s+ammo\s+area\s+distance\s+old_hp\s+new_hp\s+info\s+hits\s+integrity\s+travel\s+mismatch\s+desync\s*$/i;
-  const COMBAT_LOG_ENTRY_REGEX = /^(?<time>-?\d+(?:\.\d+)?)s\s+(?<attacker>.+?)\s+(?<attackerId>-?\d+)\s+(?<target>.+?)\s+(?<targetId>-?\d+)\s+(?<weapon>\S+)\s+(?<ammo>\S+)\s+(?<area>\S+)\s+(?<distance>-?\d+(?:\.\d+)?)(?<distanceUnit>m)?\s+(?<oldHp>-?\d+(?:\.\d+)?)\s+(?<newHp>-?\d+(?:\.\d+)?)\s+(?<info>.*?)\s+(?<hits>-?\d+)\s+(?<integrity>-?\d+(?:\.\d+)?)\s+(?<travel>-?\d+(?:\.\d+)?)(?<travelUnit>s|m)?\s+(?<mismatch>-?\d+(?:\.\d+)?)(?<mismatchUnit>m|s)?\s+(?<desync>-?\d+(?:\.\d+)?)\s*$/i;
+  const COMBAT_LOG_HEADER_REGEX = /^\s*time\s+attacker\s+id\s+target\s+id\s+weapon\s+ammo\s+area\s+distance\s+old[_\s]*hp\s+new[_\s]*hp\s+info\s+hits\s+integrity\s+travel\s+mismatch\s+desync\s*$/i;
+  const COMBAT_LOG_ENTRY_REGEX = new RegExp(
+    [
+      '^(?<time>-?\\d+(?:\\.\\d+)?)s\\s+',
+      '(?<attacker>.+?)\\s+',
+      '(?<attackerId>-?\\d+)\\s+',
+      '(?<target>.+?)\\s+',
+      '(?<targetId>-?\\d+)\\s+',
+      '(?<weapon>\\S+|-|N\\/?A|—)\\s+',
+      '(?<ammo>\\S+|-|N\\/?A|—)\\s+',
+      '(?<area>\\S+)\\s+',
+      '(?<distance>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s*(?<distanceUnit>m)?\\s+',
+      '(?<oldHp>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s+',
+      '(?<newHp>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s+',
+      '(?<info>.*?)\\s+',
+      '(?<hits>-?\\d+|N\\/?A|—|-)\\s+',
+      '(?<integrity>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s+',
+      '(?<travel>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s*(?<travelUnit>s|m)?\\s+',
+      '(?<mismatch>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s*(?<mismatchUnit>m|s)?\\s+',
+      '(?<desync>-?\\d+(?:\\.\\d+)?|N\\/?A|—|-)\\s*$'
+    ].join(''),
+    'iu'
+  );
+
+  const NIL = /^(?:-|N\/?A|—)$/i;
+  function num(value) {
+    if (value == null) return null;
+    const trimmed = typeof value === 'string' ? value.trim() : String(value);
+    if (!trimmed || NIL.test(trimmed)) return null;
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  function text(value) {
+    if (value == null) return null;
+    const trimmed = typeof value === 'string' ? value.trim() : String(value);
+    return trimmed && !NIL.test(trimmed) ? trimmed : null;
+  }
 
   function parseKillRawLog(raw) {
     if (typeof raw !== 'string') return null;
@@ -1236,43 +1272,42 @@
       startIndex = 1;
     }
 
-    const toNumber = (value) => {
-      if (value == null || value === '') return null;
-      const num = Number(value);
-      return Number.isFinite(num) ? num : null;
-    };
-
-    const trimValue = (value) => (typeof value === 'string' ? value.trim() : value);
-
     for (let i = startIndex; i < normalized.length; i += 1) {
       const rawLine = normalized[i].trim();
       if (!rawLine || rawLine.startsWith('+')) continue;
       const match = rawLine.match(COMBAT_LOG_ENTRY_REGEX);
       if (!match || !match.groups) continue;
       const groups = match.groups;
+      const timeValue = text(groups.time);
+      const distanceValue = text(groups.distance);
+      const distanceUnit = groups.distanceUnit ? groups.distanceUnit.trim() : '';
+      const travelValue = text(groups.travel);
+      const travelUnit = groups.travelUnit ? groups.travelUnit.trim() : '';
+      const mismatchValue = text(groups.mismatch);
+      const mismatchUnit = groups.mismatchUnit ? groups.mismatchUnit.trim() : '';
       const record = {
         raw: rawLine,
-        timeSeconds: toNumber(groups.time),
-        timeRaw: groups.time ? `${groups.time}s` : null,
-        attacker: trimValue(groups.attacker) || null,
-        attackerId: groups.attackerId || null,
-        target: trimValue(groups.target) || null,
-        targetId: groups.targetId || null,
-        weapon: trimValue(groups.weapon) || null,
-        ammo: trimValue(groups.ammo) || null,
-        area: trimValue(groups.area) || null,
-        distanceMeters: toNumber(groups.distance),
-        distanceRaw: groups.distance ? `${groups.distance}${groups.distanceUnit || ''}` : null,
-        oldHp: toNumber(groups.oldHp),
-        newHp: toNumber(groups.newHp),
-        info: trimValue(groups.info) || null,
-        hits: toNumber(groups.hits),
-        integrity: toNumber(groups.integrity),
-        travelSeconds: toNumber(groups.travel),
-        travelRaw: groups.travel ? `${groups.travel}${groups.travelUnit || ''}` : null,
-        mismatchMeters: toNumber(groups.mismatch),
-        mismatchRaw: groups.mismatch ? `${groups.mismatch}${groups.mismatchUnit || ''}` : null,
-        desync: toNumber(groups.desync)
+        timeSeconds: num(timeValue),
+        timeRaw: timeValue ? `${timeValue}s` : null,
+        attacker: text(groups.attacker),
+        attackerId: text(groups.attackerId),
+        target: text(groups.target),
+        targetId: text(groups.targetId),
+        weapon: text(groups.weapon),
+        ammo: text(groups.ammo),
+        area: text(groups.area),
+        distanceMeters: num(distanceValue),
+        distanceRaw: distanceValue ? `${distanceValue}${distanceUnit}` : null,
+        oldHp: num(groups.oldHp),
+        newHp: num(groups.newHp),
+        info: text(groups.info),
+        hits: num(groups.hits),
+        integrity: num(groups.integrity),
+        travelSeconds: num(travelValue),
+        travelRaw: travelValue ? `${travelValue}${travelUnit}` : null,
+        mismatchMeters: num(mismatchValue),
+        mismatchRaw: mismatchValue ? `${mismatchValue}${mismatchUnit}` : null,
+        desync: num(groups.desync)
       };
       records.push(record);
     }
