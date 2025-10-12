@@ -1196,6 +1196,107 @@
     ].join(''),
     'iu'
   );
+  const COMBAT_LOG_MEASUREMENT_PATTERN = /^(-?\d+(?:\.\d+)?|N\/?A|—|-)$/i;
+
+  function splitCombatLogMeasurement(token, units = []) {
+    const trimmed = typeof token === 'string' ? token.trim() : '';
+    if (!trimmed) {
+      return { value: '', unit: '' };
+    }
+
+    const normalisedUnits = units.map((unit) => String(unit || '').toLowerCase());
+    const lower = trimmed.toLowerCase();
+    for (const unit of normalisedUnits) {
+      if (unit && lower.endsWith(unit)) {
+        const valuePart = trimmed.slice(0, trimmed.length - unit.length).trim();
+        if (valuePart && COMBAT_LOG_MEASUREMENT_PATTERN.test(valuePart)) {
+          return { value: valuePart, unit };
+        }
+      }
+    }
+
+    if (COMBAT_LOG_MEASUREMENT_PATTERN.test(trimmed)) {
+      return { value: trimmed, unit: '' };
+    }
+
+    return { value: trimmed, unit: '' };
+  }
+
+  function parseCombatLogFallbackGroups(rawLine) {
+    const headMatch = rawLine.match(/^(-?\d+(?:\.\d+)?)(?:s)?\s+(.*?)\s+(-?\d+)\s+(.*?)\s+(-?\d+)\s+(.*)$/i);
+    if (!headMatch) {
+      return null;
+    }
+
+    const [, timeRaw, attackerRaw, attackerIdRaw, targetRaw, targetIdRaw, remainderRaw] = headMatch;
+    const remainder = remainderRaw.replace(/\t+/g, ' ').trim();
+    if (!remainder) {
+      return null;
+    }
+
+    const segments = remainder
+      .split(/\s{2,}/)
+      .map((segment) => segment.trim())
+      .filter((segment) => segment);
+
+    if (segments.length < 11) {
+      return null;
+    }
+
+    const baseColumns = segments.slice(0, 6);
+    if (baseColumns.length < 6) {
+      return null;
+    }
+
+    const tailStart = segments.length - 5;
+    if (tailStart < 6) {
+      return null;
+    }
+
+    const infoSegments = segments.slice(6, tailStart);
+    const infoValue = infoSegments.length ? infoSegments.join('  ') : '';
+
+    const timeParts = splitCombatLogMeasurement(timeRaw, ['s']);
+    const distanceParts = splitCombatLogMeasurement(baseColumns[3], ['m']);
+    const travelParts = splitCombatLogMeasurement(segments[tailStart + 2], ['s', 'm']);
+    const mismatchParts = splitCombatLogMeasurement(segments[tailStart + 3], ['s', 'm']);
+    const desyncParts = splitCombatLogMeasurement(segments[tailStart + 4], ['s', 'm']);
+
+    const attackerId = String(attackerIdRaw ?? '').trim();
+    const targetId = String(targetIdRaw ?? '').trim();
+    if (!/^-?\d+$/.test(attackerId) || !/^-?\d+$/.test(targetId)) {
+      return null;
+    }
+
+    const groups = {
+      time: timeParts.value,
+      attacker: attackerRaw?.trim() ?? '',
+      attackerId,
+      target: targetRaw?.trim() ?? '',
+      targetId,
+      weapon: baseColumns[0] ?? '',
+      ammo: baseColumns[1] ?? '',
+      area: baseColumns[2] ?? '',
+      distance: distanceParts.value,
+      distanceUnit: distanceParts.unit,
+      oldHp: baseColumns[4] ?? '',
+      newHp: baseColumns[5] ?? '',
+      info: infoValue,
+      hits: segments[tailStart] ?? '',
+      integrity: segments[tailStart + 1] ?? '',
+      travel: travelParts.value,
+      travelUnit: travelParts.unit,
+      mismatch: mismatchParts.value,
+      mismatchUnit: mismatchParts.unit,
+      desync: desyncParts.value
+    };
+
+    if (!groups.time) {
+      return null;
+    }
+
+    return groups;
+  }
 
   const NIL = /^(?:-|N\/?A|—)$/i;
   function num(value) {
@@ -1299,8 +1400,8 @@
       const rawLine = normalized[i].trim();
       if (!rawLine || rawLine.startsWith('+')) continue;
       const match = rawLine.match(COMBAT_LOG_ENTRY_REGEX);
-      if (!match || !match.groups) continue;
-      const groups = match.groups;
+      const groups = match?.groups ?? parseCombatLogFallbackGroups(rawLine);
+      if (!groups) continue;
       const timeValue = text(groups.time);
       const distanceValue = text(groups.distance);
       const distanceUnit = groups.distanceUnit ? groups.distanceUnit.trim() : '';
