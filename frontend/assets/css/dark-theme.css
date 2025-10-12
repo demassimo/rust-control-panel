@@ -427,7 +427,7 @@ main.grid{
   border:1px solid rgba(148,163,184,.28);
   border-radius:var(--radius-lg);
   box-shadow:0 18px 36px rgba(0,0,0,.5);
-  z-index:20;
+  z-index:9999;
 }
 
 .player-moderation-menu-row{width:100%}
