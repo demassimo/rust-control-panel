@@ -57,6 +57,10 @@ const TICKET_MODAL_PREFIX = 'ticket:modal:';
 const TICKET_SELECT_PREFIX = 'ticket:select:';
 const MAX_PENDING_REQUEST_AGE_MS = 10 * 60 * 1000;
 
+// Server-specific Discord bots are limited to presence/status updates only. All
+// interactive slash commands are handled by the team-level bot instead.
+const ENABLE_SERVER_COMMAND_BOT = false;
+
 const pendingTicketRequests = new Map();
 const teamBots = new Map();
 
@@ -1289,6 +1293,7 @@ async function ensureBot(integration) {
   }
 
   const previousCommandClient = state.commandClient;
+  const previousTeamClient = state.teamCommandState?.client ?? null;
 
   state.commandToken = commandToken;
 
@@ -1332,7 +1337,29 @@ async function ensureBot(integration) {
   state.teamToken = teamToken;
 
   const usingTeamCommand = Boolean(teamToken);
-  const useSharedClient = !usingTeamCommand && Boolean(commandToken) && commandToken === statusToken;
+  const allowServerCommands =
+    ENABLE_SERVER_COMMAND_BOT && !usingTeamCommand && Boolean(commandToken);
+  const useSharedClient = allowServerCommands && commandToken === statusToken;
+
+  if (
+    !allowServerCommands &&
+    previousCommandClient &&
+    previousCommandClient !== state.statusClient &&
+    previousCommandClient !== previousTeamClient
+  ) {
+    try {
+      await previousCommandClient.destroy();
+    } catch (err) {
+      console.error(`failed to destroy server command client for server ${serverId}`, err);
+    }
+    if (state.commandClient === previousCommandClient) {
+      state.commandClient = null;
+      state.commandReady = false;
+      state.commandConnectPromise = null;
+      state.commandCooldownMs = MIN_REFRESH_MS;
+      state.commandCooldownUntil = 0;
+    }
+  }
 
   if (state.useSharedClient !== useSharedClient) {
     if (state.useSharedClient && state.commandClient === state.statusClient) {
@@ -1340,6 +1367,11 @@ async function ensureBot(integration) {
       state.commandReady = false;
     }
     state.useSharedClient = useSharedClient;
+  }
+
+  if (!allowServerCommands && !usingTeamCommand) {
+    state.commandCooldownMs = MIN_REFRESH_MS;
+    state.commandCooldownUntil = 0;
   }
 
   if (usingTeamCommand) {
@@ -1374,7 +1406,7 @@ async function ensureBot(integration) {
     } else {
       state.commandReady = false;
     }
-  } else if (commandToken) {
+  } else if (allowServerCommands) {
     if (state.commandClient && state.commandClient !== state.statusClient && state.commandToken !== commandToken) {
       try {
         await state.commandClient.destroy();
@@ -1436,7 +1468,7 @@ async function ensureBot(integration) {
     }
   }
 
-  if (!usingTeamCommand && !state.useSharedClient && commandToken) {
+  if (allowServerCommands && !state.useSharedClient) {
     if (state.commandCooldownUntil <= now && !state.commandReady) {
       if (!state.commandClient) {
         state.commandClient = createCommandClient(state);
