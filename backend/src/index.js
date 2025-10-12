@@ -4513,6 +4513,7 @@ function projectDiscordIntegration(row) {
     createdAt: row.created_at || row.createdAt || null,
     updatedAt: row.updated_at || row.updatedAt || null,
     hasToken: Boolean(row.bot_token),
+    hasCommandToken: Boolean(row.command_bot_token),
     config: parseDiscordBotConfig(configJson)
   };
 }
@@ -5277,12 +5278,19 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
     const guildId = sanitizeDiscordSnowflake(body.guildId ?? body.guild_id);
     const channelId = sanitizeDiscordSnowflake(body.channelId ?? body.channel_id);
     const tokenInput = sanitizeDiscordToken(body.botToken ?? body.bot_token);
+    const commandTokenInput = sanitizeDiscordToken(body.commandBotToken ?? body.command_bot_token);
     if (!guildId || !channelId) return res.status(400).json({ error: 'missing_fields' });
     let botToken = tokenInput;
     if (!botToken) {
       const existingToken = existing?.bot_token;
       if (existingToken) botToken = existingToken;
       else return res.status(400).json({ error: 'missing_bot_token' });
+    }
+    let commandBotToken = commandTokenInput;
+    if (!commandBotToken) {
+      const existingCommandToken = existing?.command_bot_token ?? existing?.commandBotToken;
+      if (existingCommandToken) commandBotToken = existingCommandToken;
+      else commandBotToken = botToken;
     }
     let statusMessageId = existing?.status_message_id ?? existing?.statusMessageId ?? null;
     if (existing?.channel_id && existing.channel_id !== channelId) {
@@ -5291,6 +5299,7 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
     const configJson = existing?.config_json ?? existing?.configJson ?? null;
     await db.saveServerDiscordIntegration(id, {
       bot_token: botToken,
+      command_bot_token: commandBotToken,
       guild_id: guildId,
       channel_id: channelId,
       status_message_id: statusMessageId,

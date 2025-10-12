@@ -6,6 +6,22 @@ export const STATUS_COLORS = Object.freeze({
 
 const ALLOWED_PRESENCE_STATUSES = new Set(['online', 'idle', 'dnd', 'invisible']);
 
+export const DEFAULT_TICKETING_CONFIG = Object.freeze({
+  enabled: false,
+  categoryId: null,
+  archiveChannelId: null,
+  logChannelId: null,
+  staffRoleId: null,
+  welcomeMessage: 'Thanks for contacting the Rust server team! A staff member will be with you shortly.',
+  questionPrompt: 'Please describe your issue so the team can help.',
+  pingStaffOnOpen: true,
+  panelChannelId: null,
+  panelMessageId: null,
+  panelTitle: 'Need assistance from the team?',
+  panelDescription: 'Use the button below to open a ticket and let us know how we can help.',
+  panelButtonLabel: 'Open Ticket'
+});
+
 export const DEFAULT_DISCORD_BOT_CONFIG = Object.freeze({
   presenceTemplate: '{statusEmoji} {playerCount} on {serverName}',
   presenceStatuses: Object.freeze({
@@ -23,6 +39,9 @@ export const DEFAULT_DISCORD_BOT_CONFIG = Object.freeze({
     sleepers: true,
     fps: true,
     lastUpdate: true
+  }),
+  ticketing: Object.freeze({
+    ...DEFAULT_TICKETING_CONFIG
   })
 });
 
@@ -56,12 +75,55 @@ const COLOR_HEX_REGEX = /^#?([0-9a-f]{6})$/i;
 
 const normalisingSources = new WeakSet();
 
+function sanitizeSnowflake(value) {
+  if (value == null) return null;
+  const str = String(value).trim();
+  return str.length ? str : null;
+}
+
+function sanitizeTicketMessage(value, fallback) {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, 500);
+}
+
+function sanitizePanelText(value, fallback, maxLength = 190) {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, Math.max(1, maxLength));
+}
+
+function normalizeTicketingConfig(ticketing = {}) {
+  const source = typeof ticketing === 'object' && ticketing != null ? ticketing : {};
+  const base = DEFAULT_TICKETING_CONFIG;
+  return {
+    enabled: typeof source.enabled === 'boolean' ? source.enabled : base.enabled,
+    categoryId: sanitizeSnowflake(source.categoryId ?? source.category_id),
+    archiveChannelId: sanitizeSnowflake(source.archiveChannelId ?? source.archive_channel_id),
+    logChannelId: sanitizeSnowflake(source.logChannelId ?? source.log_channel_id),
+    staffRoleId: sanitizeSnowflake(source.staffRoleId ?? source.staff_role_id),
+    welcomeMessage: sanitizeTicketMessage(source.welcomeMessage ?? source.welcome_message, base.welcomeMessage),
+    questionPrompt: sanitizeTicketMessage(source.questionPrompt ?? source.question_prompt, base.questionPrompt),
+    pingStaffOnOpen: typeof source.pingStaffOnOpen === 'boolean'
+      ? source.pingStaffOnOpen
+      : base.pingStaffOnOpen,
+    panelChannelId: sanitizeSnowflake(source.panelChannelId ?? source.panel_channel_id),
+    panelMessageId: sanitizeSnowflake(source.panelMessageId ?? source.panel_message_id),
+    panelTitle: sanitizePanelText(source.panelTitle ?? source.panel_title, base.panelTitle, 240),
+    panelDescription: sanitizePanelText(source.panelDescription ?? source.panel_description, base.panelDescription, 1000),
+    panelButtonLabel: sanitizePanelText(source.panelButtonLabel ?? source.panel_button_label, base.panelButtonLabel, 80)
+  };
+}
+
 function defaultNormalisedConfig() {
   return {
     presenceTemplate: sanitizePresenceTemplate(DEFAULT_DISCORD_BOT_CONFIG.presenceTemplate),
     presenceStatuses: normalizePresenceStatuses(DEFAULT_DISCORD_BOT_CONFIG.presenceStatuses),
     colors: normalizeColors(DEFAULT_DISCORD_BOT_CONFIG.colors),
-    fields: normalizeFields(DEFAULT_DISCORD_BOT_CONFIG.fields)
+    fields: normalizeFields(DEFAULT_DISCORD_BOT_CONFIG.fields),
+    ticketing: normalizeTicketingConfig(DEFAULT_DISCORD_BOT_CONFIG.ticketing)
   };
 }
 
@@ -70,7 +132,8 @@ function cloneNormalisedConfig(normalised) {
     presenceTemplate: normalised.presenceTemplate,
     presenceStatuses: { ...normalised.presenceStatuses },
     colors: { ...normalised.colors },
-    fields: { ...normalised.fields }
+    fields: { ...normalised.fields },
+    ticketing: { ...normalised.ticketing }
   };
 }
 
@@ -157,7 +220,8 @@ export function normaliseDiscordBotConfig(value = {}) {
       presenceTemplate: sanitizePresenceTemplate(source.presenceTemplate ?? source.presence_template),
       presenceStatuses: normalizePresenceStatuses(source.presenceStatuses ?? source.presence_statuses),
       colors: normalizeColors(source.colors),
-      fields: normalizeFields(source.fields)
+      fields: normalizeFields(source.fields),
+      ticketing: normalizeTicketingConfig(source.ticketing)
     };
   } finally {
     normalisingSources.delete(source);
@@ -190,7 +254,8 @@ export function encodeDiscordBotConfig(config) {
     presenceTemplate: normalised.presenceTemplate,
     presenceStatuses: normalised.presenceStatuses,
     colors: normalised.colors,
-    fields: normalised.fields
+    fields: normalised.fields,
+    ticketing: normalised.ticketing
   });
 }
 
