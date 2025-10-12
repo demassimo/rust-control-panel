@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="panel-api-base" content="/api" />
+  <title>Ticket Preview</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #313338;
+      color: #dbdee1;
+      font-family: "Whitney", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      background: #2b2d31;
+      border-bottom: 1px solid #3f4147;
+      z-index: 10;
+    }
+    .online-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #23a559;
+    }
+    .channel {
+      font-weight: 600;
+    }
+    .chat {
+      min-height: calc(100vh - 46px);
+      overflow-y: auto;
+      background: #2b2d31;
+    }
+    .notice {
+      margin: 40px auto;
+      max-width: 520px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid #3f4147;
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      line-height: 1.6;
+      color: #f2f3f5;
+    }
+    .notice a {
+      color: #00aff4;
+      text-decoration: none;
+    }
+    .notice a:hover {
+      text-decoration: underline;
+    }
+    .day-sep {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 20px 0;
+      padding: 0 20px;
+    }
+    .day-sep div {
+      flex: 1;
+      height: 1px;
+      background: #3f4147;
+    }
+    .day-sep span {
+      background: #2b2d31;
+      border: 1px solid #3f4147;
+      padding: 2px 8px;
+      border-radius: 5px;
+      font-size: 12px;
+      color: #949ba4;
+    }
+    .msg-group {
+      display: flex;
+      gap: 10px;
+      padding: 10px 20px;
+    }
+    .msg-group:hover {
+      background: rgba(0, 0, 0, 0.1);
+    }
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: #1e1f22;
+    }
+    .msg-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .username {
+      font-weight: 600;
+      color: #fff;
+    }
+    .timestamp {
+      font-size: 12px;
+      color: #949ba4;
+    }
+    .text {
+      margin-top: 3px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .reactions {
+      display: flex;
+      gap: 5px;
+      margin-top: 5px;
+      flex-wrap: wrap;
+    }
+    .reaction {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 6px;
+      background: #383a40;
+      border: 1px solid #3f4147;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .reaction:hover {
+      background: #44464b;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="online-dot"></div>
+    <span class="channel" id="channelTitle">#ticket-preview</span>
+  </div>
+
+  <div class="chat" id="chatContainer">
+    <div class="notice" id="statusNotice">Loading ticket preview…</div>
+  </div>
+
+  <script>
+    (function () {
+      const channelTitle = document.getElementById('channelTitle');
+      const chatContainer = document.getElementById('chatContainer');
+      const statusNotice = document.getElementById('statusNotice');
+      const params = new URLSearchParams(window.location.search);
+      const teamId = params.get('teamId');
+      const ticketId = params.get('ticketId');
+
+      function normalizeApiBase(value) {
+        const raw = (value || '').trim();
+        if (!raw) return '';
+        const trimmed = raw.replace(/\/+$/, '');
+        if (!trimmed) return raw ? '/api' : '';
+        if (/\/api$/i.test(trimmed)) return trimmed;
+        if (/^https?:\/\//i.test(trimmed)) {
+          try {
+            const url = new URL(trimmed);
+            if (!url.pathname || url.pathname === '/' || url.pathname === '') {
+              url.pathname = '/api';
+              return url.href.replace(/\/$/, '');
+            }
+            return trimmed;
+          } catch {
+            return trimmed;
+          }
+        }
+        if (trimmed.startsWith('/')) return trimmed;
+        return trimmed + '/api';
+      }
+
+      function detectApiBase() {
+        const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
+        if (metaContent) {
+          try {
+            const metaUrl = new URL(metaContent, window.location.origin);
+            const normalized = normalizeApiBase(metaUrl.href);
+            if (normalized) return normalized;
+          } catch {
+            const normalized = normalizeApiBase(metaContent);
+            if (normalized) return normalized;
+          }
+        }
+        const stored = normalizeApiBase(localStorage.getItem('apiBase'));
+        if (stored) return stored;
+        if (window.location?.origin) {
+          const normalizedOrigin = normalizeApiBase(window.location.origin);
+          if (normalizedOrigin) return normalizedOrigin;
+        }
+        return normalizeApiBase('/api');
+      }
+
+      function showNotice(text, { allowLoginLink = false } = {}) {
+        const message = allowLoginLink
+          ? `${text} <br><br><a href="./">Return to the control panel</a>`
+          : text;
+        if (statusNotice) {
+          statusNotice.innerHTML = message;
+          statusNotice.style.display = 'block';
+        } else {
+          const notice = document.createElement('div');
+          notice.className = 'notice';
+          notice.innerHTML = message;
+          chatContainer.innerHTML = '';
+          chatContainer.appendChild(notice);
+        }
+      }
+
+      function clearNotice() {
+        if (statusNotice) {
+          statusNotice.style.display = 'none';
+          statusNotice.innerHTML = '';
+        }
+      }
+
+      function formatClock(ts) {
+        const d = new Date(ts);
+        if (Number.isNaN(d.valueOf())) return '';
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      function sameDay(a, b) {
+        const da = new Date(a);
+        const db = new Date(b);
+        if (Number.isNaN(da.valueOf()) || Number.isNaN(db.valueOf())) return false;
+        return da.toDateString() === db.toDateString();
+      }
+
+      function renderChat(data) {
+        const messages = Array.isArray(data?.messages) ? data.messages.slice() : [];
+        const normalized = messages
+          .map((entry) => {
+            const ts = new Date(entry.timestamp || entry.created_at || entry.createdAt || Date.now());
+            if (Number.isNaN(ts.valueOf())) return null;
+            return {
+              discord_id: entry.discord_id || entry.authorId || entry.id || 'user',
+              nickname: entry.nickname || entry.author || 'Member',
+              avatar: entry.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png',
+              timestamp: ts.toISOString(),
+              message: typeof entry.message === 'string' ? entry.message : String(entry.message ?? ''),
+              reactions: Array.isArray(entry.reactions) ? entry.reactions : []
+            };
+          })
+          .filter(Boolean)
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        if (normalized.length === 0) {
+          showNotice('This ticket does not have any messages yet.');
+          return;
+        }
+
+        clearNotice();
+        chatContainer.innerHTML = '';
+
+        const groups = [];
+        const windowMs = 7 * 60 * 1000;
+        normalized.forEach((msg) => {
+          const last = groups[groups.length - 1];
+          if (
+            last &&
+            last.discord_id === msg.discord_id &&
+            new Date(msg.timestamp).getTime() - new Date(last.lastTs).getTime() <= windowMs
+          ) {
+            last.messages.push(msg);
+            last.lastTs = msg.timestamp;
+          } else {
+            groups.push({
+              discord_id: msg.discord_id,
+              nickname: msg.nickname,
+              avatar: msg.avatar,
+              firstTs: msg.timestamp,
+              lastTs: msg.timestamp,
+              messages: [msg]
+            });
+          }
+        });
+
+        groups.forEach((group, idx) => {
+          const prev = groups[idx - 1];
+          if (!prev || !sameDay(prev.firstTs, group.firstTs)) {
+            const day = document.createElement('div');
+            day.className = 'day-sep';
+            const date = new Date(group.firstTs);
+            day.innerHTML = `<div></div><span>${date.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' })}</span><div></div>`;
+            chatContainer.appendChild(day);
+          }
+
+          const block = document.createElement('div');
+          block.className = 'msg-group';
+          const nickname = escapeHtml(group.nickname);
+          const avatar = escapeHtml(group.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png');
+          block.innerHTML = `
+            <img class="avatar" src="${avatar}" alt="">
+            <div class="msg-content">
+              <div class="header">
+                <span class="username">${nickname}</span>
+                <span class="timestamp">${formatClock(group.firstTs)}</span>
+              </div>
+              ${group.messages
+                .map((msg) => {
+                  const reactions = Array.isArray(msg.reactions) && msg.reactions.length
+                    ? `<div class="reactions">${msg.reactions
+                        .map((reaction) => {
+                          const emoji = escapeHtml(reaction.emoji || '');
+                          const count = Number.isFinite(reaction.count) ? reaction.count : 0;
+                          return `<div class="reaction">${emoji} <span>${count}</span></div>`;
+                        })
+                        .join('')}</div>`
+                    : '';
+                  const text = escapeHtml(msg.message);
+                  return `<div class="text">${text}</div>${reactions}`;
+                })
+                .join('')}
+            </div>`;
+          chatContainer.appendChild(block);
+        });
+      }
+
+      async function loadTicketPreview() {
+        if (!teamId || !ticketId) {
+          showNotice('Missing ticket information. Provide both teamId and ticketId in the URL.');
+          return;
+        }
+        const apiBase = detectApiBase();
+        if (!apiBase) {
+          showNotice('Unable to determine API endpoint for the control panel.');
+          return;
+        }
+        const url = `${apiBase}/teams/${encodeURIComponent(teamId)}/discord/tickets/${encodeURIComponent(ticketId)}/preview`;
+        const headers = { 'Accept': 'application/json' };
+        const token = localStorage.getItem('token');
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        let response;
+        try {
+          response = await fetch(url, { headers, cache: 'no-store' });
+        } catch (err) {
+          console.error('ticket preview request failed', err);
+          showNotice('Unable to reach the control panel API. Please check your connection.');
+          return;
+        }
+        if (response.status === 401) {
+          showNotice('You need to sign in to view this ticket.', { allowLoginLink: true });
+          return;
+        }
+        if (response.status === 403) {
+          showNotice('You do not have access to this ticket.');
+          return;
+        }
+        if (response.status === 404) {
+          showNotice('The requested ticket could not be found.');
+          return;
+        }
+        if (!response.ok) {
+          showNotice('Failed to load the ticket preview.');
+          return;
+        }
+        let data = null;
+        try {
+          data = await response.json();
+        } catch (err) {
+          console.error('invalid preview payload', err);
+          showNotice('Received an unexpected response from the server.');
+          return;
+        }
+        if (data?.pageTitle) document.title = data.pageTitle;
+        if (channelTitle && data?.channelTitle) channelTitle.textContent = data.channelTitle;
+        renderChat(data);
+      }
+
+      loadTicketPreview();
+    })();
+  </script>
+</body>
+</html>

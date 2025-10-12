@@ -1341,6 +1341,13 @@ function createApi(pool, dialect) {
       const rows = await exec('SELECT * FROM discord_tickets WHERE server_id=? AND id=?', [numericServerId, numericTicketId]);
       return Array.isArray(rows) ? rows[0] || null : rows || null;
     },
+    async getDiscordTicketForTeam(teamId, ticketId){
+      const numericTeamId = Number(teamId);
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+      const rows = await exec('SELECT * FROM discord_tickets WHERE team_id=? AND id=?', [numericTeamId, numericTicketId]);
+      return Array.isArray(rows) ? rows[0] || null : rows || null;
+    },
     async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
       if (!channelId) return null;
       await exec(

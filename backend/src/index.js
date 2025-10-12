@@ -55,6 +55,7 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 const MAX_MAP_IMAGE_BYTES = 40 * 1024 * 1024;
+const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
 
 import {
   extractInteger,
@@ -354,6 +355,44 @@ function ensureServerCapability(req, res, capability, param = 'id') {
   return id;
 }
 
+function userHasTeamAccess(user, teamId) {
+  if (!user) return false;
+  const numericTeamId = Number(teamId);
+  if (!Number.isFinite(numericTeamId)) return false;
+  const activeTeamId = Number(user.activeTeamId);
+  if (Number.isFinite(activeTeamId) && activeTeamId === numericTeamId) return true;
+  if (Array.isArray(user.teams)) {
+    for (const team of user.teams) {
+      const id = Number(team?.id ?? team?.team_id);
+      if (Number.isFinite(id) && id === numericTeamId) return true;
+    }
+  }
+  return false;
+}
+
+async function ensureTeamAccess(req, res, param = 'teamId') {
+  const raw = req.params?.[param] ?? req.query?.[param];
+  const numericTeamId = Number(raw);
+  if (!Number.isFinite(numericTeamId)) {
+    res.status(400).json({ error: 'invalid_team' });
+    return null;
+  }
+  let hasAccess = userHasTeamAccess(req.authUser, numericTeamId);
+  if (!hasAccess && Number.isFinite(Number(req.authUser?.id)) && typeof db?.getTeamMember === 'function') {
+    try {
+      const membership = await db.getTeamMember(numericTeamId, req.authUser.id);
+      hasAccess = Boolean(membership);
+    } catch (err) {
+      console.warn('failed to verify team membership', err);
+    }
+  }
+  if (!hasAccess) {
+    res.status(403).json({ error: 'forbidden' });
+    return null;
+  }
+  return numericTeamId;
+}
+
 function projectRole(row) {
   if (!row) return null;
   return {
@@ -398,6 +437,7 @@ function projectDiscordTicket(row) {
   const createdAt = row.created_at ?? row.createdAt ?? null;
   const updatedAt = row.updated_at ?? row.updatedAt ?? createdAt;
   const closedAt = row.closed_at ?? row.closedAt ?? null;
+  const previewUrl = buildTicketPreviewUrl(teamIdCandidate, idCandidate);
   return {
     id: Number.isFinite(idCandidate) ? idCandidate : null,
     serverId: Number.isFinite(serverIdCandidate) ? serverIdCandidate : null,
@@ -421,7 +461,8 @@ function projectDiscordTicket(row) {
       : (typeof row.closedByTag === 'string' ? row.closedByTag : null),
     closeReason: typeof row.close_reason === 'string'
       ? row.close_reason
-      : (typeof row.closeReason === 'string' ? row.closeReason : null)
+      : (typeof row.closeReason === 'string' ? row.closeReason : null),
+    previewUrl
   };
 }
 
@@ -453,6 +494,88 @@ function buildTicketDialogEntries(row) {
     });
   }
   return entries;
+}
+
+function buildTicketPreviewUrl(teamId, ticketId) {
+  const numericTeamId = Number(teamId);
+  const numericTicketId = Number(ticketId);
+  if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+  const base = TICKET_PREVIEW_PAGE || '/ticket-preview.html';
+  const [pathPart, searchPart = ''] = String(base).split('?');
+  const params = new URLSearchParams(searchPart);
+  params.set('teamId', String(numericTeamId));
+  params.set('ticketId', String(numericTicketId));
+  return `${pathPart}?${params.toString()}`;
+}
+
+function slugifyTicketSubject(subject) {
+  if (typeof subject !== 'string') return '';
+  const trimmed = subject.trim().toLowerCase();
+  if (!trimmed) return '';
+  return trimmed
+    .normalize('NFKD')
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+}
+
+function buildTicketPreviewMessages(ticket, dialog, { teamName } = {}) {
+  const fallbackRequester = ticket?.createdByTag || ticket?.createdBy || 'Requester';
+  const staffLabel = teamName ? `${teamName} Staff` : 'Support Staff';
+  const fallbackCreatedAt = ticket?.createdAt || null;
+  const fallbackClosedAt = ticket?.closedAt || ticket?.updatedAt || fallbackCreatedAt;
+  const entries = Array.isArray(dialog) ? dialog : [];
+  const messages = [];
+  entries.forEach((entry, index) => {
+    if (!entry || typeof entry.content !== 'string' || !entry.content.trim()) return;
+    const role = entry.role === 'staff' ? 'staff' : 'requester';
+    const avatarIndex = role === 'staff' ? 1 : 0;
+    const fallbackId = `${role}-${ticket?.id ?? 'ticket'}-${index}`;
+    messages.push({
+      id: entry.id || fallbackId,
+      discord_id: entry.authorId || fallbackId,
+      nickname: entry.authorTag || entry.authorId || (role === 'staff' ? staffLabel : fallbackRequester),
+      avatar: `https://cdn.discordapp.com/embed/avatars/${avatarIndex}.png`,
+      timestamp: entry.postedAt || (role === 'staff' ? fallbackClosedAt : fallbackCreatedAt) || new Date().toISOString(),
+      message: entry.content,
+      reactions: []
+    });
+  });
+  if (messages.length === 0) {
+    messages.push({
+      id: `ticket-${ticket?.id ?? 'unknown'}-open`,
+      discord_id: ticket?.createdBy || `ticket-${ticket?.id ?? 'unknown'}`,
+      nickname: fallbackRequester,
+      avatar: 'https://cdn.discordapp.com/embed/avatars/0.png',
+      timestamp: fallbackCreatedAt || new Date().toISOString(),
+      message: ticket?.subject || 'Ticket opened',
+      reactions: []
+    });
+  }
+  return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+
+function buildTicketPreviewPayload({ ticket, dialog, teamName }) {
+  const identifier = ticket?.ticketNumber != null
+    ? `#${ticket.ticketNumber}`
+    : (ticket?.id != null ? `#${ticket.id}` : '#ticket');
+  const subjectSlug = slugifyTicketSubject(ticket?.subject || '');
+  const channelSuffix = subjectSlug ? `-${subjectSlug}` : '';
+  const channelTitle = `#ticket-${ticket?.ticketNumber ?? ticket?.id ?? 'thread'}${channelSuffix}`;
+  const messages = buildTicketPreviewMessages(ticket, dialog, { teamName });
+  return {
+    pageTitle: `${teamName || 'Support'} — Ticket ${identifier}`,
+    channelTitle,
+    team: ticket?.teamId != null ? { id: ticket.teamId, name: teamName || null } : null,
+    ticket: {
+      ...ticket,
+      previewUrl: buildTicketPreviewUrl(ticket?.teamId, ticket?.id)
+    },
+    messages
+  };
 }
 
 function safeTrimString(value) {
@@ -5748,7 +5871,8 @@ app.get('/api/servers/:id/aq-tickets/:ticketId', auth, async (req, res) => {
     }
     const ticket = projectDiscordTicket(row);
     const dialog = await assembleTicketDialog(row);
-    res.json({ ticket, dialog });
+    const previewUrl = buildTicketPreviewUrl(ticket?.teamId ?? row.team_id, ticket?.id ?? row.id);
+    res.json({ ticket, dialog, previewUrl });
   } catch (err) {
     console.error('failed to load aq ticket', err);
     res.status(500).json({ error: 'db_error' });
@@ -5759,7 +5883,7 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
   const id = ensureServerCapability(req, res, 'view');
   if (id == null) return;
   if (typeof db?.getDiscordTicketById !== 'function') {
-    return res.status(404).json({ error: 'not_found' });
+    return res.status(503).json({ error: 'discord_unavailable' });
   }
   const ticketId = Number(req.params?.ticketId);
   if (!Number.isFinite(ticketId)) {
@@ -5778,7 +5902,7 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
     res.status(404).json({ error: 'not_found' });
     return;
   }
-  const status = safeTrimString(row.status).toLowerCase();
+  const status = typeof row.status === 'string' ? row.status.trim().toLowerCase() : 'open';
   if (status === 'closed') {
     res.status(409).json({ error: 'ticket_closed' });
     return;
@@ -5788,33 +5912,36 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
     res.status(409).json({ error: 'ticket_channel_missing' });
     return;
   }
-  const token = await getDiscordTokenForTicket(row);
+  let token;
+  try {
+    token = await getDiscordTokenForTicket(row);
+  } catch (err) {
+    console.error('failed to load discord token for ticket reply', err);
+    res.status(500).json({ error: 'discord_unavailable' });
+    return;
+  }
   if (!token) {
     res.status(409).json({ error: 'discord_not_configured' });
     return;
   }
-  if (typeof fetch !== 'function') {
-    res.status(503).json({ error: 'discord_unavailable' });
-    return;
-  }
-  const rawMessage = typeof req.body?.message === 'string' ? req.body.message : '';
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
   let content;
   try {
-    content = buildPanelReplyMessage(req.authUser?.username, rawMessage);
+    const displayName = safeTrimString(req.authUser?.username)
+      || safeTrimString(req.user?.username)
+      || safeTrimString(req.authUser?.name)
+      || 'Panel User';
+    content = buildPanelReplyMessage(displayName, message);
   } catch (err) {
-    const code = err?.code || err?.message || 'message_required';
-    if (code === 'message_required') {
-      res.status(400).json({ error: 'message_required' });
-    } else if (code === 'message_too_long') {
-      res.status(400).json({ error: 'message_too_long' });
-    } else {
-      res.status(400).json({ error: 'invalid_payload' });
-    }
+    const code = err?.code || 'invalid_payload';
+    const statusCode = code === 'message_required' ? 400 : (code === 'message_too_long' ? 413 : 400);
+    res.status(statusCode).json({ error: code });
     return;
   }
+  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages`;
   let response;
   try {
-    response = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/messages`, {
+    response = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bot ${token}`,
@@ -5823,29 +5950,61 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
       body: JSON.stringify({ content })
     });
   } catch (err) {
-    console.error(`failed to post discord reply for channel ${channelId}`, err);
-    res.status(502).json({ error: 'discord_unreachable' });
+    console.error('failed to post discord ticket reply', err);
+    res.status(503).json({ error: 'discord_unreachable' });
     return;
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      res.status(409).json({ error: 'discord_not_configured' });
-    } else if (response.status === 404) {
+    if (response.status === 404) {
       res.status(409).json({ error: 'ticket_channel_missing' });
     } else if (response.status === 429) {
       res.status(429).json({ error: 'discord_rate_limited' });
+    } else if (response.status === 403) {
+      res.status(403).json({ error: 'discord_post_failed' });
+    } else if (response.status >= 500) {
+      res.status(503).json({ error: 'discord_unreachable' });
     } else {
       res.status(502).json({ error: 'discord_post_failed' });
     }
     return;
   }
-  let payload = null;
+  res.json({ ok: true });
+});
+
+app.get('/api/teams/:teamId/discord/tickets/:ticketId/preview', auth, async (req, res) => {
+  if (typeof db?.getDiscordTicketForTeam !== 'function') {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const teamId = await ensureTeamAccess(req, res, 'teamId');
+  if (teamId == null) return;
+  const ticketId = Number(req.params?.ticketId);
+  if (!Number.isFinite(ticketId)) {
+    res.status(400).json({ error: 'invalid_ticket' });
+    return;
+  }
   try {
-    payload = await response.json();
-  } catch { /* ignore parse errors */ }
-  const requesterId = row.created_by ?? row.createdBy ?? null;
-  const entry = payload ? mapDiscordMessageToDialogEntry(payload, { requesterId }) : null;
-  res.json({ ok: true, entry });
+    const row = await db.getDiscordTicketForTeam(teamId, ticketId);
+    if (!row) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const ticket = projectDiscordTicket(row);
+    const dialog = await assembleTicketDialog(row);
+    let teamName = null;
+    if (typeof db?.getTeam === 'function') {
+      try {
+        const team = await db.getTeam(teamId);
+        teamName = typeof team?.name === 'string' ? team.name : null;
+      } catch (err) {
+        console.warn('failed to load team info for ticket preview', err);
+      }
+    }
+    const payload = buildTicketPreviewPayload({ ticket, dialog, teamName });
+    res.json(payload);
+  } catch (err) {
+    console.error('failed to build ticket preview', err);
+    res.status(500).json({ error: 'db_error' });
+  }
 });
 
 app.get('/api/servers/:id/map-state', auth, async (req, res) => {

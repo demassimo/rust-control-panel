@@ -145,6 +145,7 @@
   const aqTicketSubject = $('#aqTicketSubject');
   const aqTicketMeta = $('#aqTicketMeta');
   const aqTicketNumber = $('#aqTicketNumber');
+  const aqTicketPreviewLink = $('#aqTicketPreviewLink');
   const aqTicketDialog = $('#aqTicketDialog');
   const aqTicketDialogLoading = $('#aqTicketDialogLoading');
   const aqTicketDialogEmpty = $('#aqTicketDialogEmpty');
@@ -2097,12 +2098,14 @@
     if (!ticket) return null;
     const id = Number(ticket.id ?? ticket.ticketId);
     const serverId = Number(ticket.serverId ?? ticket.server_id ?? aqState.serverId);
+    const teamId = Number(ticket.teamId ?? ticket.team_id ?? state.activeTeamId);
     const ticketNumber = Number(ticket.ticketNumber ?? ticket.ticket_number);
     const createdAt = pickString(ticket.createdAt ?? ticket.created_at) || null;
     const updatedAt = pickString(ticket.updatedAt ?? ticket.updated_at) || createdAt;
     return {
       id: Number.isFinite(id) ? id : null,
       serverId: Number.isFinite(serverId) ? serverId : aqState.serverId,
+      teamId: Number.isFinite(teamId) ? teamId : (Number.isFinite(state.activeTeamId) ? state.activeTeamId : null),
       ticketNumber: Number.isFinite(ticketNumber) ? ticketNumber : null,
       subject: pickString(ticket.subject) || 'No subject provided',
       details: pickString(ticket.details) || '',
@@ -2111,7 +2114,8 @@
       status: pickString(ticket.status) || 'open',
       createdAt,
       updatedAt,
-      closedAt: pickString(ticket.closedAt ?? ticket.closed_at) || null
+      closedAt: pickString(ticket.closedAt ?? ticket.closed_at) || null,
+      previewUrl: pickString(ticket.previewUrl ?? ticket.preview_url ?? ticket.previewPath ?? ticket.preview_path) || null
     };
   }
 
@@ -3208,6 +3212,10 @@
         aqTicketDetail.classList.add('hidden');
         aqTicketDetail.setAttribute('aria-hidden', 'true');
       }
+      if (aqTicketPreviewLink) {
+        aqTicketPreviewLink.classList.add('hidden');
+        aqTicketPreviewLink.removeAttribute('href');
+      }
       if (aqTicketPlaceholder) {
         if (!hasServer) {
           aqTicketPlaceholder.textContent = 'Select a server to view AQ tickets.';
@@ -3246,6 +3254,16 @@
         ? formatRelativeTime(ticket.createdAt) || formatDateTime(ticket.createdAt)
         : 'Unknown time';
       aqTicketMeta.textContent = `${status} • Opened ${when} by ${opener}`;
+    }
+    if (aqTicketPreviewLink) {
+      const previewUrl = activeDetail?.previewUrl || ticket?.previewUrl || null;
+      if (previewUrl) {
+        aqTicketPreviewLink.href = previewUrl;
+        aqTicketPreviewLink.classList.remove('hidden');
+      } else {
+        aqTicketPreviewLink.classList.add('hidden');
+        aqTicketPreviewLink.removeAttribute('href');
+      }
     }
 
     if (aqTicketDialog) {
@@ -3393,7 +3411,8 @@
       const dialog = Array.isArray(data?.dialog)
         ? data.dialog.map((entry) => normalizeAqDialogEntry(entry)).filter((entry) => entry && entry.content)
         : [];
-      const detail = { ticket, dialog };
+      const previewUrl = pickString(data?.previewUrl ?? data?.preview_url ?? ticket?.previewUrl ?? null) || null;
+      const detail = { ticket, dialog, previewUrl };
       aqState.detailCache.set(numericId, detail);
       aqState.detailError = null;
       aqState.detailLoading = false;

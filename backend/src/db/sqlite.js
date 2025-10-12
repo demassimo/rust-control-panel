@@ -1422,6 +1422,15 @@ function createApi(dbh, dialect) {
         [numericServerId, numericTicketId]
       );
     },
+    async getDiscordTicketForTeam(teamId, ticketId){
+      const numericTeamId = Number(teamId);
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+      return await dbh.get(
+        'SELECT * FROM discord_tickets WHERE team_id=? AND id=?',
+        [numericTeamId, numericTicketId]
+      );
+    },
     async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
       if (!channelId) return null;
       const now = new Date().toISOString();
