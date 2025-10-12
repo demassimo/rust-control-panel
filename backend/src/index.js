@@ -5304,14 +5304,30 @@ app.get('/api/servers/:id/status', auth, (req, res) => {
 app.get('/api/servers/:id/f7-reports', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'view');
   if (id == null) return;
+  const targetParam = typeof req.query?.target === 'string' ? req.query.target.trim() : '';
+  const focusingTarget = targetParam.length > 0;
   const rawScope = typeof req.query?.scope === 'string' ? req.query.scope.toLowerCase() : 'new';
-  const scope = rawScope === 'all' ? 'all' : 'new';
+  const scope = focusingTarget ? 'all' : (rawScope === 'all' ? 'all' : 'new');
   const limitParam = Number(req.query?.limit);
-  const defaultLimit = scope === 'all' ? 100 : 25;
-  const maxLimit = scope === 'all' ? 200 : 50;
+  const defaultLimit = focusingTarget ? 100 : (scope === 'all' ? 100 : 25);
+  const maxLimit = focusingTarget ? 200 : (scope === 'all' ? 200 : 50);
   const limit = Number.isFinite(limitParam) && limitParam > 0
     ? Math.min(Math.max(Math.floor(limitParam), 1), maxLimit)
     : defaultLimit;
+  if (focusingTarget) {
+    if (typeof db?.listF7ReportsForTarget !== 'function') {
+      return res.json({ scope, target: targetParam, reports: [] });
+    }
+    try {
+      const rows = await db.listF7ReportsForTarget(id, targetParam, { limit });
+      const reports = Array.isArray(rows) ? rows.map((row) => projectF7Report(row, { serverId: id })) : [];
+      res.json({ scope, target: targetParam, reports });
+    } catch (err) {
+      console.error('failed to list f7 reports for target', err);
+      res.status(500).json({ error: 'db_error' });
+    }
+    return;
+  }
   const options = { limit };
   if (scope === 'new') {
     options.since = new Date(Date.now() - F7_REPORT_NEW_WINDOW_MS).toISOString();

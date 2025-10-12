@@ -1477,6 +1477,31 @@ button.menu-tab.active {
   gap: 8px;
 }
 
+.reports-focus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(244, 63, 94, 0.14);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.reports-focus span {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reports-focus button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .reports-search input[type="search"] {
   border: none;
   background: transparent;

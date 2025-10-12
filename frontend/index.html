@@ -485,6 +485,10 @@
                     <span class="sr-only">Filter F7 reports</span>
                     <input type="search" id="f7ReportsSearch" name="f7ReportsSearch" placeholder="Search by player, reporter, or reason" autocomplete="off" />
                   </label>
+                  <div id="f7ReportsFocus" class="reports-focus hidden" role="status" aria-live="polite">
+                    <span id="f7ReportsFocusLabel"></span>
+                    <button type="button" id="f7ReportsClearFocus" class="ghost small">Back to recent reports</button>
+                  </div>
                   <p id="f7ReportsLoading" class="reports-loading muted small hidden">Loading reports…</p>
                   <p id="f7ReportsError" class="notice warning hidden" role="alert"></p>
                   <p id="f7ReportsEmpty" class="reports-empty muted small hidden">No F7 reports yet.</p>
@@ -587,7 +591,7 @@
                       <ul id="f7ReportHistoryList" class="reports-history-list"></ul>
                     </section>
                     <div class="reports-actions">
-                      <button type="button" id="f7ReportShowAll" class="ghost small">View all reports for this server</button>
+                      <button type="button" id="f7ReportShowAll" class="ghost small">View all reports for this player</button>
                     </div>
                   </div>
                 </article>

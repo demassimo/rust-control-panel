@@ -166,6 +166,9 @@
   const f7ReportProfileStatus = $('#f7ReportProfileStatus');
   const f7ReportHistory = $('#f7ReportHistory');
   const f7ReportHistoryList = $('#f7ReportHistoryList');
+  const f7ReportsFocus = $('#f7ReportsFocus');
+  const f7ReportsFocusLabel = $('#f7ReportsFocusLabel');
+  const f7ReportsClearFocus = $('#f7ReportsClearFocus');
   const f7ReportShowAll = $('#f7ReportShowAll');
   const f7ReportOpenProfile = $('#f7ReportOpenProfile');
   const f7ScopeButtons = Array.from(document.querySelectorAll('.reports-scope-btn'));
@@ -252,7 +255,9 @@
     filter: '',
     filterActive: false,
     totalCount: 0,
-    visibleCount: 0
+    visibleCount: 0,
+    focusTarget: null,
+    focusLabel: ''
   };
   let f7FilterTimer = null;
   const f7ProfileCache = new Map();
@@ -328,7 +333,25 @@
 
   if (f7ReportShowAll) {
     f7ReportShowAll.addEventListener('click', () => {
-      setF7Scope('all');
+      const detail = f7State.activeId != null ? f7State.detailCache.get(f7State.activeId) : null;
+      const targetSteamId = pickString(detail?.targetSteamId)?.trim();
+      if (!targetSteamId) return;
+      const label = pickString(detail?.targetName) || targetSteamId;
+      if (f7State.focusTarget === targetSteamId) {
+        clearF7FocusTarget();
+      } else {
+        focusF7ReportsOnTarget(targetSteamId, label);
+      }
+      if (f7ReportDetail?.scrollIntoView) {
+        try { f7ReportDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+        catch { /* ignore */ }
+      }
+    });
+  }
+
+  if (f7ReportsClearFocus) {
+    f7ReportsClearFocus.addEventListener('click', () => {
+      clearF7FocusTarget();
       if (f7ReportDetail?.scrollIntoView) {
         try { f7ReportDetail.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
         catch { /* ignore */ }
@@ -1959,15 +1982,96 @@
 
   function updateF7ScopeButtons() {
     const scope = f7State.scope;
+    const focusActive = !!f7State.focusTarget;
     f7ScopeButtons.forEach((btn) => {
-      const match = (btn?.dataset?.scope || 'new') === scope;
-      btn?.classList?.toggle('active', match);
-      btn?.setAttribute?.('aria-selected', match ? 'true' : 'false');
+      if (!btn) return;
+      const btnScope = btn.dataset?.scope || 'new';
+      const match = btnScope === scope;
+      btn.classList.toggle('active', match);
+      btn.setAttribute('aria-selected', match ? 'true' : 'false');
+      const shouldDisable = focusActive && btnScope !== 'all';
+      if (shouldDisable) {
+        btn.setAttribute('disabled', 'true');
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.removeAttribute('disabled');
+        btn.removeAttribute('aria-disabled');
+      }
     });
+  }
+
+  function renderF7FocusBanner() {
+    if (!f7ReportsFocus) return;
+    const focusActive = !!f7State.focusTarget;
+    if (focusActive) {
+      const label = f7State.focusLabel || f7State.focusTarget;
+      f7ReportsFocus.classList.remove('hidden');
+      if (f7ReportsFocusLabel) {
+        f7ReportsFocusLabel.textContent = label
+          ? `Showing reports for ${label}`
+          : 'Showing reports for selected player';
+      }
+      if (f7ReportsClearFocus) {
+        f7ReportsClearFocus.disabled = false;
+      }
+    } else {
+      f7ReportsFocus.classList.add('hidden');
+      if (f7ReportsFocusLabel) {
+        f7ReportsFocusLabel.textContent = '';
+      }
+      if (f7ReportsClearFocus) {
+        f7ReportsClearFocus.disabled = true;
+      }
+    }
+  }
+
+  function focusF7ReportsOnTarget(steamId, label) {
+    const id = pickString(steamId)?.trim();
+    if (!id) return;
+    const name = pickString(label)?.trim() || '';
+    if (f7State.focusTarget === id && f7State.scope === 'all') return;
+    f7State.focusTarget = id;
+    f7State.focusLabel = name;
+    f7State.scope = 'all';
+    f7State.filter = '';
+    f7State.filterActive = false;
+    if (f7ReportsSearch) {
+      f7ReportsSearch.value = '';
+    }
+    f7State.activeId = null;
+    f7State.list = [];
+    f7State.detailCache.clear();
+    f7State.loading = true;
+    renderF7FocusBanner();
+    updateF7ScopeButtons();
+    renderF7Reports();
+    refreshF7Reports({ force: true }).catch(() => {});
+  }
+
+  function clearF7FocusTarget({ resetScope = true, refresh = true } = {}) {
+    if (!f7State.focusTarget) return;
+    f7State.focusTarget = null;
+    f7State.focusLabel = '';
+    if (resetScope) {
+      f7State.scope = 'new';
+    }
+    renderF7FocusBanner();
+    updateF7ScopeButtons();
+    f7State.list = [];
+    f7State.detailCache.clear();
+    f7State.activeId = null;
+    if (refresh) {
+      f7State.loading = true;
+      renderF7Reports();
+      refreshF7Reports({ force: true }).catch(() => {});
+    } else {
+      renderF7Reports();
+    }
   }
 
   function renderF7ReportDetail(detail) {
     if (!f7ReportDetail || !f7ReportPlaceholder) return;
+    const focusActive = !!f7State.focusTarget;
     if (!detail) {
       f7ReportDetail.classList.add('hidden');
       renderF7TargetSummary(null);
@@ -1975,6 +2079,11 @@
       if (f7ReportOpenProfile) {
         f7ReportOpenProfile.disabled = true;
         delete f7ReportOpenProfile.dataset.steamid;
+      }
+      if (f7ReportShowAll) {
+        f7ReportShowAll.disabled = true;
+        f7ReportShowAll.textContent = 'View all reports for this player';
+        f7ReportShowAll.setAttribute('aria-pressed', 'false');
       }
       const filterActive = !!f7State.filterActive;
       const totalCount = Number(f7State.totalCount) || 0;
@@ -1986,14 +2095,20 @@
         f7ReportPlaceholder.textContent = 'No reports match your search. Clear the filter to see everything.';
         f7ReportPlaceholder.classList.remove('hidden');
       } else if (!f7State.loading && totalCount === 0) {
-        f7ReportPlaceholder.textContent = 'Select a report to review the details.';
+        f7ReportPlaceholder.textContent = focusActive
+          ? 'No reports found for this player yet.'
+          : 'Select a report to review the details.';
         f7ReportPlaceholder.classList.remove('hidden');
       } else if (f7State.loading) {
-        f7ReportPlaceholder.textContent = 'Loading reports…';
+        f7ReportPlaceholder.textContent = focusActive
+          ? 'Loading player report history…'
+          : 'Loading reports…';
         f7ReportPlaceholder.classList.remove('hidden');
       } else {
         f7ReportPlaceholder.classList.remove('hidden');
-        f7ReportPlaceholder.textContent = 'Select a report to review the details.';
+        f7ReportPlaceholder.textContent = focusActive
+          ? "Select a report to review this player's history."
+          : 'Select a report to review the details.';
       }
       return;
     }
@@ -2054,11 +2169,25 @@
       f7ReportHistory.classList.add('hidden');
       if (f7ReportHistoryList) f7ReportHistoryList.innerHTML = '';
     }
+
+    if (f7ReportShowAll) {
+      const steamId = pickString(detail.targetSteamId)?.trim();
+      const isFocused = steamId && f7State.focusTarget === steamId;
+      f7ReportShowAll.disabled = !steamId;
+      if (isFocused) {
+        f7ReportShowAll.textContent = 'Back to recent reports';
+        f7ReportShowAll.setAttribute('aria-pressed', 'true');
+      } else {
+        f7ReportShowAll.textContent = 'View all reports for this player';
+        f7ReportShowAll.setAttribute('aria-pressed', 'false');
+      }
+    }
   }
 
   function renderF7Reports() {
     if (!f7ReportsList) return;
     updateF7ScopeButtons();
+    renderF7FocusBanner();
     if (f7ReportsLoading) {
       f7ReportsLoading.classList.toggle('hidden', !f7State.loading);
     }
@@ -2073,6 +2202,8 @@
     }
 
     const hasServer = Number.isFinite(f7State.serverId);
+    const focusActive = !!f7State.focusTarget;
+    const focusLabel = focusActive ? (f7State.focusLabel || f7State.focusTarget || '') : '';
     if (f7ReportsSearch) f7ReportsSearch.disabled = !hasServer;
 
     const baseList = Array.isArray(f7State.list) ? f7State.list : [];
@@ -2113,13 +2244,26 @@
       } else if (f7State.error) {
         f7ReportsCount.textContent = 'Unable to load';
       } else if (deduped.length === 0) {
-        f7ReportsCount.textContent = 'No reports';
+        f7ReportsCount.textContent = focusActive
+          ? (focusLabel ? `No reports for ${focusLabel}` : 'No reports for selected player')
+          : 'No reports';
       } else if (filterTokens.length > 0) {
         const label = deduped.length === 1 ? 'report' : 'reports';
-        f7ReportsCount.textContent = `Showing ${visible.length} of ${deduped.length} ${label}`;
+        const suffix = focusActive
+          ? focusLabel
+            ? ` ${label} for ${focusLabel}`
+            : ` ${label} for selected player`
+          : ` ${label}`;
+        f7ReportsCount.textContent = `Showing ${visible.length} of ${deduped.length}${suffix}`;
       } else {
         const label = deduped.length === 1 ? 'report' : 'reports';
-        f7ReportsCount.textContent = `${deduped.length} ${label}`;
+        if (focusActive) {
+          f7ReportsCount.textContent = focusLabel
+            ? `${deduped.length} ${label} for ${focusLabel}`
+            : `${deduped.length} ${label} for selected player`;
+        } else {
+          f7ReportsCount.textContent = `${deduped.length} ${label}`;
+        }
       }
     }
 
@@ -2127,7 +2271,13 @@
       const showEmpty = hasServer && !f7State.loading && !f7State.error && deduped.length === 0;
       const showFilteredEmpty = hasServer && !f7State.loading && !f7State.error && deduped.length > 0 && visible.length === 0;
       if (showFilteredEmpty) {
-        f7ReportsEmpty.textContent = 'No reports match your filter.';
+        f7ReportsEmpty.textContent = focusActive
+          ? 'No reports for this player match your filter.'
+          : 'No reports match your filter.';
+      } else if (focusActive) {
+        f7ReportsEmpty.textContent = focusLabel
+          ? `No reports found for ${focusLabel}.`
+          : 'No reports found for this player yet.';
       } else {
         f7ReportsEmpty.textContent = 'No F7 reports yet.';
       }
@@ -2518,8 +2668,14 @@
     f7State.listRequestToken = requestToken;
     renderF7Reports();
     const params = new URLSearchParams();
-    params.set('scope', f7State.scope);
-    params.set('limit', f7State.scope === 'all' ? '100' : '25');
+    if (f7State.focusTarget) {
+      params.set('target', f7State.focusTarget);
+      params.set('scope', 'all');
+      params.set('limit', '100');
+    } else {
+      params.set('scope', f7State.scope);
+      params.set('limit', f7State.scope === 'all' ? '100' : '25');
+    }
     try {
       const data = await api(`/servers/${serverId}/f7-reports?${params.toString()}`);
       const list = Array.isArray(data?.reports) ? data.reports.map((item) => normalizeF7Report(item)).filter(Boolean) : [];
@@ -2591,7 +2747,12 @@
 
   function setF7Scope(scope) {
     const normalized = scope === 'all' ? 'all' : 'new';
-    if (f7State.scope === normalized) return;
+    let focusCleared = false;
+    if (f7State.focusTarget && normalized !== 'all') {
+      focusCleared = true;
+      clearF7FocusTarget({ resetScope: false, refresh: false });
+    }
+    if (!focusCleared && f7State.scope === normalized) return;
     f7State.scope = normalized;
     updateF7ScopeButtons();
     refreshF7Reports({ force: true }).catch(() => {});
@@ -2612,6 +2773,8 @@
     f7State.filterActive = false;
     f7State.totalCount = 0;
     f7State.visibleCount = 0;
+    f7State.focusTarget = null;
+    f7State.focusLabel = '';
     f7ProfileCache.clear();
     f7ProfileRequests.clear();
     if (f7FilterTimer) {
@@ -2624,6 +2787,7 @@
     }
     if (f7ReportsCount) f7ReportsCount.textContent = '';
     updateF7ScopeButtons();
+    renderF7FocusBanner();
     renderF7Reports();
     if (!Number.isFinite(numeric) || !hasServerCapability('view')) {
       return;
@@ -2644,6 +2808,8 @@
     f7State.filterActive = false;
     f7State.totalCount = 0;
     f7State.visibleCount = 0;
+    f7State.focusTarget = null;
+    f7State.focusLabel = '';
     f7ProfileCache.clear();
     f7ProfileRequests.clear();
     if (f7FilterTimer) {
@@ -2656,6 +2822,7 @@
     }
     if (f7ReportsCount) f7ReportsCount.textContent = '';
     updateF7ScopeButtons();
+    renderF7FocusBanner();
     renderF7Reports();
   }
 
@@ -2665,6 +2832,12 @@
     if (!report) return;
     if (!hasServerCapability('view')) return;
     if (Number(report.serverId) !== Number(state.currentServerId)) return;
+    if (f7State.focusTarget) {
+      const targetId = pickString(report.targetSteamId)?.trim();
+      if (!targetId || targetId !== f7State.focusTarget) {
+        return;
+      }
+    }
     if (report.id != null) {
       f7State.detailCache.set(report.id, { ...report, recentForTarget: [], targetSummary: null });
     }
