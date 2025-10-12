@@ -3299,6 +3299,7 @@ async function handleTicketCloseCommand(state, interaction) {
     ? (dmSuccess ? 'DM sent to requester.' : 'Could not DM requester or DM disabled.')
     : 'No requester recorded for this ticket.';
 
+  const transcriptGenerated = Boolean(transcriptBuffer);
   if (config.logChannelId) {
     try {
       const logChannel = await guild.channels.fetch(config.logChannelId);
@@ -3322,8 +3323,17 @@ async function handleTicketCloseCommand(state, interaction) {
         }
         logEmbed.addFields({ name: 'Transcript delivery', value: dmLogMessage });
 
+        const channelDeletionPlanned = transcriptGenerated;
+        logEmbed.addFields({
+          name: 'Channel status',
+          value: channelDeletionPlanned
+            ? 'Channel deleted after logging.'
+            : 'Channel retained to preserve history.',
+          inline: false
+        });
+
         const payload = { embeds: [logEmbed] };
-        if (transcriptBuffer) {
+        if (transcriptGenerated) {
           payload.files = [
             new AttachmentBuilder(transcriptBuffer, {
               name: transcriptFileName ?? 'ticket-transcript.txt'
@@ -3340,15 +3350,25 @@ async function handleTicketCloseCommand(state, interaction) {
     }
   }
 
-  try {
-    await targetChannel.delete('Ticket closed and logged');
-  } catch (err) {
-    console.error(`failed to delete ticket channel ${targetChannel.id}`, err);
+  const logDestinationConfigured = Boolean(config.logChannelId);
+  const shouldDeleteChannel = transcriptGenerated && logDestinationConfigured;
+
+  if (shouldDeleteChannel) {
+    try {
+      await targetChannel.delete('Ticket closed and logged');
+    } catch (err) {
+      console.error(`failed to delete ticket channel ${targetChannel.id}`, err);
+    }
   }
 
-  const transcriptStatusMessage = transcriptBuffer
-    ? 'Transcript archived.'
-    : 'Transcript could not be generated.';
+  let transcriptStatusMessage;
+  if (transcriptGenerated && logDestinationConfigured) {
+    transcriptStatusMessage = 'Transcript archived.';
+  } else if (!transcriptGenerated) {
+    transcriptStatusMessage = 'Transcript could not be generated; channel retained.';
+  } else {
+    transcriptStatusMessage = 'Transcript archived; channel retained because no log channel is configured.';
+  }
 
   await interaction.editReply(
     `Closed ticket ${channelName} (#${ticketNumberDisplay}). ${transcriptStatusMessage} ${dmStatusMessage}`
