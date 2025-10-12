@@ -5870,7 +5870,7 @@ app.get('/api/servers/:id/aq-tickets/:ticketId', auth, async (req, res) => {
       return;
     }
     const ticket = projectDiscordTicket(row);
-    const dialog = buildTicketDialogEntries(row);
+    const dialog = await assembleTicketDialog(row);
     const previewUrl = buildTicketPreviewUrl(ticket?.teamId ?? row.team_id, ticket?.id ?? row.id);
     res.json({ ticket, dialog, previewUrl });
   } catch (err) {
@@ -5989,7 +5989,7 @@ app.get('/api/teams/:teamId/discord/tickets/:ticketId/preview', auth, async (req
       return;
     }
     const ticket = projectDiscordTicket(row);
-    const dialog = buildTicketDialogEntries(row);
+    const dialog = await assembleTicketDialog(row);
     let teamName = null;
     if (typeof db?.getTeam === 'function') {
       try {
