@@ -62,6 +62,7 @@ function createApi(dbh, dialect) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         owner_user_id INTEGER NOT NULL,
+        discord_token TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(owner_user_id) REFERENCES users(id) ON DELETE CASCADE
       );
@@ -247,6 +248,10 @@ function createApi(dbh, dialect) {
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_guild_number ON discord_tickets(guild_id, ticket_number);
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_team ON discord_tickets(team_id);
       `);
+      const teamCols = await dbh.all("PRAGMA table_info('teams')");
+      if (!teamCols.some((c) => c.name === 'discord_token')) {
+        await dbh.run("ALTER TABLE teams ADD COLUMN discord_token TEXT");
+      }
       const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
       if (!discordCols.some((c) => c.name === 'command_bot_token')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN command_bot_token TEXT");
@@ -388,7 +393,7 @@ function createApi(dbh, dialect) {
       const numeric = Number(userId);
       if (!Number.isFinite(numeric)) return [];
       return await dbh.all(
-        `SELECT t.id, t.name, t.owner_user_id, t.created_at, tm.role, tm.joined_at
+        `SELECT t.id, t.name, t.owner_user_id, t.discord_token, t.created_at, tm.role, tm.joined_at
          FROM team_members tm
          JOIN teams t ON t.id = tm.team_id
          WHERE tm.user_id=?
@@ -466,6 +471,22 @@ function createApi(dbh, dialect) {
          ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
         [numericUser, 'active_team', String(numericTeam), now]
       );
+    },
+    async getTeamDiscordSettings(teamId){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return { hasToken: false };
+      const row = await dbh.get('SELECT discord_token FROM teams WHERE id=?', [numeric]);
+      return { hasToken: Boolean(row?.discord_token) };
+    },
+    async setTeamDiscordToken(teamId, token){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return 0;
+      const value = trimOrNull(token);
+      const result = await dbh.run('UPDATE teams SET discord_token=? WHERE id=?', [value, numeric]);
+      return result?.changes ? Number(result.changes) : 0;
+    },
+    async clearTeamDiscordToken(teamId){
+      return await this.setTeamDiscordToken(teamId, null);
     },
     async countAdmins(){ const r = await dbh.get("SELECT COUNT(*) c FROM users WHERE role='admin'"); return r.c; },
     async updateUserPassword(id, hash){ await dbh.run('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
