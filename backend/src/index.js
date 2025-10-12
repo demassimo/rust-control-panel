@@ -98,6 +98,9 @@ const COUNTRY_NAME_FALLBACKS = {
 
 const WORLD_ENTITY_CACHE_TTL_MS = 15000;
 const ENTITY_SEARCH_TIMEOUT_MS = 4500;
+const DISCORD_API_BASE = 'https://discord.com/api/v10';
+const MAX_DISCORD_MESSAGE_LENGTH = 2000;
+const MAX_DISCORD_TICKET_MESSAGES = 50;
 
 const ENTITY_SEARCH_DEFINITIONS = [
   {
@@ -573,6 +576,169 @@ function buildTicketPreviewPayload({ ticket, dialog, teamName }) {
     },
     messages
   };
+}
+
+function safeTrimString(value) {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value).trim();
+  return '';
+}
+
+function sanitizeDiscordOutgoingContent(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(/\r\n?/g, '\n').replace(/@/g, '@\u200b').trim();
+}
+
+function buildPanelReplyMessage(username, message) {
+  const displayName = safeTrimString(username) || 'Panel User';
+  const prefix = `[Control Panel] ${displayName}: `;
+  const body = sanitizeDiscordOutgoingContent(message);
+  if (!body) {
+    const err = new Error('message_required');
+    err.code = 'message_required';
+    throw err;
+  }
+  const maxContentLength = MAX_DISCORD_MESSAGE_LENGTH - prefix.length;
+  if (maxContentLength <= 0) {
+    const err = new Error('message_too_long');
+    err.code = 'message_too_long';
+    throw err;
+  }
+  if (body.length > maxContentLength) {
+    const err = new Error('message_too_long');
+    err.code = 'message_too_long';
+    err.limit = maxContentLength;
+    throw err;
+  }
+  return prefix + body;
+}
+
+function toDiscordAuthorTag(author = {}) {
+  if (!author || typeof author !== 'object') return null;
+  const display = safeTrimString(author.global_name) || safeTrimString(author.username);
+  if (!display) return null;
+  const discriminator = safeTrimString(author.discriminator);
+  if (discriminator && discriminator !== '0') {
+    return `${display}#${discriminator}`;
+  }
+  return display;
+}
+
+function entryTimestamp(entry) {
+  if (!entry || !entry.postedAt) return 0;
+  const timestamp = new Date(entry.postedAt).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function mapDiscordMessageToDialogEntry(message, { requesterId = null } = {}) {
+  if (!message || typeof message !== 'object') return null;
+  if (typeof message.type === 'number' && message.type !== 0 && message.type !== 19) return null;
+  const id = typeof message.id === 'string' && message.id ? message.id : null;
+  const content = safeTrimString(message.content);
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const attachmentLines = attachments
+    .map((attachment) => {
+      if (!attachment || typeof attachment !== 'object') return null;
+      if (typeof attachment.url !== 'string' || !attachment.url) return null;
+      const name = safeTrimString(attachment.filename);
+      return name ? `${name}: ${attachment.url}` : attachment.url;
+    })
+    .filter((line) => typeof line === 'string' && line.trim() !== '');
+  const lines = [];
+  if (content) lines.push(content);
+  lines.push(...attachmentLines);
+  if (lines.length === 0) return null;
+  const author = typeof message.author === 'object' && message.author != null ? message.author : {};
+  const authorId = typeof author.id === 'string' ? author.id : null;
+  const authorTag = toDiscordAuthorTag(author);
+  const requester = requesterId ? String(requesterId) : null;
+  const role = requester && authorId === requester ? 'requester' : 'staff';
+  const postedAt = typeof message.timestamp === 'string' ? message.timestamp : null;
+  return {
+    id: id || (authorId && postedAt ? `${authorId}:${postedAt}` : null),
+    role,
+    postedAt,
+    content: lines.join('\n'),
+    authorId,
+    authorTag
+  };
+}
+
+async function getDiscordTokenForTicket(row) {
+  if (!row || typeof db?.getTeam !== 'function') return null;
+  const teamIdCandidate = Number(row.team_id ?? row.teamId);
+  if (!Number.isFinite(teamIdCandidate)) return null;
+  try {
+    const team = await db.getTeam(teamIdCandidate);
+    if (!team) return null;
+    const token = safeTrimString(team.discord_token);
+    return token || null;
+  } catch (err) {
+    console.error(`failed to load team ${teamIdCandidate} for ticket`, err);
+    return null;
+  }
+}
+
+async function fetchDiscordTicketMessages(row) {
+  if (!row || typeof fetch !== 'function') return [];
+  const channelId = safeTrimString(row.channel_id ?? row.channelId);
+  if (!channelId) return [];
+  const token = await getDiscordTokenForTicket(row);
+  if (!token) return [];
+  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages?limit=${MAX_DISCORD_TICKET_MESSAGES}`;
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Authorization: `Bot ${token}`
+      }
+    });
+  } catch (err) {
+    console.error(`failed to fetch discord messages for channel ${channelId}`, err);
+    return [];
+  }
+  if (!response.ok) {
+    if (response.status !== 403 && response.status !== 404) {
+      console.error(`discord api returned ${response.status} for channel ${channelId}`);
+    }
+    return [];
+  }
+  let data;
+  try {
+    data = await response.json();
+  } catch (err) {
+    console.error(`failed to parse discord messages for channel ${channelId}`, err);
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+  const requesterId = row.created_by ?? row.createdBy ?? null;
+  const entries = [];
+  data.reverse();
+  for (const message of data) {
+    const entry = mapDiscordMessageToDialogEntry(message, { requesterId });
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+async function assembleTicketDialog(row) {
+  const baseEntries = buildTicketDialogEntries(row);
+  const entries = Array.isArray(baseEntries) ? [...baseEntries] : [];
+  const seen = new Set(entries.map((entry) => entry?.id).filter(Boolean));
+  try {
+    const discordEntries = await fetchDiscordTicketMessages(row);
+    for (const entry of discordEntries) {
+      if (!entry) continue;
+      const key = entry.id;
+      if (key && seen.has(key)) continue;
+      entries.push(entry);
+      if (key) seen.add(key);
+    }
+  } catch (err) {
+    console.error('failed to assemble ticket dialog', err);
+  }
+  entries.sort((a, b) => entryTimestamp(a) - entryTimestamp(b));
+  return entries;
 }
 
 const ROLE_KEY_PATTERN = /^[a-z0-9_\-]{3,32}$/i;
