@@ -5879,6 +5879,98 @@ app.get('/api/servers/:id/aq-tickets/:ticketId', auth, async (req, res) => {
   }
 });
 
+app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  if (typeof db?.getDiscordTicketById !== 'function') {
+    return res.status(503).json({ error: 'discord_unavailable' });
+  }
+  const ticketId = Number(req.params?.ticketId);
+  if (!Number.isFinite(ticketId)) {
+    res.status(400).json({ error: 'invalid_ticket' });
+    return;
+  }
+  let row;
+  try {
+    row = await db.getDiscordTicketById(id, ticketId);
+  } catch (err) {
+    console.error('failed to load aq ticket for reply', err);
+    res.status(500).json({ error: 'db_error' });
+    return;
+  }
+  if (!row) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+  const status = typeof row.status === 'string' ? row.status.trim().toLowerCase() : 'open';
+  if (status === 'closed') {
+    res.status(409).json({ error: 'ticket_closed' });
+    return;
+  }
+  const channelId = safeTrimString(row.channel_id ?? row.channelId);
+  if (!channelId) {
+    res.status(409).json({ error: 'ticket_channel_missing' });
+    return;
+  }
+  let token;
+  try {
+    token = await getDiscordTokenForTicket(row);
+  } catch (err) {
+    console.error('failed to load discord token for ticket reply', err);
+    res.status(500).json({ error: 'discord_unavailable' });
+    return;
+  }
+  if (!token) {
+    res.status(409).json({ error: 'discord_not_configured' });
+    return;
+  }
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
+  let content;
+  try {
+    const displayName = safeTrimString(req.authUser?.username)
+      || safeTrimString(req.user?.username)
+      || safeTrimString(req.authUser?.name)
+      || 'Panel User';
+    content = buildPanelReplyMessage(displayName, message);
+  } catch (err) {
+    const code = err?.code || 'invalid_payload';
+    const statusCode = code === 'message_required' ? 400 : (code === 'message_too_long' ? 413 : 400);
+    res.status(statusCode).json({ error: code });
+    return;
+  }
+  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages`;
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content })
+    });
+  } catch (err) {
+    console.error('failed to post discord ticket reply', err);
+    res.status(503).json({ error: 'discord_unreachable' });
+    return;
+  }
+  if (!response.ok) {
+    if (response.status === 404) {
+      res.status(409).json({ error: 'ticket_channel_missing' });
+    } else if (response.status === 429) {
+      res.status(429).json({ error: 'discord_rate_limited' });
+    } else if (response.status === 403) {
+      res.status(403).json({ error: 'discord_post_failed' });
+    } else if (response.status >= 500) {
+      res.status(503).json({ error: 'discord_unreachable' });
+    } else {
+      res.status(502).json({ error: 'discord_post_failed' });
+    }
+    return;
+  }
+  res.json({ ok: true });
+});
+
 app.get('/api/teams/:teamId/discord/tickets/:ticketId/preview', auth, async (req, res) => {
   if (typeof db?.getDiscordTicketForTeam !== 'function') {
     return res.status(404).json({ error: 'not_found' });
