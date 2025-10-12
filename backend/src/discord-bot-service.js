@@ -58,6 +58,7 @@ const TICKET_SELECT_PREFIX = 'ticket:select:';
 const MAX_PENDING_REQUEST_AGE_MS = 10 * 60 * 1000;
 
 const pendingTicketRequests = new Map();
+const teamBots = new Map();
 
 function cleanupExpiredRequests() {
   const now = Date.now();
@@ -414,9 +415,8 @@ function createCommandClient(state) {
   return client;
 }
 
-async function registerCommands(state) {
-  if (!state.commandClient?.application || !state.guildId) return;
-  const commands = [
+function buildCommandDefinitions() {
+  return [
     {
       name: 'ruststatus',
       description: 'Manage the Rust server status message',
@@ -817,14 +817,357 @@ async function registerCommands(state) {
       ]
     }
   ];
-
-  await state.commandClient.application.commands.set(commands, state.guildId);
 }
+
+async function registerCommandsForClient(client, guildId) {
+  if (!client?.application || !guildId) return;
+  const commands = buildCommandDefinitions();
+  await client.application.commands.set(commands, guildId);
+}
+
+async function registerCommands(state) {
+  await registerCommandsForClient(state.commandClient, state.guildId);
+}
+
+function createTeamCommandClient(teamState) {
+  teamState.ready = false;
+  const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+
+  let readyHandled = false;
+  const handleReady = async () => {
+    if (readyHandled) return;
+    readyHandled = true;
+    teamState.ready = true;
+    teamState.cooldownMs = MIN_REFRESH_MS;
+    teamState.cooldownUntil = 0;
+    const username = client.user?.tag ?? '(unknown)';
+    console.log(`discord team command bot ready for team ${teamState.teamId} as ${username}`);
+    for (const state of teamState.serverStates.values()) {
+      state.commandClient = client;
+      state.commandReady = true;
+      state.commandCooldownMs = MIN_REFRESH_MS;
+      state.commandCooldownUntil = 0;
+    }
+    for (const guildId of teamState.guildServers.keys()) {
+      try {
+        await ensureTeamGuildRegistration(teamState, guildId);
+      } catch (err) {
+        console.error(`failed to register slash commands for team ${teamState.teamId} in guild ${guildId}`, err);
+      }
+    }
+  };
+
+  client.once('clientReady', handleReady);
+  client.once('ready', handleReady);
+
+  client.on('error', (err) => {
+    console.error(`discord team command client error (team ${teamState.teamId})`, err);
+  });
+
+  client.on('shardError', (err) => {
+    console.error(`discord team command shard error (team ${teamState.teamId})`, err);
+  });
+
+  client.on('interactionCreate', (interaction) => {
+    handleTeamInteraction(teamState, interaction).catch((err) => {
+      console.error(`failed to handle interaction for team ${teamState.teamId}`, err);
+    });
+  });
+
+  return client;
+}
+
+async function ensureTeamGuildRegistration(teamState, guildId) {
+  if (!teamState?.client?.application || !guildId) return;
+  const registered = teamState.guildRegistrations.get(guildId);
+  if (registered) return;
+  await registerCommandsForClient(teamState.client, guildId);
+  teamState.guildRegistrations.set(guildId, true);
+}
+
+async function resetTeamCommandState(teamState, token) {
+  if (!teamState) return;
+  if (teamState.connectPromise) {
+    try {
+      await teamState.connectPromise;
+    } catch {
+      // ignore
+    }
+  }
+  const previousClient = teamState.client;
+  if (previousClient) {
+    try {
+      await previousClient.destroy();
+    } catch (err) {
+      console.error(`failed to destroy team command client for team ${teamState.teamId}`, err);
+    }
+  }
+  teamState.client = null;
+  teamState.ready = false;
+  teamState.connectPromise = null;
+  teamState.cooldownMs = MIN_REFRESH_MS;
+  teamState.cooldownUntil = 0;
+  teamState.guildRegistrations.clear();
+  teamState.token = token;
+  for (const state of teamState.serverStates.values()) {
+    if (state.commandClient === previousClient) {
+      state.commandClient = null;
+      state.commandReady = false;
+    }
+  }
+}
+
+async function ensureTeamBot(teamId, { token, guildId, state } = {}) {
+  if (!Number.isFinite(teamId) || !token) return null;
+
+  let teamState = teamBots.get(teamId);
+  if (!teamState) {
+    teamState = {
+      teamId,
+      token,
+      client: null,
+      ready: false,
+      connectPromise: null,
+      cooldownMs: MIN_REFRESH_MS,
+      cooldownUntil: 0,
+      guildRegistrations: new Map(),
+      guildServers: new Map(),
+      serverStates: new Map()
+    };
+    teamBots.set(teamId, teamState);
+  } else if (teamState.token !== token) {
+    await resetTeamCommandState(teamState, token);
+  }
+
+  if (state) {
+    if (state.teamCommandState && state.teamCommandState !== teamState) {
+      detachStateFromTeamBot(state);
+    }
+    teamState.serverStates.set(state.serverId, state);
+    state.teamCommandState = teamState;
+    if (guildId) {
+      for (const [existingGuildId, members] of teamState.guildServers.entries()) {
+        if (existingGuildId !== guildId && members.delete(state) && members.size === 0) {
+          teamState.guildServers.delete(existingGuildId);
+          teamState.guildRegistrations.delete(existingGuildId);
+        }
+      }
+      if (!teamState.guildServers.has(guildId)) {
+        teamState.guildServers.set(guildId, new Set());
+      }
+      teamState.guildServers.get(guildId)?.add(state);
+    }
+    state.commandClient = teamState.client ?? state.commandClient;
+    state.commandReady = Boolean(teamState.ready && teamState.client);
+  }
+
+  if (!teamState.client) {
+    teamState.client = createTeamCommandClient(teamState);
+  }
+
+  const now = Date.now();
+  if (teamState.cooldownUntil <= now && !teamState.ready) {
+    if (!teamState.connectPromise) {
+      teamState.connectPromise = (async () => {
+        const readyPromise = once(teamState.client, 'ready');
+        try {
+          await teamState.client.login(teamState.token);
+          await readyPromise;
+        } catch (err) {
+          readyPromise.catch(() => {});
+          console.error(`discord team command bot login failed for team ${teamId}`, err);
+          teamState.ready = false;
+          try {
+            await teamState.client.destroy();
+          } catch (destroyErr) {
+            console.error(`discord team command bot destroy after login failure (team ${teamId})`, destroyErr);
+          }
+          const nextCooldown = Math.min((teamState.cooldownMs || MIN_REFRESH_MS) * 2, 5 * 60 * 1000);
+          teamState.cooldownMs = Math.max(nextCooldown, MIN_REFRESH_MS);
+          teamState.cooldownUntil = Date.now() + teamState.cooldownMs;
+          teamState.client = null;
+          throw err;
+        }
+      })().finally(() => {
+        teamState.connectPromise = null;
+      });
+    }
+    try {
+      await teamState.connectPromise;
+    } catch {
+      // login failure handled above
+    }
+  }
+
+  if (guildId) {
+    if (teamState.ready) {
+      try {
+        await ensureTeamGuildRegistration(teamState, guildId);
+      } catch (err) {
+        console.error(`failed to register slash commands for team ${teamId} in guild ${guildId}`, err);
+      }
+    } else {
+      teamState.guildRegistrations.set(guildId, false);
+    }
+  }
+
+  if (state) {
+    state.commandClient = teamState.client ?? state.commandClient;
+    state.commandReady = Boolean(teamState.ready && teamState.client);
+  }
+
+  return teamState;
+}
+
+async function shutdownTeamBot(teamState, { remove = false } = {}) {
+  if (!teamState) return;
+  await resetTeamCommandState(teamState, teamState.token);
+  if (remove) {
+    teamBots.delete(teamState.teamId);
+    teamState.serverStates.clear();
+    teamState.guildServers.clear();
+  }
+}
+
+function detachStateFromTeamBot(state) {
+  const teamState = state?.teamCommandState;
+  if (!teamState) return;
+  if (teamState.serverStates.get(state.serverId) === state) {
+    teamState.serverStates.delete(state.serverId);
+  } else {
+    for (const [key, entry] of teamState.serverStates.entries()) {
+      if (entry === state) {
+        teamState.serverStates.delete(key);
+        break;
+      }
+    }
+  }
+  for (const [guildId, members] of teamState.guildServers.entries()) {
+    if (members.delete(state) && members.size === 0) {
+      teamState.guildServers.delete(guildId);
+      teamState.guildRegistrations.delete(guildId);
+    }
+  }
+  if (state.commandClient === teamState.client) {
+    state.commandClient = null;
+    state.commandReady = false;
+  }
+  state.teamCommandState = null;
+  if (teamState.serverStates.size === 0) {
+    shutdownTeamBot(teamState, { remove: true }).catch((err) => {
+      console.error(`failed to shutdown team bot for team ${teamState.teamId}`, err);
+    });
+  }
+}
+
+function selectTeamServerState(teamState, interaction) {
+  if (!interaction?.guildId) {
+    return { state: null, requiresExplicitSelection: false };
+  }
+  const guildStates = teamState.guildServers.get(interaction.guildId);
+  if (!guildStates || guildStates.size === 0) {
+    return { state: null, requiresExplicitSelection: false };
+  }
+
+  const wrapState = (state) => ({ state, requiresExplicitSelection: false });
+
+  const findStateByServerId = (serverId) => {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric)) return null;
+    return teamState.serverStates.get(numeric) || [...guildStates].find((entry) => entry.serverId === numeric) || null;
+  };
+
+  if (interaction.isModalSubmit() || interaction.isStringSelectMenu()) {
+    const customId = interaction.customId ?? '';
+    if (customId.startsWith(TICKET_MODAL_PREFIX) || customId.startsWith(TICKET_SELECT_PREFIX)) {
+      const prefix = customId.startsWith(TICKET_MODAL_PREFIX) ? TICKET_MODAL_PREFIX : TICKET_SELECT_PREFIX;
+      const requestId = customId.slice(prefix.length);
+      const entry = getPendingTicketRequest(requestId);
+      if (entry?.serverId != null) {
+        const byServer = findStateByServerId(entry.serverId);
+        if (byServer) return wrapState(byServer);
+      }
+    }
+  }
+
+  if (interaction.isButton() && interaction.customId === TICKET_PANEL_BUTTON_ID) {
+    for (const state of guildStates) {
+      if (state.channelId && interaction.channelId === state.channelId) return wrapState(state);
+      const ticketing = getTicketConfig(state);
+      if (ticketing?.panelChannelId && ticketing.panelChannelId === interaction.channelId) return wrapState(state);
+    }
+  }
+
+  if (interaction.isChatInputCommand()) {
+    let requestedServer = null;
+    if (interaction.commandName === 'ticket') {
+      requestedServer = interaction.options.getInteger('server', false);
+    } else if (interaction.commandName === 'ruststatus') {
+      requestedServer = interaction.options.getInteger('server', false);
+      if (!Number.isFinite(requestedServer)) {
+        requestedServer = interaction.options.getInteger('id', false);
+      }
+    }
+    if (Number.isFinite(requestedServer)) {
+      const byServer = findStateByServerId(requestedServer);
+      if (byServer) return wrapState(byServer);
+    }
+  }
+
+  for (const state of guildStates) {
+    if (state.channelId && state.channelId === interaction.channelId) {
+      return wrapState(state);
+    }
+  }
+
+  for (const state of guildStates) {
+    const ticketing = getTicketConfig(state);
+    if (ticketing?.panelChannelId && ticketing.panelChannelId === interaction.channelId) {
+      return wrapState(state);
+    }
+  }
+
+  if (guildStates.size === 1) {
+    return wrapState(guildStates.values().next().value);
+  }
+
+  return { state: null, requiresExplicitSelection: guildStates.size > 1 };
+}
+
+async function handleTeamInteraction(teamState, interaction) {
+  if (!interaction?.guildId) return;
+  const { state, requiresExplicitSelection } = selectTeamServerState(teamState, interaction);
+  if (!state) {
+    if (requiresExplicitSelection && typeof interaction.isChatInputCommand === 'function' && interaction.isChatInputCommand()) {
+      const canReply = typeof interaction.isRepliable === 'function'
+        ? interaction.isRepliable()
+        : Boolean(interaction.repliable);
+      if (canReply) {
+        const message = 'Multiple Rust servers are linked to this team in this guild. Please specify a server when using this command.';
+        try {
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply(message);
+          } else {
+            await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+          }
+        } catch (err) {
+          console.error('failed to notify user about ambiguous team interaction', err);
+        }
+      }
+    }
+    return;
+  }
+  await handleInteraction(state, interaction);
+}
+
 
 async function shutdownBot(serverId) {
   const state = bots.get(serverId);
   if (!state) return;
   bots.delete(serverId);
+  if (state.teamCommandState) {
+    detachStateFromTeamBot(state);
+  }
   try {
     if (state.statusClient) {
       await state.statusClient.destroy();
@@ -833,7 +1176,11 @@ async function shutdownBot(serverId) {
     console.error(`discord status bot ${serverId} destroy failed`, err);
   }
   try {
-    if (state.commandClient && state.commandClient !== state.statusClient) {
+    if (
+      state.commandClient &&
+      state.commandClient !== state.statusClient &&
+      (!state.teamCommandState || state.commandClient !== state.teamCommandState.client)
+    ) {
       await state.commandClient.destroy();
     }
   } catch (err) {
@@ -887,13 +1234,6 @@ async function ensureBot(integration) {
   }
 
   let state = bots.get(serverId);
-  const useSharedClient = Boolean(commandToken) && commandToken === statusToken;
-
-  if (state && state.useSharedClient !== useSharedClient) {
-    await shutdownBot(serverId);
-    state = null;
-  }
-
   if (!state) {
     state = {
       serverId,
@@ -919,62 +1259,39 @@ async function ensureBot(integration) {
       configKey: null,
       integration,
       teamId: null,
+      teamToken: null,
+      teamCommandState: null,
       teamServers: null,
       teamServerIds: null,
       teamServerCacheUntil: 0,
       serverName: null,
-      useSharedClient
+      useSharedClient: false
     };
     state.statusClient = createStatusClient(state);
-    if (!useSharedClient && commandToken) {
-      state.commandClient = createCommandClient(state);
-    }
     bots.set(serverId, state);
   }
 
-  state.useSharedClient = useSharedClient;
-  if (state.statusToken !== statusToken) {
-    if (state.statusClient) {
-      try {
-        await state.statusClient.destroy();
-      } catch (err) {
-        console.error(`failed to destroy existing status client for server ${serverId}`, err);
-      }
+  const previousStatusToken = state.statusToken;
+  state.statusToken = statusToken;
+
+  if (previousStatusToken && previousStatusToken !== statusToken && state.statusClient) {
+    try {
+      await state.statusClient.destroy();
+    } catch (err) {
+      console.error(`failed to destroy existing status client for server ${serverId}`, err);
     }
     state.statusReady = false;
     state.statusConnectPromise = null;
     state.statusClient = createStatusClient(state);
-  }
-  state.statusToken = statusToken;
-
-  if (!state.useSharedClient) {
-    if (state.commandToken !== commandToken && state.commandClient) {
-      try {
-        await state.commandClient.destroy();
-      } catch (err) {
-        console.error(`failed to destroy existing command client for server ${serverId}`, err);
-      }
-      state.commandClient = null;
-      state.commandReady = false;
-      state.commandConnectPromise = null;
-    }
-    state.commandToken = commandToken;
-    if (commandToken && !state.commandClient) {
-      state.commandClient = createCommandClient(state);
-    }
-  } else {
-    state.commandToken = statusToken;
-    state.commandClient = state.statusClient;
-    if (state.statusReady) {
-      state.commandReady = true;
-      state.commandCooldownMs = state.statusCooldownMs;
-      state.commandCooldownUntil = state.statusCooldownUntil;
-    } else {
-      state.commandReady = false;
-    }
+  } else if (!state.statusClient) {
+    state.statusClient = createStatusClient(state);
+    state.statusReady = false;
   }
 
-  state.guildId = guildId;
+  const previousCommandClient = state.commandClient;
+
+  state.commandToken = commandToken;
+
   if (state.channelId !== channelId) {
     state.channelId = channelId;
     state.channel = null;
@@ -984,10 +1301,108 @@ async function ensureBot(integration) {
     state.statusMessageId = statusMessageId;
     state.lastStatusEmbedKey = null;
   }
+  state.guildId = guildId;
   state.integration = integration;
   updateStateConfigFromIntegration(state, integration);
 
+  let teamId = state.teamId;
+  if (!Number.isFinite(teamId) && typeof db.getServer === 'function') {
+    try {
+      const serverRow = await db.getServer(serverId);
+      const rawTeamId = serverRow?.team_id ?? serverRow?.teamId;
+      const numericTeamId = Number(rawTeamId);
+      if (Number.isFinite(numericTeamId)) {
+        teamId = numericTeamId;
+      }
+    } catch (err) {
+      console.error(`failed to load server metadata for ${serverId} while preparing discord bots`, err);
+    }
+  }
+  state.teamId = Number.isFinite(teamId) ? teamId : null;
+
+  let teamToken = null;
+  if (Number.isFinite(state.teamId) && typeof db.getTeam === 'function') {
+    try {
+      const team = await db.getTeam(state.teamId);
+      teamToken = sanitizeId(team?.discord_token);
+    } catch (err) {
+      console.error(`failed to load team ${state.teamId} discord token for server ${serverId}`, err);
+    }
+  }
+  state.teamToken = teamToken;
+
+  const usingTeamCommand = Boolean(teamToken);
+  const useSharedClient = !usingTeamCommand && Boolean(commandToken) && commandToken === statusToken;
+
+  if (state.useSharedClient !== useSharedClient) {
+    if (state.useSharedClient && state.commandClient === state.statusClient) {
+      state.commandClient = null;
+      state.commandReady = false;
+    }
+    state.useSharedClient = useSharedClient;
+  }
+
+  if (usingTeamCommand) {
+    if (previousCommandClient && previousCommandClient !== state.statusClient && (!state.teamCommandState || previousCommandClient !== state.teamCommandState.client)) {
+      try {
+        await previousCommandClient.destroy();
+      } catch (err) {
+        console.error(`failed to destroy dedicated command client for server ${serverId}`, err);
+      }
+    }
+    state.commandClient = null;
+    state.commandReady = false;
+    state.commandConnectPromise = null;
+    state.commandCooldownMs = MIN_REFRESH_MS;
+    state.commandCooldownUntil = 0;
+  } else if (state.teamCommandState) {
+    detachStateFromTeamBot(state);
+  }
+
+  if (usingTeamCommand) {
+    const teamState = await ensureTeamBot(state.teamId, { token: teamToken, guildId, state });
+    if (teamState?.client) {
+      state.commandClient = teamState.client;
+      state.commandReady = Boolean(teamState.ready);
+    }
+  } else if (state.useSharedClient) {
+    state.commandClient = state.statusClient;
+    if (state.statusReady) {
+      state.commandReady = true;
+      state.commandCooldownMs = state.statusCooldownMs;
+      state.commandCooldownUntil = state.statusCooldownUntil;
+    } else {
+      state.commandReady = false;
+    }
+  } else if (commandToken) {
+    if (state.commandClient && state.commandClient !== state.statusClient && state.commandToken !== commandToken) {
+      try {
+        await state.commandClient.destroy();
+      } catch (err) {
+        console.error(`failed to destroy existing command client for server ${serverId}`, err);
+      }
+      state.commandClient = null;
+      state.commandReady = false;
+      state.commandConnectPromise = null;
+    }
+    if (!state.commandClient) {
+      state.commandClient = createCommandClient(state);
+    }
+  } else {
+    if (state.commandClient && state.commandClient !== state.statusClient) {
+      try {
+        await state.commandClient.destroy();
+      } catch (err) {
+        console.error(`failed to destroy command client without token for server ${serverId}`, err);
+      }
+    }
+    state.commandClient = state.useSharedClient ? state.statusClient : null;
+    state.commandReady = false;
+    state.commandConnectPromise = null;
+  }
+
   const now = Date.now();
+
   if (state.statusCooldownUntil <= now && !state.statusReady) {
     if (!state.statusConnectPromise) {
       state.statusConnectPromise = (async () => {
@@ -1021,7 +1436,7 @@ async function ensureBot(integration) {
     }
   }
 
-  if (!state.useSharedClient && commandToken) {
+  if (!usingTeamCommand && !state.useSharedClient && commandToken) {
     if (state.commandCooldownUntil <= now && !state.commandReady) {
       if (!state.commandClient) {
         state.commandClient = createCommandClient(state);
@@ -1068,6 +1483,7 @@ async function ensureBot(integration) {
 
   return state;
 }
+
 
 async function ensureChannel(state) {
   if (!state?.statusReady) return null;
@@ -1374,7 +1790,15 @@ function buildLookupListEntry(row) {
   if (vacBanned != null) extras.push(`VAC: ${Number(vacBanned) ? 'banned' : 'clean'}`);
   const gameBans = Number(row.game_bans ?? row.gameBans);
   if (Number.isFinite(gameBans) && gameBans > 0) extras.push(`${gameBans} game bans`);
-  return `${namePart} • \`${row.steamid}\`\nLast seen ${lastSeenText}${extras.length ? ` • ${extras.join(' • ')}` : ''}`;
+  const serverName = row.server_name ?? row.serverName;
+  const serverId = Number(row.server_id ?? row.serverId);
+  let serverSuffix = '';
+  if (serverName || Number.isFinite(serverId)) {
+    const label = serverName ? escapeMarkdown(serverName) : `Server ${serverId}`;
+    const idSuffix = Number.isFinite(serverId) ? ` (#${serverId})` : '';
+    serverSuffix = ` • Server: ${label}${idSuffix}`;
+  }
+  return `${namePart} • \`${row.steamid}\`\nLast seen ${lastSeenText}${extras.length ? ` • ${extras.join(' • ')}` : ''}${serverSuffix}`;
 }
 
 function buildDetailedPlayerEmbed(row) {
@@ -1393,6 +1817,14 @@ function buildDetailedPlayerEmbed(row) {
   }
 
   embed.addFields({ name: 'SteamID', value: `\`${row.steamid}\``, inline: true });
+
+  const serverName = row.server_name ?? row.serverName;
+  const serverId = Number(row.server_id ?? row.serverId);
+  if (serverName || Number.isFinite(serverId)) {
+    const label = serverName ? escapeMarkdown(serverName) : `Server ${serverId}`;
+    const value = Number.isFinite(serverId) ? `${label} (#${serverId})` : label;
+    embed.addFields({ name: 'Server', value, inline: true });
+  }
 
   const lastSeen = parseDate(row.last_seen ?? row.lastSeen);
   if (lastSeen) embed.addFields({ name: 'Last Seen', value: formatDiscordTimestamp(lastSeen, 'R'), inline: true });
@@ -2681,6 +3113,36 @@ async function handleRustLookupCommand(state, interaction) {
     return;
   }
 
+  try {
+    await loadTeamServers(state, { force: !state.teamServers || state.teamServerCacheUntil < Date.now() });
+  } catch (err) {
+    console.error(`failed to refresh team context before lookup for server ${state.serverId}`, err);
+  }
+
+  const serverIds = new Set();
+  serverIds.add(state.serverId);
+  if (state.teamServers instanceof Map) {
+    for (const id of state.teamServers.keys()) {
+      const numeric = Number(id);
+      if (Number.isFinite(numeric)) serverIds.add(numeric);
+    }
+  } else if (state.teamServerIds instanceof Set) {
+    for (const id of state.teamServerIds.values()) {
+      const numeric = Number(id);
+      if (Number.isFinite(numeric)) serverIds.add(numeric);
+    }
+  }
+
+  const resolveServerName = (id) => {
+    if (state.teamServers instanceof Map && state.teamServers.has(id)) {
+      return state.teamServers.get(id)?.name ?? `Server ${id}`;
+    }
+    if (id === state.serverId) {
+      return state.serverName ?? `Server ${id}`;
+    }
+    return `Server ${id}`;
+  };
+
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'player') {
@@ -2695,15 +3157,48 @@ async function handleRustLookupCommand(state, interaction) {
       return;
     }
 
-    const results = await db.searchServerPlayers(state.serverId, query, { limit: 10 });
+    const aggregated = [];
+    for (const serverId of serverIds) {
+      try {
+        const rows = await db.searchServerPlayers(serverId, query, { limit: 10 });
+        for (const row of rows ?? []) {
+          aggregated.push({
+            ...row,
+            server_id: serverId,
+            serverId,
+            server_name: resolveServerName(serverId)
+          });
+        }
+      } catch (err) {
+        console.error(`failed to search players on server ${serverId}`, err);
+      }
+    }
+
+    const deduped = new Map();
+    for (const row of aggregated) {
+      if (!row?.steamid) continue;
+      const steamid = row.steamid;
+      const seen = parseDate(row.last_seen ?? row.lastSeen);
+      const ts = seen ? seen.getTime() : 0;
+      const existing = deduped.get(steamid);
+      if (!existing || ts > existing.ts) {
+        deduped.set(steamid, { row, ts });
+      }
+    }
+
+    const sorted = Array.from(deduped.values())
+      .sort((a, b) => b.ts - a.ts)
+      .map((entry) => entry.row)
+      .slice(0, 10);
+
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle(`Player search: ${escapeMarkdown(query)}`);
 
-    if (!results || results.length === 0) {
+    if (!sorted.length) {
       embed.setDescription('No matching players were found.');
     } else {
-      const lines = results.map((row) => buildLookupListEntry(row)).join('\n\n');
+      const lines = sorted.map((row) => buildLookupListEntry(row)).join('\n\n');
       embed.setDescription(lines.slice(0, 4000));
     }
 
@@ -2719,20 +3214,46 @@ async function handleRustLookupCommand(state, interaction) {
       return;
     }
 
-    let row = null;
+    let best = null;
+    let bestTimestamp = -Infinity;
     if (typeof db.getServerPlayer === 'function') {
-      row = await db.getServerPlayer(state.serverId, id);
+      for (const serverId of serverIds) {
+        try {
+          const candidate = await db.getServerPlayer(serverId, id);
+          if (candidate) {
+            const seen = parseDate(candidate.last_seen ?? candidate.lastSeen);
+            const ts = seen ? seen.getTime() : 0;
+            if (!best || ts > bestTimestamp) {
+              best = {
+                ...candidate,
+                server_id: serverId,
+                serverId,
+                server_name: resolveServerName(serverId)
+              };
+              bestTimestamp = ts;
+            }
+          }
+        } catch (err) {
+          console.error(`failed to lookup player ${id} on server ${serverId}`, err);
+        }
+      }
     }
-    if (!row && typeof db.getPlayer === 'function') {
-      row = await db.getPlayer(id);
+
+    if (!best && typeof db.getPlayer === 'function') {
+      try {
+        best = await db.getPlayer(id);
+      } catch (err) {
+        console.error(`failed to lookup global player ${id}`, err);
+      }
     }
-    if (!row) {
+
+    if (!best) {
       await interaction.editReply('No player was found for that SteamID64.');
       return;
     }
 
-    if (!row.steamid) row.steamid = id;
-    const embed = buildDetailedPlayerEmbed(row);
+    if (!best.steamid) best.steamid = id;
+    const embed = buildDetailedPlayerEmbed(best);
     await interaction.editReply({ embeds: [embed] });
     return;
   }
