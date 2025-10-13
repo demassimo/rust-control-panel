@@ -64,6 +64,8 @@ const ENABLE_SERVER_COMMAND_BOT = false;
 
 const pendingTicketRequests = new Map();
 const teamBots = new Map();
+// Ensure slash commands stay guild-scoped by clearing any global registrations once per client.
+const clientsWithClearedGlobalCommands = new WeakSet();
 
 function cleanupExpiredRequests() {
   const now = Date.now();
@@ -873,14 +875,25 @@ function buildCommandDefinitions() {
   ];
 }
 
-async function registerCommandsForClient(client, guildId) {
+async function registerCommandsForClient(client, guildId, { logContext } = {}) {
   if (!client?.application || !guildId) return;
+  if (!clientsWithClearedGlobalCommands.has(client)) {
+    try {
+      await client.application.commands.set([]);
+      clientsWithClearedGlobalCommands.add(client);
+    } catch (err) {
+      const contextLabel = logContext ? ` (${logContext})` : '';
+      console.error(`failed to clear global slash commands${contextLabel}`, err);
+    }
+  }
   const commands = buildCommandDefinitions();
   await client.application.commands.set(commands, guildId);
 }
 
 async function registerCommands(state) {
-  await registerCommandsForClient(state.commandClient, state.guildId);
+  await registerCommandsForClient(state.commandClient, state.guildId, {
+    logContext: `server ${state.serverId}`
+  });
 }
 
 function createTeamCommandClient(teamState) {
@@ -935,7 +948,9 @@ async function ensureTeamGuildRegistration(teamState, guildId) {
   if (!teamState?.client?.application || !guildId) return;
   const registered = teamState.guildRegistrations.get(guildId);
   if (registered) return;
-  await registerCommandsForClient(teamState.client, guildId);
+  await registerCommandsForClient(teamState.client, guildId, {
+    logContext: `team ${teamState.teamId}`
+  });
   teamState.guildRegistrations.set(guildId, true);
 }
 
