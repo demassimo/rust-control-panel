@@ -65,6 +65,8 @@ const TEAM_AUTH_LINK_TTL_MS = (() => {
 const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL
   ? process.env.PUBLIC_APP_URL.trim().replace(/\/+$/, '')
   : null;
+const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
+const PANEL_PUBLIC_URL = normalizeBaseUrl(process.env.PANEL_PUBLIC_URL);
 
 // Server-specific Discord bots are limited to presence/status updates only. All
 // interactive slash commands are handled by the team-level bot instead.
@@ -72,6 +74,8 @@ const ENABLE_SERVER_COMMAND_BOT = false;
 
 const pendingTicketRequests = new Map();
 const teamBots = new Map();
+// Ensure slash commands stay guild-scoped by clearing any global registrations once per client.
+const clientsWithClearedGlobalCommands = new WeakSet();
 
 function cleanupExpiredRequests() {
   const now = Date.now();
@@ -139,6 +143,59 @@ function sanitizeTicketText(value, fallback = '') {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   return trimmed.slice(0, 500);
+}
+
+function normalizeBaseUrl(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/\/+$/, '');
+}
+
+function resolvePreviewHref(relative) {
+  if (!relative) return relative;
+  if (/^https?:\/\//i.test(relative)) return relative;
+  if (!PANEL_PUBLIC_URL) return relative;
+  if (relative.startsWith('/')) {
+    return `${PANEL_PUBLIC_URL}${relative}`;
+  }
+  return `${PANEL_PUBLIC_URL}/${relative}`;
+}
+
+function buildTicketPreviewUrl(teamId, ticket) {
+  const numericTeamId = Number(teamId);
+  if (!Number.isFinite(numericTeamId)) return null;
+  let previewToken = null;
+  if (typeof ticket === 'string') {
+    const trimmed = ticket.trim();
+    previewToken = trimmed || null;
+  } else if (typeof ticket === 'number') {
+    previewToken = Number.isFinite(ticket) ? String(Math.trunc(ticket)) : null;
+  } else if (ticket && typeof ticket === 'object') {
+    const direct = typeof ticket.previewToken === 'string' ? ticket.previewToken.trim() : '';
+    const legacy = typeof ticket.preview_token === 'string' ? ticket.preview_token.trim() : '';
+    const idValue = ticket.id ?? ticket.ticketId ?? ticket.ticket_id;
+    if (direct) {
+      previewToken = direct;
+    } else if (legacy) {
+      previewToken = legacy;
+    } else if (typeof idValue === 'string' && idValue.trim()) {
+      previewToken = idValue.trim();
+    } else if (Number.isFinite(idValue)) {
+      previewToken = String(Number(idValue));
+    }
+  } else if (ticket != null) {
+    const text = String(ticket).trim();
+    previewToken = text || null;
+  }
+  if (!previewToken) return null;
+  const base = TICKET_PREVIEW_PAGE || '/ticket-preview.html';
+  const [pathPart, searchPart = ''] = String(base).split('?');
+  const params = new URLSearchParams(searchPart);
+  params.set('teamId', String(numericTeamId));
+  params.set('ticketToken', previewToken);
+  const relative = `${pathPart}?${params.toString()}`;
+  return resolvePreviewHref(relative);
 }
 
 function getTicketConfig(state) {
@@ -978,14 +1035,25 @@ function buildCommandDefinitions() {
   ];
 }
 
-async function registerCommandsForClient(client, guildId) {
+async function registerCommandsForClient(client, guildId, { logContext } = {}) {
   if (!client?.application || !guildId) return;
+  if (!clientsWithClearedGlobalCommands.has(client)) {
+    try {
+      await client.application.commands.set([]);
+      clientsWithClearedGlobalCommands.add(client);
+    } catch (err) {
+      const contextLabel = logContext ? ` (${logContext})` : '';
+      console.error(`failed to clear global slash commands${contextLabel}`, err);
+    }
+  }
   const commands = buildCommandDefinitions();
   await client.application.commands.set(commands, guildId);
 }
 
 async function registerCommands(state) {
-  await registerCommandsForClient(state.commandClient, state.guildId);
+  await registerCommandsForClient(state.commandClient, state.guildId, {
+    logContext: `server ${state.serverId}`
+  });
 }
 
 function createTeamCommandClient(teamState) {
@@ -1040,7 +1108,9 @@ async function ensureTeamGuildRegistration(teamState, guildId) {
   if (!teamState?.client?.application || !guildId) return;
   const registered = teamState.guildRegistrations.get(guildId);
   if (registered) return;
-  await registerCommandsForClient(teamState.client, guildId);
+  await registerCommandsForClient(teamState.client, guildId, {
+    logContext: `team ${teamState.teamId}`
+  });
   teamState.guildRegistrations.set(guildId, true);
 }
 
@@ -3449,6 +3519,7 @@ async function createTicketTranscript(channel, context = {}) {
   header.push(`Reason: ${safeReason}`);
 
   const lines = [];
+  const transcriptEntries = [];
   let messageCount = 0;
   const seen = new Set();
   let before;
@@ -3477,6 +3548,19 @@ async function createTicketTranscript(channel, context = {}) {
 
       const contentRaw = message.cleanContent ?? message.content ?? '';
       const content = String(contentRaw ?? '').replace(/\r\n?/g, '\n').trim();
+      const requesterId = context?.openedBy ? String(context.openedBy) : null;
+      const attachments = message.attachments?.size ? [...message.attachments.values()] : [];
+      const attachmentEntryLines = [];
+      const attachmentTranscriptLines = [];
+      for (const attachment of attachments) {
+        if (!attachment) continue;
+        const url = attachment.url;
+        if (!url) continue;
+        const attachmentName = attachment.name ?? 'attachment';
+        attachmentTranscriptLines.push(`  [Attachment] ${attachmentName} — ${url}`);
+        const cleanName = typeof attachmentName === 'string' ? attachmentName.trim() : '';
+        attachmentEntryLines.push(cleanName ? `${cleanName}: ${url}` : url);
+      }
       if (content) {
         const [firstLine, ...rest] = content.split('\n');
         lines.push(`${baseLine}: ${firstLine}`);
@@ -3493,10 +3577,8 @@ async function createTicketTranscript(channel, context = {}) {
         lines.push(`  Replying to message ID: ${message.reference.messageId}`);
       }
 
-      const attachments = message.attachments?.size ? [...message.attachments.values()] : [];
-      for (const attachment of attachments) {
-        const attachmentName = attachment.name ?? 'attachment';
-        lines.push(`  [Attachment] ${attachmentName} — ${attachment.url}`);
+      for (const transcriptLine of attachmentTranscriptLines) {
+        lines.push(transcriptLine);
       }
 
       if (message.embeds?.length) {
@@ -3512,6 +3594,21 @@ async function createTicketTranscript(channel, context = {}) {
       }
 
       lines.push('');
+
+      const entryLines = [];
+      if (content) entryLines.push(content);
+      entryLines.push(...attachmentEntryLines);
+      if (entryLines.length) {
+        const role = requesterId && authorId && String(authorId) === requesterId ? 'requester' : 'staff';
+        transcriptEntries.push({
+          id: String(message.id),
+          role,
+          postedAt: timestamp,
+          content: entryLines.join('\n'),
+          authorId: typeof authorId === 'string' ? authorId : String(authorId ?? ''),
+          authorTag: typeof authorTag === 'string' ? authorTag : null
+        });
+      }
     }
 
     const oldest = sorted[0];
@@ -3528,7 +3625,8 @@ async function createTicketTranscript(channel, context = {}) {
   }
 
   const transcriptLines = [...header, ...lines];
-  return `${transcriptLines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+  const text = `${transcriptLines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+  return { text, entries: transcriptEntries };
 }
 
 async function handleTicketCloseCommand(state, interaction) {
@@ -3626,9 +3724,17 @@ async function handleTicketCloseCommand(state, interaction) {
   let transcriptFileName = null;
   const ticketNumberDisplay = ticketRecord.ticket_number ?? 'unknown';
   const channelName = targetChannel.name ?? `ticket-${ticketNumberDisplay}`;
+  const previewUrl = buildTicketPreviewUrl(
+    ticketRecord.team_id ?? ticketRecord.teamId,
+    {
+      id: ticketRecord.id ?? ticketRecord.ticket_id ?? ticketRecord.ticketId,
+      previewToken: ticketRecord.preview_token ?? ticketRecord.previewToken
+    }
+  );
 
+  let transcriptEntries = [];
   try {
-    const transcriptText = await createTicketTranscript(targetChannel, {
+    const transcriptPayload = await createTicketTranscript(targetChannel, {
       ticketNumber: ticketNumberDisplay,
       channelName,
       subject: ticketRecord.subject,
@@ -3637,10 +3743,43 @@ async function handleTicketCloseCommand(state, interaction) {
       openedBy: ticketRecord.created_by,
       openedByTag: ticketRecord.created_by_tag
     });
-    transcriptBuffer = Buffer.from(transcriptText, 'utf8');
-    transcriptFileName = `ticket-${ticketNumberDisplay}.txt`;
+    if (transcriptPayload?.text) {
+      transcriptBuffer = Buffer.from(transcriptPayload.text, 'utf8');
+      transcriptFileName = `ticket-${ticketNumberDisplay}.txt`;
+    }
+    if (Array.isArray(transcriptPayload?.entries)) {
+      transcriptEntries = transcriptPayload.entries;
+    }
   } catch (err) {
     console.error(`failed to generate transcript for ticket ${targetChannel.id}`, err);
+  }
+
+  const numericTicketId = Number(ticketRecord.id ?? ticketRecord.ticket_id ?? ticketRecord.ticketId);
+  if (Number.isFinite(numericTicketId) && typeof db.replaceDiscordTicketDialogEntries === 'function') {
+    const mappedEntries = Array.isArray(transcriptEntries)
+      ? transcriptEntries
+          .map((entry) => {
+            if (!entry || !entry.id) return null;
+            const messageId = String(entry.id).trim();
+            if (!messageId) return null;
+            const role = entry.role === 'requester' ? 'requester' : 'staff';
+            const content = typeof entry.content === 'string' ? entry.content : '';
+            return {
+              message_id: messageId,
+              role,
+              author_id: typeof entry.authorId === 'string' ? entry.authorId : null,
+              author_tag: typeof entry.authorTag === 'string' ? entry.authorTag : null,
+              content,
+              posted_at: entry.postedAt ?? null
+            };
+          })
+          .filter((entry) => entry && entry.content)
+      : [];
+    try {
+      await db.replaceDiscordTicketDialogEntries(numericTicketId, mappedEntries);
+    } catch (err) {
+      console.error(`failed to persist ticket dialog for ${targetChannel.id}`, err);
+    }
   }
 
   let dmSuccess = false;
@@ -3660,6 +3799,10 @@ async function handleTicketCloseCommand(state, interaction) {
         }
         const safeReason = reason.replace(/\r\n?/g, ' ');
         dmLines.push(`Reason: ${safeReason}`);
+        if (previewUrl) {
+          dmLines.push('');
+          dmLines.push(`View your ticket transcript: ${previewUrl}`);
+        }
         await user.send({
           content: dmLines.join('\n'),
           files: [attachment]
@@ -3700,6 +3843,9 @@ async function handleTicketCloseCommand(state, interaction) {
           logEmbed.addFields({ name: 'Reason', value: escapeMarkdown(reason).slice(0, 1000), inline: false });
         }
         logEmbed.addFields({ name: 'Transcript delivery', value: dmLogMessage });
+        if (previewUrl) {
+          logEmbed.addFields({ name: 'Transcript preview', value: escapeMarkdown(previewUrl).slice(0, 200), inline: false });
+        }
 
         const payload = { embeds: [logEmbed] };
         if (transcriptBuffer) {

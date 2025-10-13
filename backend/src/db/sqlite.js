@@ -1,5 +1,6 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import { randomBytes } from 'node:crypto';
 import { serializeCombatLogPayload } from './combat-log.js';
 
 export default {
@@ -36,6 +37,33 @@ function createApi(dbh, dialect) {
     if (!text) return null;
     const lower = text.toLowerCase();
     return lower === 'team' || lower === 'global' ? lower : null;
+  };
+  const generatePreviewToken = (size = 18) => randomBytes(size).toString('hex');
+  const generateUniqueTicketPreviewToken = async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const candidate = generatePreviewToken(18 + attempt);
+      const existing = await dbh.get(
+        'SELECT id FROM discord_tickets WHERE preview_token=?',
+        [candidate]
+      );
+      if (!existing) return candidate;
+    }
+    const fallback = generatePreviewToken(24);
+    const duplicate = await dbh.get(
+      'SELECT id FROM discord_tickets WHERE preview_token=?',
+      [fallback]
+    );
+    if (!duplicate) return fallback;
+    throw new Error('failed to allocate unique ticket preview token');
+  };
+  const ensureTicketPreviewTokens = async () => {
+    const rows = await dbh.all(
+      "SELECT id FROM discord_tickets WHERE preview_token IS NULL OR preview_token=''"
+    );
+    for (const row of rows) {
+      const token = await generateUniqueTicketPreviewToken();
+      await dbh.run('UPDATE discord_tickets SET preview_token=? WHERE id=?', [token, row.id]);
+    }
   };
   return {
     dialect,
@@ -238,6 +266,7 @@ function createApi(dbh, dialect) {
         details TEXT,
         created_by TEXT,
         created_by_tag TEXT,
+        preview_token TEXT,
         status TEXT DEFAULT 'open',
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
@@ -302,6 +331,20 @@ function createApi(dbh, dialect) {
         FOREIGN KEY(alt_profile_id) REFERENCES team_auth_profiles(id) ON DELETE CASCADE,
         UNIQUE(team_id, primary_profile_id, alt_profile_id)
       );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_tickets_preview_token ON discord_tickets(preview_token);
+      CREATE TABLE IF NOT EXISTS discord_ticket_dialog_entries(
+        ticket_id INTEGER NOT NULL,
+        message_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        author_id TEXT,
+        author_tag TEXT,
+        content TEXT,
+        posted_at TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(ticket_id, message_id),
+        FOREIGN KEY(ticket_id) REFERENCES discord_tickets(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_ticket_dialog_ticket_time ON discord_ticket_dialog_entries(ticket_id, posted_at);
       `);
       const teamCols = await dbh.all("PRAGMA table_info('teams')");
       if (!teamCols.some((c) => c.name === 'discord_token')) {
@@ -326,6 +369,11 @@ function createApi(dbh, dialect) {
       if (!discordCols.some((c) => c.name === 'config_json')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN config_json TEXT");
       }
+      const ticketCols = await dbh.all("PRAGMA table_info('discord_tickets')");
+      if (!ticketCols.some((c) => c.name === 'preview_token')) {
+        await dbh.run("ALTER TABLE discord_tickets ADD COLUMN preview_token TEXT");
+      }
+      await ensureTicketPreviewTokens();
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
@@ -1648,9 +1696,10 @@ function createApi(dbh, dialect) {
         number = await this.getNextDiscordTicketNumber(guildId);
       }
       const now = new Date().toISOString();
+      const previewToken = await generateUniqueTicketPreviewToken();
       const result = await dbh.run(
-        `INSERT INTO discord_tickets(team_id, server_id, guild_id, channel_id, ticket_number, subject, details, created_by, created_by_tag, status, created_at, updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,'open',?,?)`,
+        `INSERT INTO discord_tickets(team_id, server_id, guild_id, channel_id, ticket_number, subject, details, created_by, created_by_tag, preview_token, status, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,'open',?,?)`,
         [
           team_id ?? null,
           server_id ?? null,
@@ -1661,6 +1710,7 @@ function createApi(dbh, dialect) {
           details ?? null,
           created_by ?? null,
           created_by_tag ?? null,
+          previewToken,
           now,
           now
         ]
@@ -1699,6 +1749,24 @@ function createApi(dbh, dialect) {
         [numericServerId, numericTicketId]
       );
     },
+    async getDiscordTicketForTeam(teamId, ticketId){
+      const numericTeamId = Number(teamId);
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+      return await dbh.get(
+        'SELECT * FROM discord_tickets WHERE team_id=? AND id=?',
+        [numericTeamId, numericTicketId]
+      );
+    },
+    async getDiscordTicketForTeamByPreviewToken(teamId, previewToken){
+      const numericTeamId = Number(teamId);
+      const token = typeof previewToken === 'string' ? previewToken.trim() : '';
+      if (!Number.isFinite(numericTeamId) || !token) return null;
+      return await dbh.get(
+        'SELECT * FROM discord_tickets WHERE team_id=? AND preview_token=?',
+        [numericTeamId, token]
+      );
+    },
     async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
       if (!channelId) return null;
       const now = new Date().toISOString();
@@ -1709,6 +1777,66 @@ function createApi(dbh, dialect) {
         [now, closed_by ?? null, closed_by_tag ?? null, close_reason ?? null, now, channelId]
       );
       return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
+    },
+    async replaceDiscordTicketDialogEntries(ticketId, entries = []){
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTicketId)) return 0;
+      await dbh.run('DELETE FROM discord_ticket_dialog_entries WHERE ticket_id=?', [numericTicketId]);
+      if (!Array.isArray(entries) || entries.length === 0) return 0;
+      const stmt = await dbh.prepare(
+        `INSERT INTO discord_ticket_dialog_entries(ticket_id, message_id, role, author_id, author_tag, content, posted_at)
+         VALUES(?,?,?,?,?,?,?)`
+      );
+      let inserted = 0;
+      try {
+        for (const entry of entries) {
+          if (!entry) continue;
+          const messageId = typeof entry.message_id === 'string'
+            ? entry.message_id.trim()
+            : (typeof entry.messageId === 'string' ? entry.messageId.trim() : '');
+          if (!messageId) continue;
+          const role = typeof entry.role === 'string' && entry.role.trim().toLowerCase() === 'requester'
+            ? 'requester'
+            : 'staff';
+          const authorId = typeof entry.author_id === 'string'
+            ? entry.author_id
+            : (typeof entry.authorId === 'string' ? entry.authorId : null);
+          const authorTag = typeof entry.author_tag === 'string'
+            ? entry.author_tag
+            : (typeof entry.authorTag === 'string' ? entry.authorTag : null);
+          const content = typeof entry.content === 'string'
+            ? entry.content
+            : (typeof entry.message === 'string' ? entry.message : null);
+          if (!content) continue;
+          const postedAtRaw = entry.posted_at ?? entry.postedAt ?? null;
+          const postedAt = postedAtRaw ? new Date(postedAtRaw) : null;
+          const postedAtValue = postedAt && !Number.isNaN(postedAt.valueOf()) ? postedAt.toISOString() : null;
+          await stmt.run([
+            numericTicketId,
+            messageId,
+            role,
+            authorId ?? null,
+            authorTag ?? null,
+            content,
+            postedAtValue
+          ]);
+          inserted += 1;
+        }
+      } finally {
+        await stmt.finalize();
+      }
+      return inserted;
+    },
+    async listDiscordTicketDialogEntries(ticketId){
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTicketId)) return [];
+      return await dbh.all(
+        `SELECT ticket_id, message_id, role, author_id, author_tag, content, posted_at
+         FROM discord_ticket_dialog_entries
+         WHERE ticket_id=?
+         ORDER BY datetime(posted_at) ASC, message_id ASC`,
+        [numericTicketId]
+      );
     },
     async listRoles(){
       const rows = await dbh.all(`SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC`);

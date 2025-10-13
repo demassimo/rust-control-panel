@@ -27,6 +27,7 @@ This document summarizes the purpose of the key files and directories that make 
 
 ## Frontend assets (`frontend/`)
 - `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI.
+- `ticket-preview.html` – Standalone shareable page that fetches ticket transcripts from the API and renders a Discord-style preview for the selected team ticket.【F:frontend/ticket-preview.html†L1-L217】
 - `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, chat and kill feed rendering, and orchestrates dynamic modules within the dashboard.【F:frontend/assets/app.js†L1-L80】【F:frontend/assets/app.js†L958-L1174】
 - `assets/styles.css` – Core stylesheet for layout, dashboard panels, and responsive styling.
 - `assets/css/dark-theme.css` – Overrides enabling a dark theme presentation for the control panel.
