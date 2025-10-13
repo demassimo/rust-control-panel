@@ -38,6 +38,13 @@ function createApi(dbh, dialect) {
     const lower = text.toLowerCase();
     return lower === 'team' || lower === 'global' ? lower : null;
   };
+  const previewDiscordToken = (token) => {
+    if (token == null) return null;
+    const text = String(token);
+    if (!text.length) return null;
+    if (text.length <= 4) return text;
+    return `••••${text.slice(-4)}`;
+  };
   const generatePreviewToken = (size = 18) => randomBytes(size).toString('hex');
   const generateUniqueTicketPreviewToken = async () => {
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -586,11 +593,15 @@ function createApi(dbh, dialect) {
     },
     async getTeamDiscordSettings(teamId){
       const numeric = Number(teamId);
-      if (!Number.isFinite(numeric)) return { hasToken: false, guildId: null };
+      if (!Number.isFinite(numeric)) {
+        return { hasToken: false, guildId: null, tokenPreview: null };
+      }
       const row = await dbh.get('SELECT discord_token, discord_guild_id FROM teams WHERE id=?', [numeric]);
+      const token = row?.discord_token != null && row.discord_token !== '' ? String(row.discord_token) : null;
       return {
-        hasToken: Boolean(row?.discord_token),
-        guildId: row?.discord_guild_id != null && row.discord_guild_id !== '' ? String(row.discord_guild_id) : null
+        hasToken: Boolean(token),
+        guildId: row?.discord_guild_id != null && row.discord_guild_id !== '' ? String(row.discord_guild_id) : null,
+        tokenPreview: token ? previewDiscordToken(token) : null
       };
     },
     async getTeamAuthSettings(teamId){

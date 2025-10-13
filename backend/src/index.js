@@ -267,6 +267,7 @@ async function loadUserContext(userId) {
   let activeTeamRoleName = null;
   let activeTeamHasDiscordToken = false;
   let activeTeamDiscordGuildId = null;
+  let activeTeamDiscordTokenPreview = null;
   const roleCache = new Map();
   let teamServers = [];
   if (activeTeamId && Array.isArray(teams)) {
@@ -291,6 +292,9 @@ async function loadUserContext(userId) {
       activeTeamDiscordGuildId = membership.discord_guild_id != null && membership.discord_guild_id !== ''
         ? String(membership.discord_guild_id)
         : null;
+      if (membership.discord_token) {
+        activeTeamDiscordTokenPreview = previewDiscordToken(membership.discord_token);
+      }
     }
     if (typeof db.listTeamServerIds === 'function') {
       try {
@@ -336,7 +340,8 @@ async function loadUserContext(userId) {
         role: team.role,
         roleName,
         hasDiscordToken: Boolean(team.discord_token),
-        discordGuildId: team.discord_guild_id != null && team.discord_guild_id !== '' ? String(team.discord_guild_id) : null
+        discordGuildId: team.discord_guild_id != null && team.discord_guild_id !== '' ? String(team.discord_guild_id) : null,
+        discordTokenPreview: team.discord_token ? previewDiscordToken(team.discord_token) : null
       });
     }
   }
@@ -352,7 +357,12 @@ async function loadUserContext(userId) {
     created_at: row.created_at,
     activeTeamHasDiscordToken,
     activeTeamDiscordGuildId,
-    teamDiscord: { hasToken: activeTeamHasDiscordToken, guildId: activeTeamDiscordGuildId }
+    activeTeamDiscordTokenPreview,
+    teamDiscord: {
+      hasToken: activeTeamHasDiscordToken,
+      guildId: activeTeamDiscordGuildId,
+      tokenPreview: activeTeamDiscordTokenPreview
+    }
   };
 }
 
@@ -5019,6 +5029,14 @@ function sanitizeDiscordToken(value, maxLength = 256) {
   return text.slice(0, maxLength);
 }
 
+function previewDiscordToken(token) {
+  if (token == null) return null;
+  const text = String(token);
+  if (!text.length) return null;
+  if (text.length <= 4) return text;
+  return `••••${text.slice(-4)}`;
+}
+
 function sanitizeDiscordSnowflake(value, maxLength = 64) {
   if (value == null) return '';
   const digits = String(value).replace(/[^0-9]/g, '');
@@ -5511,7 +5529,10 @@ app.post('/api/login', async (req, res) => {
       activeTeamId: context?.activeTeamId || null,
       activeTeamName: context?.activeTeamName || null,
       activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken || false,
-      teamDiscord: context?.teamDiscord || { hasToken: false },
+      activeTeamDiscordGuildId: context?.activeTeamDiscordGuildId || null,
+      activeTeamDiscordTokenPreview: context?.activeTeamDiscordTokenPreview || null,
+      teamDiscord:
+        context?.teamDiscord || { hasToken: false, guildId: null, tokenPreview: null },
       teams: context?.teams || []
     });
   } catch (e) {
@@ -5551,7 +5572,9 @@ app.get('/api/me', auth, async (req, res) => {
       activeTeamId: context.activeTeamId,
       activeTeamName: context.activeTeamName,
       activeTeamHasDiscordToken: context.activeTeamHasDiscordToken || false,
-      teamDiscord: context.teamDiscord || { hasToken: false },
+      activeTeamDiscordGuildId: context.activeTeamDiscordGuildId || null,
+      activeTeamDiscordTokenPreview: context.activeTeamDiscordTokenPreview || null,
+      teamDiscord: context.teamDiscord || { hasToken: false, guildId: null, tokenPreview: null },
       teams: context.teams
     });
   } catch (e) {
@@ -5596,7 +5619,10 @@ app.get('/api/teams', auth, async (req, res) => {
       activeTeamId: context?.activeTeamId ?? null,
       activeTeamName: context?.activeTeamName ?? null,
       activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken ?? false,
-      teamDiscord: context?.teamDiscord || { hasToken: false },
+      activeTeamDiscordGuildId: context?.activeTeamDiscordGuildId ?? null,
+      activeTeamDiscordTokenPreview: context?.activeTeamDiscordTokenPreview ?? null,
+      teamDiscord:
+        context?.teamDiscord || { hasToken: false, guildId: null, tokenPreview: null },
       teams: context?.teams || []
     });
   } catch (err) {
@@ -5618,10 +5644,12 @@ app.get('/api/team/discord', auth, async (req, res) => {
     const info = await db.getTeamDiscordSettings(teamId);
     const hasToken = Boolean(info?.hasToken);
     const guildId = info?.guildId != null && info.guildId !== '' ? String(info.guildId) : null;
+    const tokenPreview = info?.tokenPreview ? String(info.tokenPreview) : null;
     res.json({
       hasToken,
       guildId,
-      teamDiscord: { hasToken, guildId },
+      tokenPreview,
+      teamDiscord: { hasToken, guildId, tokenPreview },
       activeTeamHasDiscordToken: hasToken,
       activeTeamDiscordGuildId: guildId
     });
@@ -5650,6 +5678,7 @@ app.post('/api/team/discord', auth, async (req, res) => {
     await db.setTeamDiscordToken(teamId, token, guildId);
     let hasToken = true;
     let responseGuildId = guildId || null;
+    let responseTokenPreview = token ? previewDiscordToken(token) : null;
     if (typeof db.getTeamDiscordSettings === 'function') {
       try {
         const info = await db.getTeamDiscordSettings(teamId);
@@ -5659,6 +5688,8 @@ app.post('/api/team/discord', auth, async (req, res) => {
         } else if (!hasToken) {
           responseGuildId = null;
         }
+        responseTokenPreview = info?.tokenPreview ? String(info.tokenPreview) : responseTokenPreview;
+        if (!hasToken) responseTokenPreview = null;
       } catch (err) {
         console.warn('failed to refresh team discord token state', err);
       }
@@ -5672,15 +5703,27 @@ app.post('/api/team/discord', auth, async (req, res) => {
         console.warn('failed to refresh auth context after team token update', err);
         req.authUser.activeTeamHasDiscordToken = hasToken;
         req.authUser.activeTeamDiscordGuildId = responseGuildId;
-        req.authUser.teamDiscord = { hasToken, guildId: responseGuildId };
+        req.authUser.teamDiscord = { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview };
         if (Array.isArray(req.authUser.teams)) {
           req.authUser.teams = req.authUser.teams.map((team) => {
             if (!team) return team;
             const id = Number(team.id);
             if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
-              return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+              return {
+                ...team,
+                hasDiscordToken: hasToken,
+                discordGuildId: responseGuildId,
+                discordTokenPreview: responseTokenPreview
+              };
             }
-            if (team.id === teamId) return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+            if (team.id === teamId) {
+              return {
+                ...team,
+                hasDiscordToken: hasToken,
+                discordGuildId: responseGuildId,
+                discordTokenPreview: responseTokenPreview
+              };
+            }
             return team;
           });
         }
@@ -5688,15 +5731,27 @@ app.post('/api/team/discord', auth, async (req, res) => {
     } else if (req.authUser) {
       req.authUser.activeTeamHasDiscordToken = hasToken;
       req.authUser.activeTeamDiscordGuildId = responseGuildId;
-      req.authUser.teamDiscord = { hasToken, guildId: responseGuildId };
+      req.authUser.teamDiscord = { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview };
       if (Array.isArray(req.authUser.teams)) {
         req.authUser.teams = req.authUser.teams.map((team) => {
           if (!team) return team;
           const id = Number(team.id);
           if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
-            return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+            return {
+              ...team,
+              hasDiscordToken: hasToken,
+              discordGuildId: responseGuildId,
+              discordTokenPreview: responseTokenPreview
+            };
           }
-          if (team.id === teamId) return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+          if (team.id === teamId) {
+            return {
+              ...team,
+              hasDiscordToken: hasToken,
+              discordGuildId: responseGuildId,
+              discordTokenPreview: responseTokenPreview
+            };
+          }
           return team;
         });
       }
@@ -5704,7 +5759,8 @@ app.post('/api/team/discord', auth, async (req, res) => {
     res.json({
       hasToken,
       guildId: responseGuildId,
-      teamDiscord: { hasToken, guildId: responseGuildId },
+      tokenPreview: responseTokenPreview,
+      teamDiscord: { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview },
       activeTeamHasDiscordToken: hasToken,
       activeTeamDiscordGuildId: responseGuildId
     });
@@ -5727,6 +5783,7 @@ app.delete('/api/team/discord', auth, async (req, res) => {
     await db.clearTeamDiscordToken(teamId);
     let hasToken = false;
     let responseGuildId = null;
+    let responseTokenPreview = null;
     if (typeof db.getTeamDiscordSettings === 'function') {
       try {
         const info = await db.getTeamDiscordSettings(teamId);
@@ -5734,6 +5791,8 @@ app.delete('/api/team/discord', auth, async (req, res) => {
         if (info?.guildId != null && info.guildId !== '') {
           responseGuildId = String(info.guildId);
         }
+        responseTokenPreview = info?.tokenPreview ? String(info.tokenPreview) : null;
+        if (!hasToken) responseTokenPreview = null;
       } catch (err) {
         console.warn('failed to refresh team discord token state', err);
       }
@@ -5747,15 +5806,27 @@ app.delete('/api/team/discord', auth, async (req, res) => {
         console.warn('failed to refresh auth context after team token removal', err);
         req.authUser.activeTeamHasDiscordToken = hasToken;
         req.authUser.activeTeamDiscordGuildId = responseGuildId;
-        req.authUser.teamDiscord = { hasToken, guildId: responseGuildId };
+        req.authUser.teamDiscord = { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview };
         if (Array.isArray(req.authUser.teams)) {
           req.authUser.teams = req.authUser.teams.map((team) => {
             if (!team) return team;
             const id = Number(team.id);
             if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
-              return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+              return {
+                ...team,
+                hasDiscordToken: hasToken,
+                discordGuildId: responseGuildId,
+                discordTokenPreview: responseTokenPreview
+              };
             }
-            if (team.id === teamId) return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+            if (team.id === teamId) {
+              return {
+                ...team,
+                hasDiscordToken: hasToken,
+                discordGuildId: responseGuildId,
+                discordTokenPreview: responseTokenPreview
+              };
+            }
             return team;
           });
         }
@@ -5763,15 +5834,27 @@ app.delete('/api/team/discord', auth, async (req, res) => {
     } else if (req.authUser) {
       req.authUser.activeTeamHasDiscordToken = hasToken;
       req.authUser.activeTeamDiscordGuildId = responseGuildId;
-      req.authUser.teamDiscord = { hasToken, guildId: responseGuildId };
+      req.authUser.teamDiscord = { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview };
       if (Array.isArray(req.authUser.teams)) {
         req.authUser.teams = req.authUser.teams.map((team) => {
           if (!team) return team;
           const id = Number(team.id);
           if (Number.isFinite(id) && Number.isFinite(numericTeamId) && id === numericTeamId) {
-            return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+            return {
+              ...team,
+              hasDiscordToken: hasToken,
+              discordGuildId: responseGuildId,
+              discordTokenPreview: responseTokenPreview
+            };
           }
-          if (team.id === teamId) return { ...team, hasDiscordToken: hasToken, discordGuildId: responseGuildId };
+          if (team.id === teamId) {
+            return {
+              ...team,
+              hasDiscordToken: hasToken,
+              discordGuildId: responseGuildId,
+              discordTokenPreview: responseTokenPreview
+            };
+          }
           return team;
         });
       }
@@ -5779,7 +5862,8 @@ app.delete('/api/team/discord', auth, async (req, res) => {
     res.json({
       hasToken,
       guildId: responseGuildId,
-      teamDiscord: { hasToken, guildId: responseGuildId },
+      tokenPreview: responseTokenPreview,
+      teamDiscord: { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview },
       activeTeamHasDiscordToken: hasToken,
       activeTeamDiscordGuildId: responseGuildId
     });
@@ -6034,7 +6118,9 @@ app.post('/api/me/active-team', auth, async (req, res) => {
       roleName: context?.roleName,
       permissions: context?.permissions,
       activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken ?? false,
-      teamDiscord: context?.teamDiscord || { hasToken: false },
+      activeTeamDiscordGuildId: context?.activeTeamDiscordGuildId ?? null,
+      activeTeamDiscordTokenPreview: context?.activeTeamDiscordTokenPreview ?? null,
+      teamDiscord: context?.teamDiscord || { hasToken: false, guildId: null, tokenPreview: null },
       teams: context?.teams || []
     });
   } catch (err) {

@@ -56,7 +56,7 @@
     teams: [],
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] },
-    teamDiscord: { hasToken: false, guildId: null, loading: false, loadedTeamId: null }
+    teamDiscord: { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null }
   };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
@@ -85,6 +85,9 @@
   const btnSaveTeamDiscord = $('#btnSaveTeamDiscord');
   const btnRemoveTeamDiscord = $('#btnRemoveTeamDiscord');
   const teamDiscordStatus = $('#teamDiscordStatus');
+  const teamDiscordSummary = $('#teamDiscordSummary');
+  const teamDiscordSummaryGuild = $('#teamDiscordSummaryGuild');
+  const teamDiscordSummaryToken = $('#teamDiscordSummaryToken');
   const roleSelect = $('#roleSelect');
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
@@ -3851,6 +3854,10 @@
           context.teamDiscord.guildId != null && context.teamDiscord.guildId !== ''
             ? String(context.teamDiscord.guildId)
             : null;
+        state.teamDiscord.tokenPreview =
+          context.teamDiscord.tokenPreview != null && context.teamDiscord.tokenPreview !== ''
+            ? String(context.teamDiscord.tokenPreview)
+            : null;
         state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
         appliedFromContext = true;
       } else if (typeof context.activeTeamHasDiscordToken !== 'undefined') {
@@ -3861,6 +3868,12 @@
               ? String(context.activeTeamDiscordGuildId)
               : null;
         }
+        if (typeof context.activeTeamDiscordTokenPreview !== 'undefined') {
+          const preview = context.activeTeamDiscordTokenPreview;
+          state.teamDiscord.tokenPreview = preview != null && preview !== '' ? String(preview) : null;
+        } else if (!state.teamDiscord.hasToken) {
+          state.teamDiscord.tokenPreview = null;
+        }
         state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
         appliedFromContext = true;
       }
@@ -3869,6 +3882,7 @@
           state.teamDiscord.loadedTeamId = null;
           state.teamDiscord.hasToken = false;
           state.teamDiscord.guildId = null;
+          state.teamDiscord.tokenPreview = null;
         }
         state.teamDiscord.loading = false;
         hideNotice(teamDiscordStatus);
@@ -6023,7 +6037,7 @@
     state.activePanel = 'dashboard';
     state.roles = [];
     state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
-    state.teamDiscord = { hasToken: false, guildId: null, loading: false, loadedTeamId: null };
+    state.teamDiscord = { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null };
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
@@ -6947,6 +6961,9 @@
       guildIdStored = String(stateObj.guildId);
     }
     const hasSettings = hasToken || (!!guildIdStored && guildIdStored.length > 0);
+    const tokenPreview = typeof stateObj.tokenPreview === 'string' && stateObj.tokenPreview.length
+      ? stateObj.tokenPreview
+      : null;
     teamDiscordSection.classList.toggle('hidden', !canManage);
     teamDiscordSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
     if (teamDiscordGuildId) {
@@ -6959,6 +6976,20 @@
     }
     if (btnSaveTeamDiscord) btnSaveTeamDiscord.disabled = !canManage || loading;
     if (btnRemoveTeamDiscord) btnRemoveTeamDiscord.disabled = !canManage || loading || !hasSettings;
+    if (teamDiscordSummary) {
+      teamDiscordSummary.classList.toggle('hidden', !canManage);
+      teamDiscordSummary.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    }
+    if (teamDiscordSummaryGuild) {
+      teamDiscordSummaryGuild.textContent = guildIdStored ? guildIdStored : 'Not set';
+    }
+    if (teamDiscordSummaryToken) {
+      if (hasToken) {
+        teamDiscordSummaryToken.textContent = tokenPreview || 'Stored token (hidden)';
+      } else {
+        teamDiscordSummaryToken.textContent = 'Not linked';
+      }
+    }
   }
 
   async function loadTeamDiscord({ force = false } = {}) {
@@ -6967,6 +6998,7 @@
     if (!canManageTeamDiscord()) {
       state.teamDiscord.hasToken = false;
       state.teamDiscord.guildId = null;
+      state.teamDiscord.tokenPreview = null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       updateTeamDiscordUi();
       return;
@@ -6983,6 +7015,7 @@
       const data = await api('/team/discord');
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
+      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       if (!state.teamDiscord.hasToken && teamDiscordToken) {
         teamDiscordToken.value = '';
@@ -7003,6 +7036,9 @@
       }
     } finally {
       state.teamDiscord.loading = false;
+      if (!state.teamDiscord.hasToken) {
+        state.teamDiscord.tokenPreview = null;
+      }
       updateTeamDiscordUi();
     }
     if (unauthorized) return;
@@ -7031,6 +7067,7 @@
       const data = await api('/team/discord', { token: value, guildId: cleanedGuildId }, 'POST');
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : cleanedGuildId;
+      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       teamDiscordToken.value = '';
       if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
@@ -7046,6 +7083,9 @@
       }
     } finally {
       state.teamDiscord.loading = false;
+      if (!state.teamDiscord.hasToken) {
+        state.teamDiscord.tokenPreview = null;
+      }
       updateTeamDiscordUi();
     }
     if (unauthorized) return;
@@ -7073,6 +7113,7 @@
       const data = await api('/team/discord', null, 'DELETE');
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
+      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       if (teamDiscordToken) teamDiscordToken.value = '';
       if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
@@ -7088,6 +7129,9 @@
       }
     } finally {
       state.teamDiscord.loading = false;
+      if (!state.teamDiscord.hasToken) {
+        state.teamDiscord.tokenPreview = null;
+      }
       updateTeamDiscordUi();
     }
     if (unauthorized) return;

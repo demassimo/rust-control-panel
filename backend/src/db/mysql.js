@@ -20,6 +20,13 @@ function createApi(pool, dialect) {
     const text = String(value).trim();
     return text || null;
   };
+  const previewDiscordToken = (token) => {
+    if (token == null) return null;
+    const text = String(token);
+    if (!text.length) return null;
+    if (text.length <= 4) return text;
+    return `••••${text.slice(-4)}`;
+  };
   const generatePreviewToken = (size = 18) => randomBytes(size).toString('hex');
   const generateUniqueTicketPreviewToken = async () => {
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -496,11 +503,12 @@ function createApi(pool, dialect) {
     async getTeamDiscordSettings(teamId){
       const rows = await exec('SELECT discord_token, discord_guild_id FROM teams WHERE id=?', [teamId]);
       const row = Array.isArray(rows) && rows.length ? rows[0] : rows;
-      const token = row?.discord_token;
+      const token = row?.discord_token != null && row.discord_token !== '' ? String(row.discord_token) : null;
       const guild = row?.discord_guild_id;
       return {
         hasToken: Boolean(token),
-        guildId: guild != null && guild !== '' ? String(guild) : null
+        guildId: guild != null && guild !== '' ? String(guild) : null,
+        tokenPreview: token ? previewDiscordToken(token) : null
       };
     },
     async getTeamAuthSettings(teamId){

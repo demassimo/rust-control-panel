@@ -603,3 +603,33 @@ main.grid{
 .right .kv{display:grid; grid-template-columns: 100px 1fr; gap:8px; margin:10px 0}
 .right .kv .k{color:var(--muted)}
 .right .actions{display:flex; gap:10px}
+
+.team-discord-summary{
+  margin:12px 0 0;
+  padding:12px 14px;
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  background:rgba(148,163,184,.08);
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.team-discord-summary div{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  gap:12px;
+}
+
+.team-discord-summary dt{
+  margin:0;
+  font-weight:600;
+  color:var(--muted);
+}
+
+.team-discord-summary dd{
+  margin:0;
+  font-weight:600;
+  color:var(--text);
+}
