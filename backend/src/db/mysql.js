@@ -288,9 +288,6 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN command_bot_token TEXT NULL');
       await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN status_message_id VARCHAR(64) NULL');
       await ensureColumn('ALTER TABLE server_discord_integrations ADD COLUMN config_json TEXT NULL');
-      await ensureColumn('ALTER TABLE discord_tickets ADD COLUMN preview_token VARCHAR(64) NULL');
-      await ensureIndex('ALTER TABLE discord_tickets ADD UNIQUE KEY idx_discord_tickets_preview_token (preview_token)');
-      await ensureTicketPreviewTokens();
       await exec(`CREATE TABLE IF NOT EXISTS discord_tickets(
         id INT AUTO_INCREMENT PRIMARY KEY,
         team_id INT NULL,
@@ -302,6 +299,7 @@ function createApi(pool, dialect) {
         details TEXT NULL,
         created_by VARCHAR(64) NULL,
         created_by_tag VARCHAR(190) NULL,
+        preview_token VARCHAR(64) NULL,
         status VARCHAR(32) DEFAULT 'open',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -311,9 +309,13 @@ function createApi(pool, dialect) {
         close_reason TEXT NULL,
         INDEX idx_discord_tickets_guild_number (guild_id, ticket_number),
         INDEX idx_discord_tickets_team (team_id),
+        UNIQUE KEY idx_discord_tickets_preview_token (preview_token),
         CONSTRAINT fk_discord_ticket_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
         CONSTRAINT fk_discord_ticket_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
       ) ENGINE=InnoDB;`);
+      await ensureColumn('ALTER TABLE discord_tickets ADD COLUMN preview_token VARCHAR(64) NULL');
+      await ensureTicketPreviewTokens();
+      await ensureIndex('ALTER TABLE discord_tickets ADD UNIQUE KEY idx_discord_tickets_preview_token (preview_token)');
       await exec(`CREATE TABLE IF NOT EXISTS team_auth_profiles(
         id INT AUTO_INCREMENT PRIMARY KEY,
         team_id INT NOT NULL,
@@ -612,10 +614,10 @@ function createApi(pool, dialect) {
       if (Number.isFinite(limitNum) && limitNum > 0) {
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
-        sql += ` LIMIT ? OFFSET ?';
+        sql += ' LIMIT ? OFFSET ?';
         params.push(safeLimit, safeOffset);
       } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
-        sql += ` LIMIT 18446744073709551615 OFFSET ?';
+        sql += ' LIMIT 18446744073709551615 OFFSET ?';
         params.push(Math.floor(offsetNum));
       }
       return await exec(sql, params);
@@ -959,7 +961,7 @@ function createApi(pool, dialect) {
 
       const maxRows = Number(limit);
       if (Number.isFinite(maxRows) && maxRows > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.floor(maxRows));
       }
 
@@ -1004,10 +1006,10 @@ function createApi(pool, dialect) {
       if (Number.isFinite(limitNum) && limitNum > 0) {
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
-        sql += ` LIMIT ? OFFSET ?';
+        sql += ' LIMIT ? OFFSET ?';
         params.push(safeLimit, safeOffset);
       } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
-        sql += ` LIMIT 18446744073709551615 OFFSET ?';
+        sql += ' LIMIT 18446744073709551615 OFFSET ?';
         params.push(Math.floor(offsetNum));
       }
       return await exec(sql, params);
@@ -1203,7 +1205,7 @@ function createApi(pool, dialect) {
       let sql = `SELECT id, server_id, channel, steamid, username, message, raw, color, created_at FROM chat_messages WHERE ${conditions.join(' AND ')} ORDER BY created_at ASC`;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 500));
       }
       return await exec(sql, params);
@@ -1215,7 +1217,7 @@ function createApi(pool, dialect) {
       let sql = 'DELETE FROM chat_messages WHERE created_at < ?';
       const serverIdNum = Number(server_id);
       if (Number.isFinite(serverIdNum)) {
-        sql += ` AND server_id=?';
+        sql += ' AND server_id=?';
         params.push(serverIdNum);
       }
       const result = await exec(sql, params);
@@ -1320,7 +1322,7 @@ function createApi(pool, dialect) {
       `;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 200));
       }
       return await exec(sql, params);
@@ -1348,13 +1350,13 @@ function createApi(pool, dialect) {
       `;
       const excludeNumeric = Number(excludeId);
       if (Number.isFinite(excludeNumeric)) {
-        sql += ` AND id != ?';
+        sql += ' AND id != ?';
         params.push(excludeNumeric);
       }
-      sql += ` ORDER BY created_at DESC, id DESC';
+      sql += ' ORDER BY created_at DESC, id DESC';
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 50));
       }
       return await exec(sql, params);
@@ -1514,7 +1516,7 @@ function createApi(pool, dialect) {
                  ORDER BY occurred_at DESC, id DESC`;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 500));
       }
       return await exec(sql, params);
@@ -1526,7 +1528,7 @@ function createApi(pool, dialect) {
       let sql = 'DELETE FROM kill_events WHERE occurred_at < ?';
       const serverIdNum = Number(server_id);
       if (Number.isFinite(serverIdNum)) {
-        sql += ` AND server_id=?';
+        sql += ' AND server_id=?';
         params.push(serverIdNum);
       }
       const result = await exec(sql, params);
