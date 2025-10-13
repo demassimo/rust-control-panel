@@ -2118,6 +2118,7 @@
       closedBy: pickString(ticket.closedBy ?? ticket.closed_by) || null,
       closedByTag: pickString(ticket.closedByTag ?? ticket.closed_by_tag) || null,
       closeReason: pickString(ticket.closeReason ?? ticket.close_reason) || null,
+      previewToken: pickString(ticket.previewToken ?? ticket.preview_token) || null,
       previewUrl: pickString(ticket.previewUrl ?? ticket.preview_url ?? ticket.previewPath ?? ticket.preview_path) || null
     };
   }

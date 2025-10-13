@@ -152,7 +152,7 @@
       const statusNotice = document.getElementById('statusNotice');
       const params = new URLSearchParams(window.location.search);
       const teamId = params.get('teamId');
-      const ticketId = params.get('ticketId');
+      const ticketToken = params.get('ticketToken') || params.get('ticketId');
 
       function normalizeApiBase(value) {
         const raw = (value || '').trim();
@@ -331,8 +331,8 @@
       }
 
       async function loadTicketPreview() {
-        if (!teamId || !ticketId) {
-          showNotice('Missing ticket information. Provide both teamId and ticketId in the URL.');
+        if (!teamId || !ticketToken) {
+          showNotice('Missing ticket information. Provide both teamId and ticketToken in the URL.');
           return;
         }
         const apiBase = detectApiBase();
@@ -340,7 +340,7 @@
           showNotice('Unable to determine API endpoint for the control panel.');
           return;
         }
-        const url = `${apiBase}/teams/${encodeURIComponent(teamId)}/discord/tickets/${encodeURIComponent(ticketId)}/preview`;
+        const url = `${apiBase}/teams/${encodeURIComponent(teamId)}/discord/tickets/${encodeURIComponent(ticketToken)}/preview`;
         const headers = { 'Accept': 'application/json' };
         const token = localStorage.getItem('token');
         if (token) headers['Authorization'] = 'Bearer ' + token;
