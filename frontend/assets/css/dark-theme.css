@@ -340,6 +340,17 @@ main.grid{
 .discord-form input:focus{outline:2px solid rgba(59,130,246,.35); outline-offset:2px}
 .discord-form .form-actions{display:flex; gap:12px; flex-wrap:wrap}
 .discord-form .form-actions .btn{min-width:150px}
+.discord-config-summary{display:flex; flex-direction:column; gap:18px; margin-top:12px; padding-top:18px; border-top:1px solid var(--border)}
+.discord-config-group{display:flex; flex-direction:column; gap:10px}
+.discord-config-title{margin:0; font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.discord-config-value{margin:0; font-size:.95rem; color:var(--text); word-break:break-word}
+.discord-config-list{margin:0; display:grid; gap:10px}
+.discord-config-list div{display:flex; justify-content:space-between; gap:12px; align-items:flex-start}
+.discord-config-list dt{margin:0; font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.discord-config-list dd{margin:0; font-weight:600; color:var(--text); text-align:right; word-break:break-word}
+.discord-config-tags{list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:8px}
+.discord-config-tags li{padding:6px 12px; border-radius:var(--radius-sm); background:var(--surface-2); border:1px solid var(--border); font-size:.85rem}
+.discord-config-empty{margin:0; font-size:.78rem; color:var(--muted)}
 .player-row{
   display:flex; align-items:center; justify-content:space-between;
   padding:12px 14px; border-bottom:1px solid var(--border);

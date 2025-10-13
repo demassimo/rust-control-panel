@@ -15,6 +15,41 @@
   const channelInput = document.getElementById('discord-channel-id');
   const removeBtn = document.getElementById('discord-remove');
   const noticeEl = document.getElementById('discord-notice');
+  const presenceTemplateEl = document.getElementById('discord-presence-template');
+  const presenceStatusEls = {
+    online: document.getElementById('discord-presence-status-online'),
+    offline: document.getElementById('discord-presence-status-offline'),
+    stale: document.getElementById('discord-presence-status-stale'),
+    waiting: document.getElementById('discord-presence-status-waiting')
+  };
+  const enabledFieldsList = document.getElementById('discord-enabled-fields');
+  const enabledFieldsEmpty = document.getElementById('discord-enabled-fields-empty');
+  const ticketingStatusEl = document.getElementById('discord-ticketing-status');
+  const ticketingCategoryEl = document.getElementById('discord-ticketing-category');
+  const ticketingLogEl = document.getElementById('discord-ticketing-log');
+  const ticketingPanelChannelEl = document.getElementById('discord-ticketing-panel-channel');
+  const ticketingPanelMessageEl = document.getElementById('discord-ticketing-panel-message');
+  const ticketingStaffRoleEl = document.getElementById('discord-ticketing-staff-role');
+  const ticketingPingEl = document.getElementById('discord-ticketing-ping');
+  const botTokenStatusEl = document.getElementById('discord-bot-token-status');
+  const commandTokenStatusEl = document.getElementById('discord-command-token-status');
+
+  const FIELD_LABELS = {
+    joining: 'Joining players',
+    queued: 'Queue length',
+    sleepers: 'Sleeping players',
+    fps: 'Server FPS',
+    lastUpdate: 'Last update timestamp'
+  };
+
+  const FIELD_ORDER = ['joining', 'queued', 'sleepers', 'fps', 'lastUpdate'];
+
+  const PRESENCE_NAMES = {
+    online: 'Online',
+    idle: 'Idle',
+    dnd: 'Do Not Disturb',
+    invisible: 'Invisible'
+  };
 
   // Preserve existing non-status classes on the badge, while letting us toggle status styles.
   const badgeBaseClasses = badgeEl
@@ -124,6 +159,86 @@
     noticeEl.classList.remove('error', 'success');
   }
 
+  function formatSnowflake(value) {
+    if (value == null) return '—';
+    const text = String(value).trim();
+    return text.length ? text : '—';
+  }
+
+  function describePresence(value) {
+    if (value == null) return '—';
+    const key = String(value).toLowerCase();
+    return PRESENCE_NAMES[key] || String(value);
+  }
+
+  function updateEnabledFields(fields) {
+    if (!enabledFieldsList) return;
+    while (enabledFieldsList.firstChild) {
+      enabledFieldsList.removeChild(enabledFieldsList.firstChild);
+    }
+    const enabled = [];
+    if (fields && typeof fields === 'object') {
+      for (const key of FIELD_ORDER) {
+        if (fields[key]) {
+          enabled.push(FIELD_LABELS[key] || key);
+        }
+      }
+    }
+    if (enabled.length) {
+      enabledFieldsList.classList.remove('hidden');
+      for (const label of enabled) {
+        const item = document.createElement('li');
+        item.textContent = label;
+        enabledFieldsList.appendChild(item);
+      }
+    } else {
+      enabledFieldsList.classList.add('hidden');
+    }
+    if (enabledFieldsEmpty) {
+      enabledFieldsEmpty.classList.toggle('hidden', enabled.length > 0);
+    }
+  }
+
+  function updateConfigSummary(config, integration) {
+    const cfg = config && typeof config === 'object' ? config : null;
+    if (presenceTemplateEl) {
+      const template = typeof cfg?.presenceTemplate === 'string' && cfg.presenceTemplate.trim().length
+        ? cfg.presenceTemplate.trim()
+        : '—';
+      presenceTemplateEl.textContent = template;
+    }
+    const statuses = cfg?.presenceStatuses || {};
+    if (presenceStatusEls.online) presenceStatusEls.online.textContent = describePresence(statuses.online);
+    if (presenceStatusEls.offline) presenceStatusEls.offline.textContent = describePresence(statuses.offline);
+    if (presenceStatusEls.stale) presenceStatusEls.stale.textContent = describePresence(statuses.stale);
+    if (presenceStatusEls.waiting) presenceStatusEls.waiting.textContent = describePresence(statuses.waiting);
+
+    updateEnabledFields(cfg?.fields || null);
+
+    const ticketing = cfg?.ticketing || {};
+    if (ticketingStatusEl) ticketingStatusEl.textContent = ticketing.enabled ? 'Enabled' : 'Disabled';
+    if (ticketingCategoryEl) ticketingCategoryEl.textContent = formatSnowflake(ticketing.categoryId);
+    if (ticketingLogEl) ticketingLogEl.textContent = formatSnowflake(ticketing.logChannelId);
+    if (ticketingPanelChannelEl) ticketingPanelChannelEl.textContent = formatSnowflake(ticketing.panelChannelId);
+    if (ticketingPanelMessageEl) ticketingPanelMessageEl.textContent = formatSnowflake(ticketing.panelMessageId);
+    if (ticketingStaffRoleEl) ticketingStaffRoleEl.textContent = formatSnowflake(ticketing.staffRoleId);
+    if (ticketingPingEl) ticketingPingEl.textContent = ticketing.enabled && ticketing.pingStaffOnOpen ? 'Yes' : 'No';
+
+    const hasToken = Boolean(integration?.hasToken);
+    const hasCommandToken = Boolean(integration?.hasCommandToken);
+    if (botTokenStatusEl) {
+      botTokenStatusEl.textContent = hasToken ? 'Stored (hidden)' : 'Not stored';
+    }
+    if (commandTokenStatusEl) {
+      const commandText = hasCommandToken
+        ? 'Stored (hidden)'
+        : hasToken
+          ? 'Uses status bot token'
+          : 'Not stored';
+      commandTokenStatusEl.textContent = commandText;
+    }
+  }
+
   function disableForm(disabled) {
     if (!form) return;
     const shouldDisable = !!disabled || !state.serverId;
@@ -186,6 +301,7 @@
     }
     if (removeBtn) removeBtn.disabled = !state.serverId || !integration;
     if (force) resetDirty();
+    updateConfigSummary(integration?.config || null, integration);
   }
 
   function describeError(code) {
