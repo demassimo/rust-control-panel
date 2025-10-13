@@ -1689,6 +1689,20 @@ button.menu-tab.active {
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
+.aq-item.closed {
+  border-color: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.015);
+  opacity: 0.85;
+}
+
+.aq-item.closed .aq-item-title {
+  color: var(--muted-strong);
+}
+
+.aq-item.closed .aq-item-meta {
+  color: var(--muted);
+}
+
 .aq-item:hover,
 .aq-item:focus {
   border-color: rgba(244, 63, 94, 0.4);

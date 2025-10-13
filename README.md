@@ -53,6 +53,7 @@ MYSQL_DATABASE=rustadmin
 
 Set `STEAM_API_KEY=...` for Steam enrichment.
 Set `RUSTMAPS_API_KEY=...` to provide a fallback RustMaps key (optional). Each panel user can store their own key from **Settings → Personal settings** — required for the live map module (see https://api.rustmaps.com for keys).
+Set `PANEL_PUBLIC_URL=https://your-panel.example.com` so ticket preview links shared over Discord resolve to the correct public hostname.
 
 ## Access control
 
