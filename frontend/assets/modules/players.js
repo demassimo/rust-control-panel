@@ -457,6 +457,13 @@
           if (lastSeen) parts.push(`Last seen ${lastSeen}`);
           const serverPlaytime = formatServerPlaytime(p.total_playtime_seconds, p.total_playtime_minutes);
           if (serverPlaytime) parts.push(`Time on server ${serverPlaytime}`);
+          const auth = p.team_auth || p.teamAuth || null;
+          const discordLabel = auth?.discordDisplayName || auth?.discord_username || auth?.discordUsername || null;
+          if (discordLabel) {
+            parts.push(`Discord ${discordLabel}`);
+          } else if (auth?.discordId || auth?.discord_id) {
+            parts.push(`Discord ${auth.discordId || auth.discord_id}`);
+          }
           meta.textContent = parts.join(' · ');
           info.appendChild(meta);
 
@@ -494,6 +501,12 @@
             badge.className = 'badge';
             badge.textContent = 'VAC';
             right.appendChild(badge);
+          }
+          if (auth?.isAlt) {
+            const altBadge = document.createElement('span');
+            altBadge.className = 'badge warn';
+            altBadge.textContent = 'Alt';
+            right.appendChild(altBadge);
           }
           li.appendChild(right);
 
@@ -1062,6 +1075,27 @@
             combined.vac_banned ?? combined.vacBanned
           );
           if (lastBanInfo) entries.push(['Last ban', lastBanInfo.label]);
+          const auth = combined.team_auth || combined.teamAuth || null;
+          if (auth) {
+            const discordAccount = auth.discordDisplayName || auth.discord_display_name || auth.discordUsername || auth.discord_username || null;
+            if (discordAccount) entries.push(['Discord account', discordAccount]);
+            if (auth.discordId || auth.discord_id) entries.push(['Discord ID', auth.discordId || auth.discord_id]);
+            if (auth.isAlt && auth.primaryProfileId) {
+              entries.push(['Primary profile', String(auth.primaryProfileId)]);
+            }
+            if (Array.isArray(auth.alts) && auth.alts.length) {
+              const altEntries = auth.alts.filter((entry) => (entry?.relation || '').toLowerCase() !== 'primary');
+              if (altEntries.length) {
+                const labels = altEntries.map((entry) => {
+                  const bits = [];
+                  if (entry?.steamId || entry?.steamid) bits.push(entry.steamId || entry.steamid);
+                  if (entry?.discordId || entry?.discord_id) bits.push(entry.discordId || entry.discord_id);
+                  return bits.join(' • ') || 'Linked profile';
+                });
+                entries.push(['Linked alts', labels.join('; ')]);
+              }
+            }
+          }
           entries.push(['Profile updated', formatTimestamp(combined.updated_at) || '—']);
           entries.push(['Playtime updated', formatTimestamp(combined.playtime_updated_at) || '—']);
           modal.elements.details.innerHTML = '';

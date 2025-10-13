@@ -63,6 +63,9 @@ function createApi(dbh, dialect) {
         name TEXT NOT NULL,
         owner_user_id INTEGER NOT NULL,
         discord_token TEXT,
+        discord_guild_id TEXT,
+        discord_auth_enabled INTEGER NOT NULL DEFAULT 0,
+        discord_auth_role_id TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(owner_user_id) REFERENCES users(id) ON DELETE CASCADE
       );
@@ -247,6 +250,58 @@ function createApi(dbh, dialect) {
       );
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_guild_number ON discord_tickets(guild_id, ticket_number);
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_team ON discord_tickets(team_id);
+      CREATE TABLE IF NOT EXISTS team_auth_profiles(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER NOT NULL,
+        steamid TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        discord_username TEXT,
+        discord_display_name TEXT,
+        cookie_id TEXT,
+        linked_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE,
+        UNIQUE(team_id, steamid),
+        UNIQUE(team_id, discord_id)
+      );
+      CREATE TABLE IF NOT EXISTS team_auth_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER NOT NULL,
+        requested_by_user_id INTEGER,
+        discord_id TEXT NOT NULL,
+        discord_username TEXT,
+        state_token TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT,
+        completed_profile_id INTEGER,
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE,
+        FOREIGN KEY(requested_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY(completed_profile_id) REFERENCES team_auth_profiles(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS team_auth_cookies(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER NOT NULL,
+        cookie_id TEXT NOT NULL,
+        steamid TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        last_seen_at TEXT DEFAULT (datetime('now')),
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE,
+        UNIQUE(team_id, cookie_id)
+      );
+      CREATE TABLE IF NOT EXISTS team_auth_profile_alts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER NOT NULL,
+        primary_profile_id INTEGER NOT NULL,
+        alt_profile_id INTEGER NOT NULL,
+        reason TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE,
+        FOREIGN KEY(primary_profile_id) REFERENCES team_auth_profiles(id) ON DELETE CASCADE,
+        FOREIGN KEY(alt_profile_id) REFERENCES team_auth_profiles(id) ON DELETE CASCADE,
+        UNIQUE(team_id, primary_profile_id, alt_profile_id)
+      );
       `);
       const teamCols = await dbh.all("PRAGMA table_info('teams')");
       if (!teamCols.some((c) => c.name === 'discord_token')) {
@@ -254,6 +309,12 @@ function createApi(dbh, dialect) {
       }
       if (!teamCols.some((c) => c.name === 'discord_guild_id')) {
         await dbh.run("ALTER TABLE teams ADD COLUMN discord_guild_id TEXT");
+      }
+      if (!teamCols.some((c) => c.name === 'discord_auth_enabled')) {
+        await dbh.run("ALTER TABLE teams ADD COLUMN discord_auth_enabled INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!teamCols.some((c) => c.name === 'discord_auth_role_id')) {
+        await dbh.run("ALTER TABLE teams ADD COLUMN discord_auth_role_id TEXT");
       }
       const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
       if (!discordCols.some((c) => c.name === 'command_bot_token')) {
@@ -484,6 +545,45 @@ function createApi(dbh, dialect) {
         guildId: row?.discord_guild_id != null && row.discord_guild_id !== '' ? String(row.discord_guild_id) : null
       };
     },
+    async getTeamAuthSettings(teamId){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) {
+        return { enabled: false, roleId: null, guildId: null, token: null };
+      }
+      const row = await dbh.get(
+        'SELECT discord_auth_enabled, discord_auth_role_id, discord_token, discord_guild_id FROM teams WHERE id=?',
+        [numeric]
+      );
+      return {
+        enabled: Boolean(row?.discord_auth_enabled),
+        roleId: row?.discord_auth_role_id != null && row.discord_auth_role_id !== ''
+          ? String(row.discord_auth_role_id)
+          : null,
+        guildId: row?.discord_guild_id != null && row.discord_guild_id !== ''
+          ? String(row.discord_guild_id)
+          : null,
+        token: row?.discord_token != null && row.discord_token !== '' ? String(row.discord_token) : null
+      };
+    },
+    async setTeamAuthSettings(teamId, { enabled = null, roleId = undefined } = {}){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return 0;
+      const updates = [];
+      const params = [];
+      if (enabled != null) {
+        updates.push('discord_auth_enabled=?');
+        params.push(enabled ? 1 : 0);
+      }
+      if (roleId !== undefined) {
+        const value = roleId == null ? null : String(roleId).trim();
+        updates.push('discord_auth_role_id=?');
+        params.push(value && value.length ? value : null);
+      }
+      if (!updates.length) return 0;
+      params.push(numeric);
+      const result = await dbh.run(`UPDATE teams SET ${updates.join(', ')} WHERE id=?`, params);
+      return result?.changes ? Number(result.changes) : 0;
+    },
     async setTeamDiscordToken(teamId, token, guildId){
       const numeric = Number(teamId);
       if (!Number.isFinite(numeric)) return 0;
@@ -610,6 +710,183 @@ function createApi(dbh, dialect) {
       const row = await dbh.get(sql, params);
       const numeric = Number(row?.total);
       return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+    },
+    async createTeamAuthRequest({ team_id, requested_by_user_id = null, discord_id, discord_username = null, state_token, expires_at }) {
+      const teamNumeric = Number(team_id);
+      if (!Number.isFinite(teamNumeric)) return null;
+      const token = typeof state_token === 'string' ? state_token.trim() : '';
+      const discordId = typeof discord_id === 'string' ? discord_id.trim() : '';
+      const expires = expires_at instanceof Date ? expires_at.toISOString() : (typeof expires_at === 'string' ? expires_at : '');
+      if (!token || !discordId || !expires) return null;
+      const requestedBy = Number(requested_by_user_id);
+      const requestedByValue = Number.isFinite(requestedBy) ? Math.trunc(requestedBy) : null;
+      const usernameValue = typeof discord_username === 'string' ? discord_username : null;
+      const result = await dbh.run(
+        `INSERT INTO team_auth_requests(team_id, requested_by_user_id, discord_id, discord_username, state_token, expires_at)
+         VALUES(?,?,?,?,?,?)`,
+        [teamNumeric, requestedByValue, discordId, usernameValue, token, expires]
+      );
+      return await dbh.get('SELECT * FROM team_auth_requests WHERE id=?', [result.lastID]);
+    },
+    async getTeamAuthRequestByToken(token) {
+      const trimmed = typeof token === 'string' ? token.trim() : '';
+      if (!trimmed) return null;
+      return await dbh.get('SELECT * FROM team_auth_requests WHERE state_token=?', [trimmed]);
+    },
+    async markTeamAuthRequestCompleted(id, profileId) {
+      const requestId = Number(id);
+      if (!Number.isFinite(requestId)) return 0;
+      const profileNumeric = Number(profileId);
+      const profileValue = Number.isFinite(profileNumeric) ? Math.trunc(profileNumeric) : null;
+      const now = new Date().toISOString();
+      const result = await dbh.run(
+        'UPDATE team_auth_requests SET completed_at=?, completed_profile_id=? WHERE id=?',
+        [now, profileValue, requestId]
+      );
+      return result.changes || 0;
+    },
+    async upsertTeamAuthProfile({ team_id, steamid, discord_id, discord_username = null, discord_display_name = null, cookie_id = null }) {
+      const teamNumeric = Number(team_id);
+      if (!Number.isFinite(teamNumeric)) return null;
+      const steam = typeof steamid === 'string' ? steamid.trim() : '';
+      const discord = typeof discord_id === 'string' ? discord_id.trim() : '';
+      if (!steam || !discord) return null;
+      const usernameValue = typeof discord_username === 'string' ? discord_username : null;
+      const displayValue = typeof discord_display_name === 'string' ? discord_display_name : null;
+      const cookieValue = typeof cookie_id === 'string' ? cookie_id : (cookie_id == null ? null : String(cookie_id));
+      const now = new Date().toISOString();
+      const existing = await dbh.get(
+        'SELECT * FROM team_auth_profiles WHERE team_id=? AND (steamid=? OR discord_id=?)',
+        [teamNumeric, steam, discord]
+      );
+      if (existing) {
+        const nextUsername = usernameValue != null ? usernameValue : (existing.discord_username ?? null);
+        const nextDisplay = displayValue != null ? displayValue : (existing.discord_display_name ?? null);
+        const nextCookie = cookieValue != null ? cookieValue : (existing.cookie_id ?? null);
+        await dbh.run(
+          `UPDATE team_auth_profiles
+             SET steamid=?, discord_id=?, discord_username=?, discord_display_name=?, cookie_id=?, linked_at=?, updated_at=?
+           WHERE id=?`,
+          [steam, discord, nextUsername, nextDisplay, nextCookie, now, now, existing.id]
+        );
+        return await dbh.get('SELECT * FROM team_auth_profiles WHERE id=?', [existing.id]);
+      }
+      const result = await dbh.run(
+        `INSERT INTO team_auth_profiles(team_id, steamid, discord_id, discord_username, discord_display_name, cookie_id, linked_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?)`,
+        [teamNumeric, steam, discord, usernameValue, displayValue, cookieValue, now, now]
+      );
+      return await dbh.get('SELECT * FROM team_auth_profiles WHERE id=?', [result.lastID]);
+    },
+    async listTeamAuthProfiles(teamId) {
+      const teamNumeric = Number(teamId);
+      if (!Number.isFinite(teamNumeric)) return [];
+      const rows = await dbh.all(
+        'SELECT * FROM team_auth_profiles WHERE team_id=? ORDER BY datetime(linked_at) DESC, id DESC',
+        [teamNumeric]
+      );
+      if (!Array.isArray(rows) || rows.length === 0) return [];
+      const altRows = await dbh.all(
+        'SELECT * FROM team_auth_profile_alts WHERE team_id=?',
+        [teamNumeric]
+      );
+      const map = new Map();
+      for (const row of rows) {
+        map.set(row.id, { ...row, alts: [], is_alt: false, primary_profile_id: null });
+      }
+      for (const alt of altRows) {
+        const primary = map.get(alt.primary_profile_id);
+        const altProfile = map.get(alt.alt_profile_id);
+        if (!primary || !altProfile) continue;
+        primary.alts.push({
+          id: altProfile.id,
+          steamid: altProfile.steamid,
+          discord_id: altProfile.discord_id,
+          discord_username: altProfile.discord_username,
+          discord_display_name: altProfile.discord_display_name,
+          linked_at: altProfile.linked_at,
+          reason: alt.reason || null,
+          created_at: alt.created_at || null
+        });
+        altProfile.is_alt = true;
+        altProfile.primary_profile_id = primary.id;
+        altProfile.alts.push({
+          id: primary.id,
+          steamid: primary.steamid,
+          discord_id: primary.discord_id,
+          discord_username: primary.discord_username,
+          discord_display_name: primary.discord_display_name,
+          linked_at: primary.linked_at,
+          reason: alt.reason || null,
+          created_at: alt.created_at || null,
+          relation: 'primary'
+        });
+      }
+      return rows.map((row) => map.get(row.id));
+    },
+    async getTeamAuthProfile(teamId, steamid) {
+      const sid = typeof steamid === 'string' ? steamid.trim() : '';
+      if (!sid) return null;
+      const profiles = await this.listTeamAuthProfiles(teamId);
+      return profiles.find((entry) => String(entry?.steamid || '') === sid) || null;
+    },
+    async getTeamAuthProfilesBySteamIds(teamId, steamids = []) {
+      const teamNumeric = Number(teamId);
+      if (!Number.isFinite(teamNumeric)) return [];
+      if (!Array.isArray(steamids) || steamids.length === 0) return [];
+      const normalized = steamids
+        .map((value) => (typeof value === 'string' ? value.trim() : String(value || '')))
+        .filter((value) => value.length > 0);
+      if (normalized.length === 0) return [];
+      const placeholders = normalized.map(() => '?').join(',');
+      return await dbh.all(
+        `SELECT * FROM team_auth_profiles WHERE team_id=? AND steamid IN (${placeholders})`,
+        [teamNumeric, ...normalized]
+      );
+    },
+    async recordTeamAuthCookie({ team_id, cookie_id, steamid, discord_id }) {
+      const teamNumeric = Number(team_id);
+      if (!Number.isFinite(teamNumeric)) return { existing: null, updated: null };
+      const cookie = typeof cookie_id === 'string' ? cookie_id.trim() : '';
+      const steam = typeof steamid === 'string' ? steamid.trim() : '';
+      const discord = typeof discord_id === 'string' ? discord_id.trim() : '';
+      if (!cookie || !steam || !discord) return { existing: null, updated: null };
+      const now = new Date().toISOString();
+      const existing = await dbh.get(
+        'SELECT * FROM team_auth_cookies WHERE team_id=? AND cookie_id=?',
+        [teamNumeric, cookie]
+      );
+      if (existing) {
+        await dbh.run(
+          'UPDATE team_auth_cookies SET steamid=?, discord_id=?, last_seen_at=? WHERE id=?',
+          [steam, discord, now, existing.id]
+        );
+        const updated = await dbh.get('SELECT * FROM team_auth_cookies WHERE id=?', [existing.id]);
+        return { existing, updated };
+      }
+      const result = await dbh.run(
+        'INSERT INTO team_auth_cookies(team_id, cookie_id, steamid, discord_id, last_seen_at, created_at) VALUES(?,?,?,?,?,?)',
+        [teamNumeric, cookie, steam, discord, now, now]
+      );
+      const updated = await dbh.get('SELECT * FROM team_auth_cookies WHERE id=?', [result.lastID]);
+      return { existing: null, updated };
+    },
+    async createTeamAuthAltLink({ team_id, primary_profile_id, alt_profile_id, reason = null }) {
+      const teamNumeric = Number(team_id);
+      const primaryId = Number(primary_profile_id);
+      const altId = Number(alt_profile_id);
+      if (!Number.isFinite(teamNumeric) || !Number.isFinite(primaryId) || !Number.isFinite(altId)) return null;
+      const reasonValue = reason == null ? null : String(reason);
+      const now = new Date().toISOString();
+      await dbh.run(
+        `INSERT OR IGNORE INTO team_auth_profile_alts(team_id, primary_profile_id, alt_profile_id, reason, created_at)
+         VALUES(?,?,?,?,?)`,
+        [teamNumeric, primaryId, altId, reasonValue, now]
+      );
+      return await dbh.get(
+        'SELECT * FROM team_auth_profile_alts WHERE team_id=? AND primary_profile_id=? AND alt_profile_id=?',
+        [teamNumeric, primaryId, altId]
+      );
     },
     async recordServerPlayer({ server_id, steamid, display_name = null, seen_at = null, ip = null, port = null }){
       const serverIdNum = Number(server_id);

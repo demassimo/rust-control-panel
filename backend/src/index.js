@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import geoip from 'geoip-lite';
 import multer from 'multer';
 import { db, initDb } from './db/index.js';
@@ -100,6 +101,28 @@ const ENTITY_SEARCH_TIMEOUT_MS = 4500;
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const MAX_DISCORD_MESSAGE_LENGTH = 2000;
 const MAX_DISCORD_TICKET_MESSAGES = 50;
+const TEAM_AUTH_COOKIE_NAME = process.env.TEAM_AUTH_COOKIE_NAME || 'team_auth_session';
+const TEAM_AUTH_COOKIE_MAX_AGE_MS = (() => {
+  const daysRaw = Number(process.env.TEAM_AUTH_COOKIE_MAX_AGE_DAYS);
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : 180;
+  return Math.max(1, Math.round(days)) * 24 * 60 * 60 * 1000;
+})();
+const TEAM_AUTH_LINK_TTL_MS = (() => {
+  const value = Number(process.env.TEAM_AUTH_LINK_TTL_MS);
+  if (Number.isFinite(value) && value >= 60 * 1000) return Math.floor(value);
+  return 15 * 60 * 1000;
+})();
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL
+  ? process.env.PUBLIC_APP_URL.trim().replace(/\/+$/, '')
+  : null;
+const AUTH_COOKIE_SECURE = (() => {
+  if (typeof process.env.COOKIE_SECURE === 'string') {
+    const flag = process.env.COOKIE_SECURE.trim().toLowerCase();
+    if (flag === 'true') return true;
+    if (flag === 'false') return false;
+  }
+  return (process.env.NODE_ENV || '').toLowerCase() === 'production';
+})();
 
 const ENTITY_SEARCH_DEFINITIONS = [
   {
@@ -4791,6 +4814,229 @@ function sanitizeDiscordSnowflake(value, maxLength = 64) {
   return digits.slice(0, maxLength);
 }
 
+function sanitizeSteamId(value) {
+  if (value == null) return null;
+  const raw = typeof value === 'string' ? value.trim() : String(value || '').trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  if (/^STEAM_[0-5]:[01]:\d+$/.test(upper)) return upper;
+  if (/^\d{16,20}$/.test(raw)) return raw;
+  const digits = raw.replace(/[^0-9]/g, '');
+  if (/^\d{16,20}$/.test(digits)) return digits;
+  return null;
+}
+
+function sanitizeDiscordUsername(value, maxLength = 190) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeCookieId(value, maxLength = 191) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
+  return trimmed.slice(0, maxLength);
+}
+
+function parseCookies(header) {
+  const jar = new Map();
+  if (typeof header !== 'string' || !header) return jar;
+  const entries = header.split(';');
+  for (const entry of entries) {
+    if (!entry) continue;
+    const idx = entry.indexOf('=');
+    if (idx === -1) continue;
+    const key = entry.slice(0, idx).trim();
+    if (!key) continue;
+    const value = entry.slice(idx + 1).trim();
+    try {
+      jar.set(key, decodeURIComponent(value));
+    } catch {
+      jar.set(key, value);
+    }
+  }
+  return jar;
+}
+
+function generateTeamAuthToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function buildTeamAuthLink(token) {
+  const safe = typeof token === 'string' ? token.trim() : '';
+  if (!safe) return null;
+  if (PUBLIC_APP_URL) return `${PUBLIC_APP_URL}/auth/requests/${safe}`;
+  return `/auth/requests/${safe}`;
+}
+
+async function ensureDiscordMemberRole({ token, guildId, userId, roleId }) {
+  const authToken = sanitizeDiscordToken(token);
+  const guild = sanitizeDiscordSnowflake(guildId);
+  const user = sanitizeDiscordSnowflake(userId);
+  const role = sanitizeDiscordSnowflake(roleId);
+  if (!authToken || !guild || !user || !role) {
+    return { ok: false, skipped: true };
+  }
+  const endpoint = `${DISCORD_API_BASE}/guilds/${guild}/members/${user}/roles/${role}`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bot ${authToken}`,
+        'Content-Length': '0'
+      }
+    });
+    if (response.status >= 200 && response.status < 300) {
+      return { ok: true };
+    }
+    const text = await response.text().catch(() => null);
+    console.warn('failed to assign discord auth role', {
+      status: response.status,
+      guildId: guild,
+      userId: user,
+      roleId: role,
+      body: text || null
+    });
+    return { ok: false, status: response.status, body: text || null };
+  } catch (err) {
+    console.error('error assigning discord auth role', err);
+    return { ok: false, error: err };
+  }
+}
+
+async function maybeAssignTeamAuthRole(teamId, discordId) {
+  if (typeof db.getTeamAuthSettings !== 'function') {
+    return { assigned: false };
+  }
+  const numericTeam = Number(teamId);
+  if (!Number.isFinite(numericTeam)) {
+    return { assigned: false };
+  }
+  try {
+    const settings = await db.getTeamAuthSettings(numericTeam);
+    if (!settings?.enabled) {
+      return { assigned: false };
+    }
+    const result = await ensureDiscordMemberRole({
+      token: settings.token,
+      guildId: settings.guildId,
+      userId: discordId,
+      roleId: settings.roleId
+    });
+    return {
+      assigned: Boolean(result?.ok),
+      roleId: result?.ok ? sanitizeDiscordSnowflake(settings.roleId) : null,
+      status: result?.status ?? null,
+      skipped: result?.skipped ?? false
+    };
+  } catch (err) {
+    console.error('failed to assign discord auth role for team', teamId, err);
+    return { assigned: false, error: err };
+  }
+}
+
+function projectTeamAuthProfile(profile, { includeAlts = false } = {}) {
+  if (!profile || typeof profile !== 'object') return null;
+  const alts = includeAlts && Array.isArray(profile.alts)
+    ? profile.alts.map((entry) => ({
+        profileId: entry?.id ?? null,
+        steamId: entry?.steamid ?? entry?.steamId ?? null,
+        discordId: entry?.discord_id ?? entry?.discordId ?? null,
+        discordUsername: entry?.discord_username ?? entry?.discordUsername ?? null,
+        discordDisplayName: entry?.discord_display_name ?? entry?.discordDisplayName ?? null,
+        linkedAt: entry?.linked_at ?? entry?.linkedAt ?? null,
+        createdAt: entry?.created_at ?? entry?.createdAt ?? null,
+        reason: entry?.reason ?? null,
+        relation: entry?.relation ?? null
+      })).filter((entry) => entry.profileId != null || entry.steamId || entry.discordId)
+    : [];
+  return {
+    profileId: profile?.id ?? null,
+    teamId: profile?.team_id ?? profile?.teamId ?? null,
+    steamId: profile?.steamid ?? profile?.steamId ?? null,
+    discordId: profile?.discord_id ?? profile?.discordId ?? null,
+    discordUsername: profile?.discord_username ?? profile?.discordUsername ?? null,
+    discordDisplayName: profile?.discord_display_name ?? profile?.discordDisplayName ?? null,
+    linkedAt: profile?.linked_at ?? profile?.linkedAt ?? null,
+    updatedAt: profile?.updated_at ?? profile?.updatedAt ?? null,
+    isAlt: Boolean(profile?.is_alt || profile?.isAlt),
+    primaryProfileId: profile?.primary_profile_id ?? profile?.primaryProfileId ?? null,
+    alts: includeAlts ? alts : undefined
+  };
+}
+
+async function fetchTeamAuthProfiles(teamId) {
+  if (typeof db.listTeamAuthProfiles !== 'function') return [];
+  const numeric = Number(teamId);
+  if (!Number.isFinite(numeric)) return [];
+  try {
+    const rows = await db.listTeamAuthProfiles(numeric);
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => projectTeamAuthProfile(row, { includeAlts: true }))
+      .filter(Boolean);
+  } catch (err) {
+    console.error('failed to list team auth profiles', err);
+    return [];
+  }
+}
+
+async function loadTeamAuthProfile(teamId, steamId, { includeAlts = true } = {}) {
+  if (typeof db.getTeamAuthProfile !== 'function') return null;
+  const numeric = Number(teamId);
+  if (!Number.isFinite(numeric)) return null;
+  try {
+    const raw = await db.getTeamAuthProfile(numeric, steamId);
+    if (!raw) return null;
+    return projectTeamAuthProfile(raw, { includeAlts });
+  } catch (err) {
+    console.warn('failed to load team auth profile', err);
+    return null;
+  }
+}
+
+async function decoratePlayersWithTeamAuth(teamId, players, { includeAlts = false } = {}) {
+  const numericTeamId = Number(teamId);
+  if (!Number.isFinite(numericTeamId) || !Array.isArray(players) || players.length === 0) return players;
+  if (typeof db.getTeamAuthProfilesBySteamIds !== 'function') return players;
+  const steamIds = Array.from(new Set(
+    players
+      .map((player) => {
+        const value = player?.steamid ?? player?.SteamID ?? player?.steamId;
+        return typeof value === 'string' ? value.trim() : String(value || '').trim();
+      })
+      .filter((id) => id.length > 0)
+  ));
+  if (steamIds.length === 0) return players;
+  let rawProfiles = [];
+  try {
+    rawProfiles = await db.getTeamAuthProfilesBySteamIds(numericTeamId, steamIds);
+  } catch (err) {
+    console.warn('failed to load team auth profiles for players', err);
+    return players;
+  }
+  const profileMap = new Map();
+  for (const raw of Array.isArray(rawProfiles) ? raw : []) {
+    const projected = projectTeamAuthProfile(raw, { includeAlts });
+    if (projected?.steamId) {
+      profileMap.set(String(raw.steamid || projected.steamId), projected);
+    }
+  }
+  return players.map((player) => {
+    const steamId = (() => {
+      const value = player?.steamid ?? player?.SteamID ?? player?.steamId;
+      return typeof value === 'string' ? value.trim() : String(value || '').trim();
+    })();
+    if (!steamId) return player;
+    const auth = profileMap.get(steamId);
+    if (!auth) return player;
+    return { ...player, team_auth: auth };
+  });
+}
+
 function projectDiscordIntegration(row) {
   if (!row || typeof row !== 'object') return null;
   const serverId = Number(row.server_id ?? row.serverId);
@@ -5326,6 +5572,228 @@ app.delete('/api/team/discord', auth, async (req, res) => {
     });
   } catch (err) {
     console.error('failed to clear team discord token', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/team/auth/requests', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  if (typeof db.createTeamAuthRequest !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  const body = req.body || {};
+  const discordId = sanitizeDiscordSnowflake(
+    body.discordId ?? body.discord_id ?? body.userId ?? body.user_id ?? body.snowflake
+  );
+  if (!discordId) return res.status(400).json({ error: 'invalid_discord_id' });
+  const discordUsername = sanitizeDiscordUsername(
+    body.discordUsername ?? body.discord_username ?? body.username ?? body.displayName ?? body.display_name ?? null
+  );
+  const token = generateTeamAuthToken();
+  const expiresAt = new Date(Date.now() + TEAM_AUTH_LINK_TTL_MS);
+  try {
+    const record = await db.createTeamAuthRequest({
+      team_id: teamId,
+      requested_by_user_id: req.authUser?.id ?? null,
+      discord_id: discordId,
+      discord_username: discordUsername,
+      state_token: token,
+      expires_at: expiresAt.toISOString()
+    });
+    const link = buildTeamAuthLink(record?.state_token || token);
+    res.json({
+      token: record?.state_token || token,
+      link,
+      expiresAt: expiresAt.toISOString(),
+      discordId,
+      discordUsername: record?.discord_username ?? discordUsername ?? null
+    });
+  } catch (err) {
+    console.error('failed to create team auth request', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/team/auth/profiles', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  if (typeof db.listTeamAuthProfiles !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  try {
+    const profiles = await fetchTeamAuthProfiles(teamId);
+    res.json({ profiles });
+  } catch (err) {
+    console.error('failed to fetch team auth profiles', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/auth/requests/:token', async (req, res) => {
+  if (typeof db.getTeamAuthRequestByToken !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+  if (!token) return res.status(400).json({ error: 'invalid_token' });
+  try {
+    const record = await db.getTeamAuthRequestByToken(token);
+    if (!record) return res.status(404).json({ error: 'not_found' });
+    if (record.completed_at) return res.status(410).json({ error: 'already_completed' });
+    const expires = record.expires_at ? new Date(record.expires_at) : null;
+    if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
+      return res.status(410).json({ error: 'expired' });
+    }
+    let teamName = null;
+    if (typeof db.getTeam === 'function') {
+      try {
+        const team = await db.getTeam(record.team_id);
+        teamName = team?.name || null;
+      } catch (err) {
+        console.warn('failed to load team for auth request', err);
+      }
+    }
+    res.json({
+      token: record.state_token,
+      teamId: record.team_id ?? null,
+      teamName,
+      discordId: record.discord_id,
+      discordUsername: record.discord_username ?? null,
+      expiresAt: expires ? expires.toISOString() : null
+    });
+  } catch (err) {
+    console.error('failed to load team auth request', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/auth/requests/:token/complete', async (req, res) => {
+  if (typeof db.getTeamAuthRequestByToken !== 'function' || typeof db.upsertTeamAuthProfile !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
+  if (!token) return res.status(400).json({ error: 'invalid_token' });
+  try {
+    const record = await db.getTeamAuthRequestByToken(token);
+    if (!record) return res.status(404).json({ error: 'not_found' });
+    if (record.completed_at) return res.status(410).json({ error: 'already_completed' });
+    const expires = record.expires_at ? new Date(record.expires_at) : null;
+    if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
+      return res.status(410).json({ error: 'expired' });
+    }
+    const body = req.body || {};
+    const discordId = sanitizeDiscordSnowflake(
+      body.discordId ?? body.discord_id ?? body.userId ?? body.user_id ?? record.discord_id
+    );
+    if (!discordId || discordId !== sanitizeDiscordSnowflake(record.discord_id)) {
+      return res.status(400).json({ error: 'discord_mismatch' });
+    }
+    const discordUsername = sanitizeDiscordUsername(
+      body.discordUsername ?? body.discord_username ?? body.username ?? body.displayName ?? body.display_name ?? record.discord_username ?? null
+    );
+    const discordDisplayName = sanitizeDiscordUsername(
+      body.discordDisplayName ?? body.discord_display_name ?? body.globalName ?? body.global_name ?? null
+    );
+    const steamId = sanitizeSteamId(
+      body.steamId ?? body.steamid ?? body.steamID ?? body.steam_id
+    );
+    if (!steamId) return res.status(400).json({ error: 'invalid_steam_id' });
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    let cookieId = sanitizeCookieId(
+      cookieJar.get(TEAM_AUTH_COOKIE_NAME) || body.cookieId || body.cookie_id || null
+    );
+    if (!cookieId) {
+      cookieId = sanitizeCookieId(crypto.randomBytes(16).toString('hex'));
+    }
+    const profile = await db.upsertTeamAuthProfile({
+      team_id: record.team_id,
+      steamid: steamId,
+      discord_id: discordId,
+      discord_username: discordUsername ?? record.discord_username ?? null,
+      discord_display_name: discordDisplayName ?? null,
+      cookie_id: cookieId ?? null
+    });
+    if (!profile) {
+      return res.status(500).json({ error: 'profile_upsert_failed' });
+    }
+    await db.markTeamAuthRequestCompleted(record.id, profile.id ?? null);
+    let altLinked = null;
+    if (cookieId && typeof db.recordTeamAuthCookie === 'function') {
+      try {
+        const cookieResult = await db.recordTeamAuthCookie({
+          team_id: record.team_id,
+          cookie_id: cookieId,
+          steamid: steamId,
+          discord_id: discordId
+        });
+        if (
+          cookieResult?.existing
+          && (cookieResult.existing.steamid !== steamId || cookieResult.existing.discord_id !== discordId)
+          && typeof db.createTeamAuthAltLink === 'function'
+        ) {
+          try {
+            const primaryProfile = await db.getTeamAuthProfile(record.team_id, cookieResult.existing.steamid);
+            if (primaryProfile?.id && profile?.id && primaryProfile.id !== profile.id) {
+              await db.createTeamAuthAltLink({
+                team_id: record.team_id,
+                primary_profile_id: primaryProfile.id,
+                alt_profile_id: profile.id,
+                reason: 'cookie_mismatch'
+              });
+              altLinked = {
+                primaryProfileId: primaryProfile.id,
+                altProfileId: profile.id,
+                reason: 'cookie_mismatch'
+              };
+            }
+          } catch (err) {
+            console.warn('failed to create team auth alt link', err);
+          }
+        }
+      } catch (err) {
+        console.warn('failed to record team auth cookie', err);
+      }
+    }
+    let projectedProfile = null;
+    try {
+      projectedProfile = await loadTeamAuthProfile(record.team_id, steamId, { includeAlts: true });
+    } catch (err) {
+      console.warn('failed to reload team auth profile', err);
+    }
+    const roleAssignment = await maybeAssignTeamAuthRole(record.team_id, discordId);
+    if (cookieId) {
+      try {
+        res.cookie(TEAM_AUTH_COOKIE_NAME, cookieId, {
+          httpOnly: true,
+          sameSite: 'lax',
+          maxAge: TEAM_AUTH_COOKIE_MAX_AGE_MS,
+          secure: AUTH_COOKIE_SECURE
+        });
+      } catch (err) {
+        console.warn('failed to set team auth cookie', err);
+      }
+    }
+    res.json({
+      ok: true,
+      teamId: record.team_id ?? null,
+      discordId,
+      discordUsername: discordUsername ?? record.discord_username ?? null,
+      discordDisplayName: discordDisplayName ?? null,
+      steamId,
+      expiresAt: expires ? expires.toISOString() : null,
+      profile: projectedProfile ?? projectTeamAuthProfile(profile, { includeAlts: false }),
+      altLinked,
+      cookieId: cookieId ?? null,
+      assignedDiscordRoleId: roleAssignment?.assigned ? roleAssignment.roleId ?? null : null
+    });
+  } catch (err) {
+    console.error('failed to complete team auth request', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
@@ -6900,6 +7368,10 @@ app.get('/api/players', auth, async (req, res) => {
     const filteredCountPromise = canCount ? db.countPlayers({ search }) : Promise.resolve(null);
     const totalCountPromise = canCount && search ? db.countPlayers({ search: '' }) : Promise.resolve(null);
     const [rows, filteredRaw, totalRaw] = await Promise.all([listPromise, filteredCountPromise, totalCountPromise]);
+    const decoratedRows = await decoratePlayersWithTeamAuth(
+      req.authUser?.activeTeamId,
+      Array.isArray(rows) ? rows : []
+    );
     const toCount = (value, fallback = 0) => {
       const numeric = Number(value);
       if (!Number.isFinite(numeric) || numeric < 0) return fallback;
@@ -6913,7 +7385,7 @@ app.get('/api/players', auth, async (req, res) => {
       ? offset + (Array.isArray(rows) ? rows.length : 0) < filteredCount
       : false;
     res.json({
-      items: rows,
+      items: decoratedRows,
       total: totalCount,
       filtered: filteredCount,
       limit: effectiveLimit,
@@ -6950,13 +7422,17 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
     const payload = (Array.isArray(rows) ? rows : [])
       .map((row) => normaliseServerPlayer(row))
       .filter(Boolean);
+    const decorated = await decoratePlayersWithTeamAuth(
+      req.authUser?.activeTeamId,
+      payload
+    );
     const effectiveLimit = limit == null ? null : Math.floor(limit);
     const page = effectiveLimit && effectiveLimit > 0 ? Math.floor(offset / effectiveLimit) : 0;
     const hasMore = effectiveLimit && effectiveLimit > 0
-      ? offset + payload.length < filteredCount
+      ? offset + decorated.length < filteredCount
       : false;
     res.json({
-      items: payload,
+      items: decorated,
       total: totalCount,
       filtered: filteredCount,
       limit: effectiveLimit,
@@ -7132,7 +7608,12 @@ app.get('/api/players/:steamid', auth, async (req, res) => {
     const p = await db.getPlayer(req.params.steamid);
     if (!p) return res.status(404).json({ error: 'not_found' });
     const events = await db.listPlayerEvents(req.params.steamid, { limit: 50, offset: 0 });
-    res.json({ ...p, events });
+    const teamId = req.authUser?.activeTeamId;
+    let teamAuth = null;
+    if (teamId != null) {
+      teamAuth = await loadTeamAuthProfile(teamId, req.params.steamid, { includeAlts: true });
+    }
+    res.json({ ...p, events, team_auth: teamAuth });
   } catch {
     res.status(500).json({ error: 'db_error' });
   }
