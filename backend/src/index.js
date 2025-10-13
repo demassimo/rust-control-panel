@@ -56,6 +56,7 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 const MAX_MAP_IMAGE_BYTES = 40 * 1024 * 1024;
 const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
+const PANEL_PUBLIC_URL = normalizeBaseUrl(process.env.PANEL_PUBLIC_URL);
 
 import {
   extractInteger,
@@ -428,6 +429,23 @@ function projectF7Report(row, fallback = {}) {
   };
 }
 
+function normalizeBaseUrl(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/\/+$/, '');
+}
+
+function resolvePreviewHref(relative) {
+  if (!relative) return relative;
+  if (/^https?:\/\//i.test(relative)) return relative;
+  if (!PANEL_PUBLIC_URL) return relative;
+  if (relative.startsWith('/')) {
+    return `${PANEL_PUBLIC_URL}${relative}`;
+  }
+  return `${PANEL_PUBLIC_URL}/${relative}`;
+}
+
 function projectDiscordTicket(row) {
   if (!row) return null;
   const idCandidate = Number(row.id ?? row.ticketId);
@@ -496,6 +514,29 @@ function buildTicketDialogEntries(row) {
   return entries;
 }
 
+function projectStoredTicketDialogEntry(row) {
+  if (!row) return null;
+  const id = typeof row.message_id === 'string'
+    ? row.message_id.trim()
+    : (typeof row.messageId === 'string' ? row.messageId.trim() : '');
+  if (!id) return null;
+  const role = typeof row.role === 'string' && row.role.trim().toLowerCase() === 'requester'
+    ? 'requester'
+    : 'staff';
+  const content = typeof row.content === 'string'
+    ? row.content
+    : (typeof row.message === 'string' ? row.message : '');
+  if (!content) return null;
+  const authorId = typeof row.author_id === 'string'
+    ? row.author_id
+    : (typeof row.authorId === 'string' ? row.authorId : null);
+  const authorTag = typeof row.author_tag === 'string'
+    ? row.author_tag
+    : (typeof row.authorTag === 'string' ? row.authorTag : null);
+  const postedAt = row.posted_at ?? row.postedAt ?? null;
+  return { id, role, authorId, authorTag, content, postedAt };
+}
+
 function buildTicketPreviewUrl(teamId, ticketId) {
   const numericTeamId = Number(teamId);
   const numericTicketId = Number(ticketId);
@@ -505,7 +546,8 @@ function buildTicketPreviewUrl(teamId, ticketId) {
   const params = new URLSearchParams(searchPart);
   params.set('teamId', String(numericTeamId));
   params.set('ticketId', String(numericTicketId));
-  return `${pathPart}?${params.toString()}`;
+  const relative = `${pathPart}?${params.toString()}`;
+  return resolvePreviewHref(relative);
 }
 
 function slugifyTicketSubject(subject) {
@@ -725,6 +767,22 @@ async function assembleTicketDialog(row) {
   const baseEntries = buildTicketDialogEntries(row);
   const entries = Array.isArray(baseEntries) ? [...baseEntries] : [];
   const seen = new Set(entries.map((entry) => entry?.id).filter(Boolean));
+  const ticketId = Number(row?.id ?? row?.ticket_id ?? row?.ticketId);
+  if (Number.isFinite(ticketId) && typeof db.listDiscordTicketDialogEntries === 'function') {
+    try {
+      const storedRows = await db.listDiscordTicketDialogEntries(ticketId);
+      for (const stored of storedRows) {
+        const entry = projectStoredTicketDialogEntry(stored);
+        if (!entry) continue;
+        const key = entry.id;
+        if (key && seen.has(key)) continue;
+        entries.push(entry);
+        if (key) seen.add(key);
+      }
+    } catch (err) {
+      console.error('failed to load stored ticket dialog entries', err);
+    }
+  }
   try {
     const discordEntries = await fetchDiscordTicketMessages(row);
     for (const entry of discordEntries) {

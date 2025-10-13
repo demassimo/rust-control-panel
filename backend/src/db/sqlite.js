@@ -247,6 +247,19 @@ function createApi(dbh, dialect) {
       );
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_guild_number ON discord_tickets(guild_id, ticket_number);
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_team ON discord_tickets(team_id);
+      CREATE TABLE IF NOT EXISTS discord_ticket_dialog_entries(
+        ticket_id INTEGER NOT NULL,
+        message_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        author_id TEXT,
+        author_tag TEXT,
+        content TEXT,
+        posted_at TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY(ticket_id, message_id),
+        FOREIGN KEY(ticket_id) REFERENCES discord_tickets(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_ticket_dialog_ticket_time ON discord_ticket_dialog_entries(ticket_id, posted_at);
       `);
       const teamCols = await dbh.all("PRAGMA table_info('teams')");
       if (!teamCols.some((c) => c.name === 'discord_token')) {
@@ -1441,6 +1454,66 @@ function createApi(dbh, dialect) {
         [now, closed_by ?? null, closed_by_tag ?? null, close_reason ?? null, now, channelId]
       );
       return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
+    },
+    async replaceDiscordTicketDialogEntries(ticketId, entries = []){
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTicketId)) return 0;
+      await dbh.run('DELETE FROM discord_ticket_dialog_entries WHERE ticket_id=?', [numericTicketId]);
+      if (!Array.isArray(entries) || entries.length === 0) return 0;
+      const stmt = await dbh.prepare(
+        `INSERT INTO discord_ticket_dialog_entries(ticket_id, message_id, role, author_id, author_tag, content, posted_at)
+         VALUES(?,?,?,?,?,?,?)`
+      );
+      let inserted = 0;
+      try {
+        for (const entry of entries) {
+          if (!entry) continue;
+          const messageId = typeof entry.message_id === 'string'
+            ? entry.message_id.trim()
+            : (typeof entry.messageId === 'string' ? entry.messageId.trim() : '');
+          if (!messageId) continue;
+          const role = typeof entry.role === 'string' && entry.role.trim().toLowerCase() === 'requester'
+            ? 'requester'
+            : 'staff';
+          const authorId = typeof entry.author_id === 'string'
+            ? entry.author_id
+            : (typeof entry.authorId === 'string' ? entry.authorId : null);
+          const authorTag = typeof entry.author_tag === 'string'
+            ? entry.author_tag
+            : (typeof entry.authorTag === 'string' ? entry.authorTag : null);
+          const content = typeof entry.content === 'string'
+            ? entry.content
+            : (typeof entry.message === 'string' ? entry.message : null);
+          if (!content) continue;
+          const postedAtRaw = entry.posted_at ?? entry.postedAt ?? null;
+          const postedAt = postedAtRaw ? new Date(postedAtRaw) : null;
+          const postedAtValue = postedAt && !Number.isNaN(postedAt.valueOf()) ? postedAt.toISOString() : null;
+          await stmt.run([
+            numericTicketId,
+            messageId,
+            role,
+            authorId ?? null,
+            authorTag ?? null,
+            content,
+            postedAtValue
+          ]);
+          inserted += 1;
+        }
+      } finally {
+        await stmt.finalize();
+      }
+      return inserted;
+    },
+    async listDiscordTicketDialogEntries(ticketId){
+      const numericTicketId = Number(ticketId);
+      if (!Number.isFinite(numericTicketId)) return [];
+      return await dbh.all(
+        `SELECT ticket_id, message_id, role, author_id, author_tag, content, posted_at
+         FROM discord_ticket_dialog_entries
+         WHERE ticket_id=?
+         ORDER BY datetime(posted_at) ASC, message_id ASC`,
+        [numericTicketId]
+      );
     },
     async listRoles(){
       const rows = await dbh.all(`SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC`);
