@@ -57,6 +57,7 @@ const TICKET_PANEL_BUTTON_ID = 'ticket:panel:open';
 const TICKET_MODAL_PREFIX = 'ticket:modal:';
 const TICKET_SELECT_PREFIX = 'ticket:select:';
 const MAX_PENDING_REQUEST_AGE_MS = 10 * 60 * 1000;
+const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
 
 // Server-specific Discord bots are limited to presence/status updates only. All
 // interactive slash commands are handled by the team-level bot instead.
@@ -131,6 +132,18 @@ function sanitizeTicketText(value, fallback = '') {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   return trimmed.slice(0, 500);
+}
+
+function buildTicketPreviewUrl(teamId, ticketId) {
+  const numericTeamId = Number(teamId);
+  const numericTicketId = Number(ticketId);
+  if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+  const base = TICKET_PREVIEW_PAGE || '/ticket-preview.html';
+  const [pathPart, searchPart = ''] = String(base).split('?');
+  const params = new URLSearchParams(searchPart);
+  params.set('teamId', String(numericTeamId));
+  params.set('ticketId', String(numericTicketId));
+  return `${pathPart}?${params.toString()}`;
 }
 
 function getTicketConfig(state) {
@@ -3336,6 +3349,10 @@ async function handleTicketCloseCommand(state, interaction) {
   let transcriptFileName = null;
   const ticketNumberDisplay = ticketRecord.ticket_number ?? 'unknown';
   const channelName = targetChannel.name ?? `ticket-${ticketNumberDisplay}`;
+  const previewUrl = buildTicketPreviewUrl(
+    ticketRecord.team_id ?? ticketRecord.teamId,
+    ticketRecord.id ?? ticketRecord.ticket_id ?? ticketRecord.ticketId
+  );
 
   try {
     const transcriptText = await createTicketTranscript(targetChannel, {
@@ -3370,6 +3387,10 @@ async function handleTicketCloseCommand(state, interaction) {
         }
         const safeReason = reason.replace(/\r\n?/g, ' ');
         dmLines.push(`Reason: ${safeReason}`);
+        if (previewUrl) {
+          dmLines.push('');
+          dmLines.push(`View your ticket transcript: ${previewUrl}`);
+        }
         await user.send({
           content: dmLines.join('\n'),
           files: [attachment]
@@ -3410,6 +3431,9 @@ async function handleTicketCloseCommand(state, interaction) {
           logEmbed.addFields({ name: 'Reason', value: escapeMarkdown(reason).slice(0, 1000), inline: false });
         }
         logEmbed.addFields({ name: 'Transcript delivery', value: dmLogMessage });
+        if (previewUrl) {
+          logEmbed.addFields({ name: 'Transcript preview', value: escapeMarkdown(previewUrl).slice(0, 200), inline: false });
+        }
 
         const payload = { embeds: [logEmbed] };
         if (transcriptBuffer) {

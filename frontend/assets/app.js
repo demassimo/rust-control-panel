@@ -2115,6 +2115,9 @@
       createdAt,
       updatedAt,
       closedAt: pickString(ticket.closedAt ?? ticket.closed_at) || null,
+      closedBy: pickString(ticket.closedBy ?? ticket.closed_by) || null,
+      closedByTag: pickString(ticket.closedByTag ?? ticket.closed_by_tag) || null,
+      closeReason: pickString(ticket.closeReason ?? ticket.close_reason) || null,
       previewUrl: pickString(ticket.previewUrl ?? ticket.preview_url ?? ticket.previewPath ?? ticket.preview_path) || null
     };
   }
@@ -3072,7 +3075,7 @@
       } else {
         const total = aqState.list.length;
         if (total === 0) {
-          aqTicketsCount.textContent = 'No open tickets';
+          aqTicketsCount.textContent = 'No tickets';
         } else {
           const label = total === 1 ? 'ticket' : 'tickets';
           aqTicketsCount.textContent = `Showing ${total} ${label}`;
@@ -3093,6 +3096,8 @@
       const active = normalized.id != null && normalized.id === aqState.selectedId;
       li.classList.toggle('active', active);
       li.setAttribute('aria-selected', active ? 'true' : 'false');
+      const statusLower = (normalized.status || '').toLowerCase();
+      li.classList.toggle('closed', statusLower === 'closed');
 
       const title = document.createElement('div');
       title.className = 'aq-item-title';
@@ -3104,9 +3109,31 @@
       const parts = [];
       if (normalized.ticketNumber != null) parts.push(`#${normalized.ticketNumber}`);
       const opener = normalized.createdByTag || normalized.createdBy;
-      if (opener) parts.push(opener);
-      if (normalized.createdAt) {
-        parts.push(formatRelativeTime(normalized.createdAt) || formatDateTime(normalized.createdAt));
+      const createdLabel = normalized.createdAt
+        ? formatRelativeTime(normalized.createdAt) || formatDateTime(normalized.createdAt)
+        : null;
+      if (statusLower === 'closed') {
+        const closedWhen = normalized.closedAt
+          ? formatRelativeTime(normalized.closedAt) || formatDateTime(normalized.closedAt)
+          : null;
+        const closedBy = normalized.closedByTag || normalized.closedBy || 'Unknown staff';
+        const closedParts = ['Closed'];
+        if (closedWhen) closedParts.push(closedWhen);
+        closedParts.push(`by ${closedBy}`);
+        parts.push(closedParts.join(' '));
+        if (createdLabel || opener) {
+          const openedParts = [];
+          openedParts.push('Opened');
+          if (createdLabel) openedParts.push(createdLabel);
+          const openedBy = opener || 'Unknown requester';
+          openedParts.push(`by ${openedBy}`);
+          parts.push(openedParts.join(' '));
+        }
+      } else {
+        const statusLabel = (normalized.status || 'open').replace(/^[a-z]/, (char) => char.toUpperCase());
+        parts.push(statusLabel);
+        if (opener) parts.push(opener);
+        if (createdLabel) parts.push(createdLabel);
       }
       meta.textContent = parts.join(' • ');
       li.appendChild(meta);
@@ -3224,7 +3251,7 @@
         } else {
           aqTicketPlaceholder.textContent = aqState.list.length > 0
             ? 'Select a ticket to view the conversation.'
-            : 'No open tickets for this server.';
+            : 'No tickets for this server yet.';
         }
         aqTicketPlaceholder.classList.remove('hidden');
       }
@@ -3248,12 +3275,32 @@
       aqTicketNumber.textContent = ticket?.ticketNumber != null ? `#${ticket.ticketNumber}` : '';
     }
     if (aqTicketMeta) {
-      const status = (ticket?.status || 'open').replace(/^[a-z]/, (char) => char.toUpperCase());
-      const opener = ticket?.createdByTag || ticket?.createdBy || 'Unknown requester';
-      const when = ticket?.createdAt
-        ? formatRelativeTime(ticket.createdAt) || formatDateTime(ticket.createdAt)
-        : 'Unknown time';
-      aqTicketMeta.textContent = `${status} • Opened ${when} by ${opener}`;
+      const statusLower = (ticket?.status || '').toLowerCase();
+      if (statusLower === 'closed') {
+        const closedWhen = ticket?.closedAt
+          ? formatRelativeTime(ticket.closedAt) || formatDateTime(ticket.closedAt)
+          : 'Unknown time';
+        const closedBy = ticket?.closedByTag || ticket?.closedBy || 'Unknown staff';
+        const openedWhen = ticket?.createdAt
+          ? formatRelativeTime(ticket.createdAt) || formatDateTime(ticket.createdAt)
+          : null;
+        const opener = ticket?.createdByTag || ticket?.createdBy || 'Unknown requester';
+        const closedText = `Closed ${closedWhen} by ${closedBy}`;
+        const openedText = openedWhen
+          ? `Opened ${openedWhen} by ${opener}`
+          : `Opened by ${opener}`;
+        aqTicketMeta.textContent = `${closedText} • ${openedText}`;
+      } else {
+        const statusLabelRaw = ticket?.status || 'open';
+        const statusLabel = statusLabelRaw.toLowerCase() === 'open'
+          ? 'Open ticket'
+          : statusLabelRaw.replace(/^[a-z]/, (char) => char.toUpperCase());
+        const opener = ticket?.createdByTag || ticket?.createdBy || 'Unknown requester';
+        const when = ticket?.createdAt
+          ? formatRelativeTime(ticket.createdAt) || formatDateTime(ticket.createdAt)
+          : 'Unknown time';
+        aqTicketMeta.textContent = `${statusLabel} • Opened ${when} by ${opener}`;
+      }
     }
     if (aqTicketPreviewLink) {
       const previewUrl = activeDetail?.previewUrl || ticket?.previewUrl || null;
@@ -3357,7 +3404,8 @@
     aqState.listRequestToken = requestToken;
     renderAqTickets();
     try {
-      const data = await api(`/servers/${serverId}/aq-tickets`);
+      const params = new URLSearchParams({ status: 'all', limit: '50' });
+      const data = await api(`/servers/${serverId}/aq-tickets?${params.toString()}`);
       if (aqState.listRequestToken !== requestToken || Number(aqState.serverId) !== serverId) return;
       const list = Array.isArray(data?.tickets)
         ? data.tickets.map((item) => normalizeAqTicket(item)).filter(Boolean)
