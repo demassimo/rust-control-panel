@@ -154,15 +154,38 @@ function resolvePreviewHref(relative) {
   return `${PANEL_PUBLIC_URL}/${relative}`;
 }
 
-function buildTicketPreviewUrl(teamId, ticketId) {
+function buildTicketPreviewUrl(teamId, ticket) {
   const numericTeamId = Number(teamId);
-  const numericTicketId = Number(ticketId);
-  if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+  if (!Number.isFinite(numericTeamId)) return null;
+  let previewToken = null;
+  if (typeof ticket === 'string') {
+    const trimmed = ticket.trim();
+    previewToken = trimmed || null;
+  } else if (typeof ticket === 'number') {
+    previewToken = Number.isFinite(ticket) ? String(Math.trunc(ticket)) : null;
+  } else if (ticket && typeof ticket === 'object') {
+    const direct = typeof ticket.previewToken === 'string' ? ticket.previewToken.trim() : '';
+    const legacy = typeof ticket.preview_token === 'string' ? ticket.preview_token.trim() : '';
+    const idValue = ticket.id ?? ticket.ticketId ?? ticket.ticket_id;
+    if (direct) {
+      previewToken = direct;
+    } else if (legacy) {
+      previewToken = legacy;
+    } else if (typeof idValue === 'string' && idValue.trim()) {
+      previewToken = idValue.trim();
+    } else if (Number.isFinite(idValue)) {
+      previewToken = String(Number(idValue));
+    }
+  } else if (ticket != null) {
+    const text = String(ticket).trim();
+    previewToken = text || null;
+  }
+  if (!previewToken) return null;
   const base = TICKET_PREVIEW_PAGE || '/ticket-preview.html';
   const [pathPart, searchPart = ''] = String(base).split('?');
   const params = new URLSearchParams(searchPart);
   params.set('teamId', String(numericTeamId));
-  params.set('ticketId', String(numericTicketId));
+  params.set('ticketToken', previewToken);
   const relative = `${pathPart}?${params.toString()}`;
   return resolvePreviewHref(relative);
 }
@@ -3413,7 +3436,10 @@ async function handleTicketCloseCommand(state, interaction) {
   const channelName = targetChannel.name ?? `ticket-${ticketNumberDisplay}`;
   const previewUrl = buildTicketPreviewUrl(
     ticketRecord.team_id ?? ticketRecord.teamId,
-    ticketRecord.id ?? ticketRecord.ticket_id ?? ticketRecord.ticketId
+    {
+      id: ticketRecord.id ?? ticketRecord.ticket_id ?? ticketRecord.ticketId,
+      previewToken: ticketRecord.preview_token ?? ticketRecord.previewToken
+    }
   );
 
   let transcriptEntries = [];

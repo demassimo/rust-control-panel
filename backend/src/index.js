@@ -455,7 +455,13 @@ function projectDiscordTicket(row) {
   const createdAt = row.created_at ?? row.createdAt ?? null;
   const updatedAt = row.updated_at ?? row.updatedAt ?? createdAt;
   const closedAt = row.closed_at ?? row.closedAt ?? null;
-  const previewUrl = buildTicketPreviewUrl(teamIdCandidate, idCandidate);
+  const previewTokenCandidate = typeof row.preview_token === 'string'
+    ? row.preview_token
+    : (typeof row.previewToken === 'string' ? row.previewToken : null);
+  const previewUrl = buildTicketPreviewUrl(
+    teamIdCandidate,
+    { id: idCandidate, previewToken: previewTokenCandidate }
+  );
   return {
     id: Number.isFinite(idCandidate) ? idCandidate : null,
     serverId: Number.isFinite(serverIdCandidate) ? serverIdCandidate : null,
@@ -480,6 +486,9 @@ function projectDiscordTicket(row) {
     closeReason: typeof row.close_reason === 'string'
       ? row.close_reason
       : (typeof row.closeReason === 'string' ? row.closeReason : null),
+    previewToken: typeof previewTokenCandidate === 'string' && previewTokenCandidate.trim()
+      ? previewTokenCandidate.trim()
+      : null,
     previewUrl
   };
 }
@@ -537,15 +546,38 @@ function projectStoredTicketDialogEntry(row) {
   return { id, role, authorId, authorTag, content, postedAt };
 }
 
-function buildTicketPreviewUrl(teamId, ticketId) {
+function buildTicketPreviewUrl(teamId, ticket) {
   const numericTeamId = Number(teamId);
-  const numericTicketId = Number(ticketId);
-  if (!Number.isFinite(numericTeamId) || !Number.isFinite(numericTicketId)) return null;
+  if (!Number.isFinite(numericTeamId)) return null;
+  let previewToken = null;
+  if (typeof ticket === 'string') {
+    const trimmed = ticket.trim();
+    previewToken = trimmed || null;
+  } else if (typeof ticket === 'number') {
+    previewToken = Number.isFinite(ticket) ? String(Math.trunc(ticket)) : null;
+  } else if (ticket && typeof ticket === 'object') {
+    const direct = typeof ticket.previewToken === 'string' ? ticket.previewToken.trim() : '';
+    const legacy = typeof ticket.preview_token === 'string' ? ticket.preview_token.trim() : '';
+    const idValue = ticket.id ?? ticket.ticketId;
+    if (direct) {
+      previewToken = direct;
+    } else if (legacy) {
+      previewToken = legacy;
+    } else if (typeof idValue === 'string' && idValue.trim()) {
+      previewToken = idValue.trim();
+    } else if (Number.isFinite(idValue)) {
+      previewToken = String(Number(idValue));
+    }
+  } else if (ticket != null) {
+    const text = String(ticket).trim();
+    previewToken = text || null;
+  }
+  if (!previewToken) return null;
   const base = TICKET_PREVIEW_PAGE || '/ticket-preview.html';
   const [pathPart, searchPart = ''] = String(base).split('?');
   const params = new URLSearchParams(searchPart);
   params.set('teamId', String(numericTeamId));
-  params.set('ticketId', String(numericTicketId));
+  params.set('ticketToken', previewToken);
   const relative = `${pathPart}?${params.toString()}`;
   return resolvePreviewHref(relative);
 }
@@ -614,7 +646,7 @@ function buildTicketPreviewPayload({ ticket, dialog, teamName }) {
     team: ticket?.teamId != null ? { id: ticket.teamId, name: teamName || null } : null,
     ticket: {
       ...ticket,
-      previewUrl: buildTicketPreviewUrl(ticket?.teamId, ticket?.id)
+      previewUrl: buildTicketPreviewUrl(ticket?.teamId, ticket)
     },
     messages
   };
@@ -5929,7 +5961,10 @@ app.get('/api/servers/:id/aq-tickets/:ticketId', auth, async (req, res) => {
     }
     const ticket = projectDiscordTicket(row);
     const dialog = await assembleTicketDialog(row);
-    const previewUrl = buildTicketPreviewUrl(ticket?.teamId ?? row.team_id, ticket?.id ?? row.id);
+    const previewUrl = buildTicketPreviewUrl(
+      ticket?.teamId ?? row.team_id,
+      ticket ?? { id: row.id, previewToken: row.preview_token ?? row.previewToken }
+    );
     res.json({ ticket, dialog, previewUrl });
   } catch (err) {
     console.error('failed to load aq ticket', err);
@@ -6029,19 +6064,25 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
   res.json({ ok: true });
 });
 
-app.get('/api/teams/:teamId/discord/tickets/:ticketId/preview', auth, async (req, res) => {
+app.get('/api/teams/:teamId/discord/tickets/:ticketToken/preview', auth, async (req, res) => {
   if (typeof db?.getDiscordTicketForTeam !== 'function') {
     return res.status(404).json({ error: 'not_found' });
   }
   const teamId = await ensureTeamAccess(req, res, 'teamId');
   if (teamId == null) return;
-  const ticketId = Number(req.params?.ticketId);
-  if (!Number.isFinite(ticketId)) {
+  const rawToken = typeof req.params?.ticketToken === 'string' ? req.params.ticketToken.trim() : '';
+  if (!rawToken) {
     res.status(400).json({ error: 'invalid_ticket' });
     return;
   }
   try {
-    const row = await db.getDiscordTicketForTeam(teamId, ticketId);
+    let row = null;
+    if (typeof db?.getDiscordTicketForTeamByPreviewToken === 'function') {
+      row = await db.getDiscordTicketForTeamByPreviewToken(teamId, rawToken);
+    }
+    if (!row && /^\d+$/.test(rawToken)) {
+      row = await db.getDiscordTicketForTeam(teamId, Number(rawToken));
+    }
     if (!row) {
       res.status(404).json({ error: 'not_found' });
       return;

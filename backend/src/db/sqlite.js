@@ -1,5 +1,6 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import { randomBytes } from 'node:crypto';
 import { serializeCombatLogPayload } from './combat-log.js';
 
 export default {
@@ -36,6 +37,33 @@ function createApi(dbh, dialect) {
     if (!text) return null;
     const lower = text.toLowerCase();
     return lower === 'team' || lower === 'global' ? lower : null;
+  };
+  const generatePreviewToken = (size = 18) => randomBytes(size).toString('hex');
+  const generateUniqueTicketPreviewToken = async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const candidate = generatePreviewToken(18 + attempt);
+      const existing = await dbh.get(
+        'SELECT id FROM discord_tickets WHERE preview_token=?',
+        [candidate]
+      );
+      if (!existing) return candidate;
+    }
+    const fallback = generatePreviewToken(24);
+    const duplicate = await dbh.get(
+      'SELECT id FROM discord_tickets WHERE preview_token=?',
+      [fallback]
+    );
+    if (!duplicate) return fallback;
+    throw new Error('failed to allocate unique ticket preview token');
+  };
+  const ensureTicketPreviewTokens = async () => {
+    const rows = await dbh.all(
+      "SELECT id FROM discord_tickets WHERE preview_token IS NULL OR preview_token=''"
+    );
+    for (const row of rows) {
+      const token = await generateUniqueTicketPreviewToken();
+      await dbh.run('UPDATE discord_tickets SET preview_token=? WHERE id=?', [token, row.id]);
+    }
   };
   return {
     dialect,
@@ -235,6 +263,7 @@ function createApi(dbh, dialect) {
         details TEXT,
         created_by TEXT,
         created_by_tag TEXT,
+        preview_token TEXT,
         status TEXT DEFAULT 'open',
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
@@ -247,6 +276,7 @@ function createApi(dbh, dialect) {
       );
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_guild_number ON discord_tickets(guild_id, ticket_number);
       CREATE INDEX IF NOT EXISTS idx_discord_tickets_team ON discord_tickets(team_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_tickets_preview_token ON discord_tickets(preview_token);
       CREATE TABLE IF NOT EXISTS discord_ticket_dialog_entries(
         ticket_id INTEGER NOT NULL,
         message_id TEXT NOT NULL,
@@ -278,6 +308,11 @@ function createApi(dbh, dialect) {
       if (!discordCols.some((c) => c.name === 'config_json')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN config_json TEXT");
       }
+      const ticketCols = await dbh.all("PRAGMA table_info('discord_tickets')");
+      if (!ticketCols.some((c) => c.name === 'preview_token')) {
+        await dbh.run("ALTER TABLE discord_tickets ADD COLUMN preview_token TEXT");
+      }
+      await ensureTicketPreviewTokens();
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
@@ -1384,9 +1419,10 @@ function createApi(dbh, dialect) {
         number = await this.getNextDiscordTicketNumber(guildId);
       }
       const now = new Date().toISOString();
+      const previewToken = await generateUniqueTicketPreviewToken();
       const result = await dbh.run(
-        `INSERT INTO discord_tickets(team_id, server_id, guild_id, channel_id, ticket_number, subject, details, created_by, created_by_tag, status, created_at, updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,'open',?,?)`,
+        `INSERT INTO discord_tickets(team_id, server_id, guild_id, channel_id, ticket_number, subject, details, created_by, created_by_tag, preview_token, status, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,'open',?,?)`,
         [
           team_id ?? null,
           server_id ?? null,
@@ -1397,6 +1433,7 @@ function createApi(dbh, dialect) {
           details ?? null,
           created_by ?? null,
           created_by_tag ?? null,
+          previewToken,
           now,
           now
         ]
@@ -1442,6 +1479,15 @@ function createApi(dbh, dialect) {
       return await dbh.get(
         'SELECT * FROM discord_tickets WHERE team_id=? AND id=?',
         [numericTeamId, numericTicketId]
+      );
+    },
+    async getDiscordTicketForTeamByPreviewToken(teamId, previewToken){
+      const numericTeamId = Number(teamId);
+      const token = typeof previewToken === 'string' ? previewToken.trim() : '';
+      if (!Number.isFinite(numericTeamId) || !token) return null;
+      return await dbh.get(
+        'SELECT * FROM discord_tickets WHERE team_id=? AND preview_token=?',
+        [numericTeamId, token]
       );
     },
     async closeDiscordTicket(channelId, { closed_by=null, closed_by_tag=null, close_reason=null } = {}){
