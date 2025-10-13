@@ -612,10 +612,10 @@ function createApi(pool, dialect) {
       if (Number.isFinite(limitNum) && limitNum > 0) {
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
-        sql += ' LIMIT ? OFFSET ?';
+        sql += ` LIMIT ? OFFSET ?';
         params.push(safeLimit, safeOffset);
       } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
-        sql += ' LIMIT 18446744073709551615 OFFSET ?';
+        sql += ` LIMIT 18446744073709551615 OFFSET ?';
         params.push(Math.floor(offsetNum));
       }
       return await exec(sql, params);
@@ -959,7 +959,7 @@ function createApi(pool, dialect) {
 
       const maxRows = Number(limit);
       if (Number.isFinite(maxRows) && maxRows > 0) {
-        sql += ' LIMIT ?';
+        sql += ` LIMIT ?';
         params.push(Math.floor(maxRows));
       }
 
@@ -1004,10 +1004,10 @@ function createApi(pool, dialect) {
       if (Number.isFinite(limitNum) && limitNum > 0) {
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
-        sql += ' LIMIT ? OFFSET ?';
+        sql += ` LIMIT ? OFFSET ?';
         params.push(safeLimit, safeOffset);
       } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
-        sql += ' LIMIT 18446744073709551615 OFFSET ?';
+        sql += ` LIMIT 18446744073709551615 OFFSET ?';
         params.push(Math.floor(offsetNum));
       }
       return await exec(sql, params);
@@ -1203,7 +1203,7 @@ function createApi(pool, dialect) {
       let sql = `SELECT id, server_id, channel, steamid, username, message, raw, color, created_at FROM chat_messages WHERE ${conditions.join(' AND ')} ORDER BY created_at ASC`;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ' LIMIT ?';
+        sql += ` LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 500));
       }
       return await exec(sql, params);
@@ -1215,7 +1215,7 @@ function createApi(pool, dialect) {
       let sql = 'DELETE FROM chat_messages WHERE created_at < ?';
       const serverIdNum = Number(server_id);
       if (Number.isFinite(serverIdNum)) {
-        sql += ' AND server_id=?';
+        sql += ` AND server_id=?';
         params.push(serverIdNum);
       }
       const result = await exec(sql, params);
@@ -1320,7 +1320,7 @@ function createApi(pool, dialect) {
       `;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ' LIMIT ?';
+        sql += ` LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 200));
       }
       return await exec(sql, params);
@@ -1348,13 +1348,13 @@ function createApi(pool, dialect) {
       `;
       const excludeNumeric = Number(excludeId);
       if (Number.isFinite(excludeNumeric)) {
-        sql += ' AND id != ?';
+        sql += ` AND id != ?';
         params.push(excludeNumeric);
       }
-      sql += ' ORDER BY created_at DESC, id DESC';
+      sql += ` ORDER BY created_at DESC, id DESC';
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ' LIMIT ?';
+        sql += ` LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 50));
       }
       return await exec(sql, params);
@@ -1514,7 +1514,7 @@ function createApi(pool, dialect) {
                  ORDER BY occurred_at DESC, id DESC`;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ' LIMIT ?';
+        sql += ` LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 500));
       }
       return await exec(sql, params);
@@ -1526,7 +1526,7 @@ function createApi(pool, dialect) {
       let sql = 'DELETE FROM kill_events WHERE occurred_at < ?';
       const serverIdNum = Number(server_id);
       if (Number.isFinite(serverIdNum)) {
-        sql += ' AND server_id=?';
+        sql += ` AND server_id=?';
         params.push(serverIdNum);
       }
       const result = await exec(sql, params);
