@@ -21,6 +21,9 @@ behaviour:
   `backend/src/<feature>.js`. Each module should export explicit functions that the entry point can call.
 - **Database adapters**: Shared database access lives in `backend/src/db/`. Add new persistence helpers to
   `backend/src/db/index.js`, keeping dialect-specific logic in the corresponding `mysql.js` or `sqlite.js` file.
+- **Team auth flow**: The Discord/Steam verification endpoints live in `backend/src/index.js` with persistence handled by
+  the `team_auth_*` tables declared in both database adapters. When extending the flow (for example, tracking additional
+  OAuth metadata) update the SQLite and MySQL dialects together and keep the cookie/token helpers in sync.
 - **Background workers**: Long-running jobs, such as the Discord bot, should have their own module (for example,
   `backend/src/discord-bot-service.js`) and a matching entry point in `deploy/systemd/` or `scripts/` if they are launched
   separately from the HTTP server.

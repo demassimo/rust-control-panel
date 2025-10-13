@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { setTimeout as delay } from 'node:timers/promises';
 import { once } from 'node:events';
 import process from 'node:process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import {
   Client,
   GatewayIntentBits,
@@ -57,6 +57,14 @@ const TICKET_PANEL_BUTTON_ID = 'ticket:panel:open';
 const TICKET_MODAL_PREFIX = 'ticket:modal:';
 const TICKET_SELECT_PREFIX = 'ticket:select:';
 const MAX_PENDING_REQUEST_AGE_MS = 10 * 60 * 1000;
+const TEAM_AUTH_LINK_TTL_MS = (() => {
+  const value = Number(process.env.TEAM_AUTH_LINK_TTL_MS);
+  if (Number.isFinite(value) && value >= 60 * 1000) return Math.floor(value);
+  return 15 * 60 * 1000;
+})();
+const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL
+  ? process.env.PUBLIC_APP_URL.trim().replace(/\/+$/, '')
+  : null;
 const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
 const PANEL_PUBLIC_URL = normalizeBaseUrl(process.env.PANEL_PUBLIC_URL);
 
@@ -215,6 +223,63 @@ function formatChannelMention(id, fallback = 'Not set') {
 function formatRoleMention(id, fallback = 'Not set') {
   const value = sanitizeId(id);
   return value ? `<@&${value}>` : fallback;
+}
+
+const DEFAULT_TEAM_AUTH_SETTINGS = Object.freeze({
+  enabled: false,
+  roleId: null,
+  guildId: null,
+  token: null
+});
+
+function buildTeamAuthLink(token) {
+  const safe = typeof token === 'string' ? token.trim() : '';
+  if (!safe) return null;
+  if (PUBLIC_APP_URL) return `${PUBLIC_APP_URL}/auth/requests/${safe}`;
+  return `/auth/requests/${safe}`;
+}
+
+async function loadTeamAuthSettings(teamId) {
+  if (typeof db.getTeamAuthSettings !== 'function') {
+    return { ...DEFAULT_TEAM_AUTH_SETTINGS };
+  }
+  const numeric = Number(teamId);
+  if (!Number.isFinite(numeric)) {
+    return { ...DEFAULT_TEAM_AUTH_SETTINGS };
+  }
+  try {
+    const settings = await db.getTeamAuthSettings(numeric);
+    return {
+      enabled: Boolean(settings?.enabled),
+      roleId: sanitizeId(settings?.roleId),
+      guildId: sanitizeId(settings?.guildId),
+      token: sanitizeId(settings?.token)
+    };
+  } catch (err) {
+    console.error('failed to load team auth settings', err);
+    return { ...DEFAULT_TEAM_AUTH_SETTINGS };
+  }
+}
+
+async function saveTeamAuthSettings(teamId, updates) {
+  if (typeof db.setTeamAuthSettings !== 'function') return 0;
+  const numeric = Number(teamId);
+  if (!Number.isFinite(numeric)) return 0;
+  try {
+    return await db.setTeamAuthSettings(numeric, updates);
+  } catch (err) {
+    console.error('failed to persist team auth settings', err);
+    throw err;
+  }
+}
+
+function generateTeamAuthToken() {
+  try {
+    return randomBytes(24).toString('hex');
+  } catch (err) {
+    console.error('failed to generate auth token with randomBytes, falling back to uuid', err);
+    return randomUUID().replace(/-/g, '');
+  }
 }
 
 function setStateConfig(state, config) {
@@ -717,6 +782,46 @@ function buildCommandDefinitions() {
               description: 'SteamID64 to lookup',
               required: true,
               min_length: 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      name: 'auth',
+      description: 'Link your Steam account with the Rust control panel',
+      dm_permission: false,
+      options: [
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: 'link',
+          description: 'Generate a one-time account linking URL'
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: 'status',
+          description: 'Show whether Discord account linking is enabled'
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: 'enable',
+          description: 'Enable Discord account linking for this team'
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: 'disable',
+          description: 'Disable Discord account linking for this team'
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: 'setrole',
+          description: 'Choose the Discord role granted after a player links their account',
+          options: [
+            {
+              type: ApplicationCommandOptionType.Role,
+              name: 'role',
+              description: 'Role to grant to verified players (leave empty to clear)',
+              required: false
             }
           ]
         }
@@ -2086,6 +2191,11 @@ async function handleHelpCommand(interaction, { state = null, teamState = null }
     '• `/rustlookup player <query>` — Search for player records by name or SteamID.',
     '• `/rustlookup steamid <id>` — Retrieve the detailed record for a specific SteamID64.',
     '',
+    '• `/auth link` — Generate a private link to connect your Steam account.',
+    '• `/auth status` — Show whether linking is enabled and which role is granted.',
+    '• `/auth enable` or `/auth disable` — Toggle linking (Manage Server/Roles required).',
+    '• `/auth setrole` — Choose the Discord role granted after successful linking.',
+    '',
     '• `/ticket open` — Open a support ticket for the staff team.',
     '• `/ticket close` — Close a ticket channel, log it, and remove it.',
     '• `/ticket panel` — Post or update the interactive ticket panel.',
@@ -2252,6 +2362,186 @@ async function handleRustStatusCommand(state, interaction) {
   }
 
   await interaction.editReply('Unknown subcommand.');
+}
+
+async function handleAuthCommand(state, interaction) {
+  const teamId = Number(state?.teamId);
+  const supported =
+    Number.isFinite(teamId) &&
+    typeof db.createTeamAuthRequest === 'function' &&
+    typeof db.getTeamAuthSettings === 'function';
+  if (!supported) {
+    const message = 'Account linking is not available right now. Ask a server admin to configure the control panel.';
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(message);
+    } else {
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+    }
+    return;
+  }
+
+  if (!interaction.deferred && typeof interaction.deferReply === 'function') {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+    } catch (err) {
+      console.error('failed to defer auth interaction', err);
+      if (!interaction.replied) {
+        try {
+          await interaction.reply({
+            content: 'Something went wrong before the command could start. Please try again.',
+            flags: MessageFlags.Ephemeral
+          });
+        } catch (replyErr) {
+          console.error('failed to reply after auth defer failure', replyErr);
+        }
+      }
+      return;
+    }
+  }
+
+  const sub = typeof interaction.options?.getSubcommand === 'function'
+    ? interaction.options.getSubcommand()
+    : null;
+  const settings = await loadTeamAuthSettings(teamId);
+  const hasManagePermission = Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageRoles)
+  );
+
+  const ttlMinutes = Math.max(1, Math.round(TEAM_AUTH_LINK_TTL_MS / 60000));
+  const ttlLabel = ttlMinutes === 1 ? '1 minute' : `${ttlMinutes} minutes`;
+
+  try {
+    if (sub === 'status') {
+      const lines = [
+        `Status: ${settings.enabled ? '✅ Enabled' : '❌ Disabled'}`,
+        `Role: ${settings.roleId ? `<@&${settings.roleId}>` : 'Not configured'}`
+      ];
+      if (!settings.enabled) {
+        lines.push('Use `/auth enable` if you have Manage Server or Manage Roles permissions to turn it on.');
+      }
+      await interaction.editReply(lines.join('\n'));
+      return;
+    }
+
+    if (sub === 'enable') {
+      if (!hasManagePermission) {
+        await interaction.editReply('You need the **Manage Server** or **Manage Roles** permission to enable account linking.');
+        return;
+      }
+      if (typeof db.setTeamAuthSettings !== 'function') {
+        await interaction.editReply('Updating auth settings is not supported by the current database driver.');
+        return;
+      }
+      await saveTeamAuthSettings(teamId, { enabled: true });
+      const refreshed = await loadTeamAuthSettings(teamId);
+      const roleNotice = refreshed.roleId
+        ? `Linked players will receive <@&${refreshed.roleId}> after completing the flow.`
+        : 'No role is configured yet. Use `/auth setrole` if you want to grant one automatically.';
+      await interaction.editReply(
+        `Discord account linking is now **enabled** for this team. ${roleNotice}`
+      );
+      return;
+    }
+
+    if (sub === 'disable') {
+      if (!hasManagePermission) {
+        await interaction.editReply('You need the **Manage Server** or **Manage Roles** permission to disable account linking.');
+        return;
+      }
+      if (typeof db.setTeamAuthSettings !== 'function') {
+        await interaction.editReply('Updating auth settings is not supported by the current database driver.');
+        return;
+      }
+      await saveTeamAuthSettings(teamId, { enabled: false });
+      await interaction.editReply('Discord account linking has been disabled. Existing links remain valid.');
+      return;
+    }
+
+    if (sub === 'setrole') {
+      if (!hasManagePermission) {
+        await interaction.editReply('You need the **Manage Server** or **Manage Roles** permission to update the granted role.');
+        return;
+      }
+      if (typeof db.setTeamAuthSettings !== 'function') {
+        await interaction.editReply('Updating auth settings is not supported by the current database driver.');
+        return;
+      }
+      let selectedRole = null;
+      if (typeof interaction.options?.getRole === 'function') {
+        selectedRole = interaction.options.getRole('role', false);
+      }
+      if (selectedRole && interaction.guildId && selectedRole.guild && selectedRole.guild.id !== interaction.guildId) {
+        await interaction.editReply('Please choose a role from this Discord server.');
+        return;
+      }
+      const roleId = selectedRole?.id ? String(selectedRole.id) : null;
+      await saveTeamAuthSettings(teamId, { roleId });
+      if (roleId) {
+        await interaction.editReply(`Linked players will now receive ${formatRoleMention(roleId, 'the selected role')}.`);
+      } else {
+        await interaction.editReply('Linked players will no longer receive a Discord role automatically.');
+      }
+      return;
+    }
+
+    if (sub === 'link') {
+      if (!settings.enabled) {
+        await interaction.editReply('Account linking is currently disabled. Ask a server admin to enable it with `/auth enable`.');
+        return;
+      }
+      const discordId = sanitizeId(interaction.user?.id);
+      if (!discordId) {
+        await interaction.editReply('Unable to determine your Discord ID. Please try again from within the server.');
+        return;
+      }
+      const displayName = interaction.user?.tag || interaction.user?.username || discordId;
+      const token = generateTeamAuthToken();
+      const expiresAt = new Date(Date.now() + TEAM_AUTH_LINK_TTL_MS);
+      let record;
+      try {
+        record = await db.createTeamAuthRequest({
+          team_id: teamId,
+          requested_by_user_id: null,
+          discord_id: discordId,
+          discord_username: displayName,
+          state_token: token,
+          expires_at: expiresAt.toISOString()
+        });
+      } catch (err) {
+        console.error('failed to create team auth request from discord command', err);
+        await interaction.editReply('Something went wrong while creating your link. Please try again in a moment.');
+        return;
+      }
+      const linkToken = record?.state_token || token;
+      const link = buildTeamAuthLink(linkToken);
+      if (!link) {
+        await interaction.editReply('Failed to build an auth link. Please let the staff team know.');
+        return;
+      }
+      const expiresStamp = `<t:${Math.floor(expiresAt.getTime() / 1000)}:R>`;
+      const response = [
+        'Use the link below to connect your Steam account to the control panel:',
+        link,
+        `This link expires ${expiresStamp} (about ${ttlLabel}).`
+      ];
+      if (settings.roleId) {
+        response.push(`You will receive ${formatRoleMention(settings.roleId, 'the configured role')} after you finish.`);
+      }
+      response.push('Do **not** share this link with anyone else.');
+      await interaction.editReply(response.join('\n'));
+      return;
+    }
+
+    await interaction.editReply('Unknown subcommand.');
+  } catch (err) {
+    console.error('failed to handle auth command', err);
+    try {
+      await interaction.editReply('An unexpected error occurred while handling the command.');
+    } catch (replyErr) {
+      console.error('failed to send error reply for auth command', replyErr);
+    }
+  }
 }
 
 function buildConfigSummaryEmbed(state) {
@@ -3846,6 +4136,8 @@ async function handleInteraction(state, interaction) {
         await handleRustStatusCommand(state, interaction);
       } else if (interaction.commandName === 'rustlookup') {
         await handleRustLookupCommand(state, interaction);
+      } else if (interaction.commandName === 'auth') {
+        await handleAuthCommand(state, interaction);
       } else if (interaction.commandName === 'ticket') {
         await handleTicketCommand(state, interaction);
       }
