@@ -338,7 +338,6 @@ function createApi(dbh, dialect) {
         FOREIGN KEY(alt_profile_id) REFERENCES team_auth_profiles(id) ON DELETE CASCADE,
         UNIQUE(team_id, primary_profile_id, alt_profile_id)
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_tickets_preview_token ON discord_tickets(preview_token);
       CREATE TABLE IF NOT EXISTS discord_ticket_dialog_entries(
         ticket_id INTEGER NOT NULL,
         message_id TEXT NOT NULL,
@@ -381,6 +380,7 @@ function createApi(dbh, dialect) {
         await dbh.run("ALTER TABLE discord_tickets ADD COLUMN preview_token TEXT");
       }
       await ensureTicketPreviewTokens();
+      await dbh.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_discord_tickets_preview_token ON discord_tickets(preview_token)');
       const userCols = await dbh.all("PRAGMA table_info('users')");
       if (!userCols.some((c) => c.name === 'role')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'");
@@ -741,12 +741,12 @@ function createApi(dbh, dialect) {
       const limitNum = Number(limit);
       const offsetNum = Number(offset);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ? OFFSET ?';
+        sql += ' LIMIT ? OFFSET ?';
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
         params.push(safeLimit, safeOffset);
       } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
-        sql += ` LIMIT -1 OFFSET ?';
+        sql += ' LIMIT -1 OFFSET ?';
         params.push(Math.floor(offsetNum));
       }
       return await dbh.all(sql, params);
@@ -1083,7 +1083,7 @@ function createApi(dbh, dialect) {
 
       const maxRows = Number(limit);
       if (Number.isFinite(maxRows) && maxRows > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.floor(maxRows));
       }
 
@@ -1128,10 +1128,10 @@ function createApi(dbh, dialect) {
       if (Number.isFinite(limitNum) && limitNum > 0) {
         const safeLimit = Math.floor(limitNum);
         const safeOffset = Number.isFinite(offsetNum) && offsetNum > 0 ? Math.floor(offsetNum) : 0;
-        sql += ` LIMIT ? OFFSET ?';
+        sql += ' LIMIT ? OFFSET ?';
         params.push(safeLimit, safeOffset);
       } else if (Number.isFinite(offsetNum) && offsetNum > 0) {
-        sql += ` LIMIT -1 OFFSET ?';
+        sql += ' LIMIT -1 OFFSET ?';
         params.push(Math.floor(offsetNum));
       }
       return await dbh.all(sql, params);
@@ -1315,7 +1315,7 @@ function createApi(dbh, dialect) {
       `;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 500));
       }
       return await dbh.all(sql, params);
@@ -1327,7 +1327,7 @@ function createApi(dbh, dialect) {
       const params = [cutoff];
       const serverIdNum = Number(server_id);
       if (Number.isFinite(serverIdNum)) {
-        sql += ` AND server_id=?';
+        sql += ' AND server_id=?';
         params.push(serverIdNum);
       }
       const result = await dbh.run(sql, params);
@@ -1431,7 +1431,7 @@ function createApi(dbh, dialect) {
       `;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 200));
       }
       return await dbh.all(sql, params);
@@ -1549,7 +1549,7 @@ function createApi(dbh, dialect) {
       `;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 200));
       }
       return await dbh.all(sql, params);
@@ -1576,13 +1576,13 @@ function createApi(dbh, dialect) {
       `;
       const excludeNumeric = Number(excludeId);
       if (Number.isFinite(excludeNumeric)) {
-        sql += ` AND id != ?';
+        sql += ' AND id != ?';
         params.push(excludeNumeric);
       }
-      sql += ` ORDER BY created_at DESC, id DESC';
+      sql += ' ORDER BY created_at DESC, id DESC';
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
-        sql += ` LIMIT ?';
+        sql += ' LIMIT ?';
         params.push(Math.min(Math.floor(limitNum), 50));
       }
       return await dbh.all(sql, params);
@@ -1637,7 +1637,7 @@ function createApi(dbh, dialect) {
       const params = [cutoff];
       const serverIdNum = Number(server_id);
       if (Number.isFinite(serverIdNum)) {
-        sql += ` AND server_id=?';
+        sql += ' AND server_id=?';
         params.push(serverIdNum);
       }
       const result = await dbh.run(sql, params);
