@@ -41,27 +41,39 @@
   const cmdInput = $('#cmd');
   const cmdInputDefaultPlaceholder = cmdInput?.getAttribute('placeholder') || '';
 
-  const DEFAULT_RUSTSTATUS_FIELDS = {
+  const DISCORD_ALLOWED_PRESENCES = new Set(['online', 'idle', 'dnd', 'invisible']);
+  const DISCORD_PRESENCE_LABELS = {
+    online: 'Online',
+    idle: 'Idle',
+    dnd: 'Do Not Disturb',
+    invisible: 'Invisible'
+  };
+  const DISCORD_PRESENCE_CLASS = {
+    online: 'online',
+    idle: 'degraded',
+    dnd: 'offline',
+    invisible: 'offline'
+  };
+  const DEFAULT_DISCORD_PRESENCE_TEMPLATE = '{statusEmoji} {playerCount} on {serverName}';
+  const DEFAULT_DISCORD_PRESENCE_STATUSES = {
+    online: 'online',
+    offline: 'dnd',
+    stale: 'idle',
+    waiting: 'idle'
+  };
+  const DEFAULT_DISCORD_STATUS_FIELDS = {
     joining: true,
     queued: true,
     sleepers: true,
     fps: true,
     lastUpdate: true
   };
-
-  const DEFAULT_TICKETING_CONFIG = {
-    enabled: false,
-    categoryId: '',
-    logChannelId: '',
-    staffRoleId: '',
-    welcomeMessage: 'Thanks for contacting the Rust server team! A staff member will be with you shortly.',
-    questionPrompt: 'Please describe your issue so the team can help.',
-    pingStaffOnOpen: true,
-    panelChannelId: '',
-    panelMessageId: '',
-    panelTitle: 'Need assistance from the team?',
-    panelDescription: 'Use the button below to open a ticket and let us know how we can help.',
-    panelButtonLabel: 'Open Ticket'
+  const DISCORD_STATUS_FIELD_LABELS = {
+    joining: 'Joining players',
+    queued: 'Queue length',
+    sleepers: 'Sleeping players',
+    fps: 'Server FPS',
+    lastUpdate: 'Last update timestamp'
   };
 
   const state = {
@@ -80,13 +92,16 @@
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] },
     teamDiscord: { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null },
-    teamDiscordServer: {
+    teamAuth: { loading: false, enabled: false, roleId: null, loaded: false },
+    workspaceDiscord: {
+      serverId: null,
       loading: false,
-      selectedServerId: null,
+      saving: false,
+      error: null,
       integration: null,
-      config: { fields: { ...DEFAULT_RUSTSTATUS_FIELDS }, ticketing: { ...DEFAULT_TICKETING_CONFIG } }
-    },
-    teamAuth: { loading: false, enabled: false, roleId: null, loaded: false }
+      status: null,
+      config: defaultWorkspaceDiscordConfig()
+    }
   };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
@@ -118,27 +133,6 @@
   const teamDiscordSummary = $('#teamDiscordSummary');
   const teamDiscordSummaryGuild = $('#teamDiscordSummaryGuild');
   const teamDiscordSummaryToken = $('#teamDiscordSummaryToken');
-  const teamDiscordServerSection = $('#teamDiscordServerSection');
-  const teamDiscordServerSelect = $('#teamDiscordServerSelect');
-  const teamDiscordServerNotice = $('#teamDiscordServerNotice');
-  const teamTicketingForm = $('#teamDiscordTicketingForm');
-  const teamTicketingEnabled = $('#teamTicketingEnabled');
-  const teamTicketingCategory = $('#teamTicketingCategory');
-  const teamTicketingLog = $('#teamTicketingLog');
-  const teamTicketingStaffRole = $('#teamTicketingStaffRole');
-  const teamTicketingPingStaff = $('#teamTicketingPingStaff');
-  const teamTicketingPanelChannel = $('#teamTicketingPanelChannel');
-  const teamTicketingPanelMessage = $('#teamTicketingPanelMessage');
-  const teamTicketingWelcome = $('#teamTicketingWelcome');
-  const teamTicketingPrompt = $('#teamTicketingPrompt');
-  const teamTicketingPanelTitle = $('#teamTicketingPanelTitle');
-  const teamTicketingPanelDescription = $('#teamTicketingPanelDescription');
-  const teamTicketingPanelButton = $('#teamTicketingPanelButton');
-  const teamTicketingStatus = $('#teamTicketingStatus');
-  const teamRuststatusForm = $('#teamRuststatusForm');
-  const teamCommandToken = $('#teamCommandToken');
-  const teamRuststatusStatus = $('#teamRuststatusStatus');
-  const teamRuststatusFieldInputs = Array.from(document.querySelectorAll('[data-ruststatus-field]'));
   const teamAuthSection = $('#teamAuthSection');
   const teamAuthForm = $('#teamAuthForm');
   const teamAuthEnabledInput = $('#teamAuthEnabled');
@@ -194,6 +188,27 @@
   const workspaceChatEmpty = $('#workspaceChatEmpty');
   const workspaceChatLoading = $('#workspaceChatLoading');
   const workspaceChatNotice = $('#workspaceChatNotice');
+  const discordBotStatusPill = $('#discord-bot-status');
+  const discordSettingsGrid = $('#discord-settings');
+  const discordCurrentPlayers = $('#discord-current-players');
+  const discordMaxPlayers = $('#discord-max-players');
+  const discordJoiningPlayers = $('#discord-joining');
+  const discordLastCheck = $('#discord-last-check');
+  const discordPresenceTemplateSummary = $('#discord-presence-template');
+  const discordPresenceStatusOnline = $('#discord-presence-status-online');
+  const discordPresenceStatusOffline = $('#discord-presence-status-offline');
+  const discordPresenceStatusStale = $('#discord-presence-status-stale');
+  const discordPresenceStatusWaiting = $('#discord-presence-status-waiting');
+  const discordEnabledFieldsList = $('#discord-enabled-fields');
+  const discordEnabledFieldsEmpty = $('#discord-enabled-fields-empty');
+  const discordStatusForm = $('#discord-status-form');
+  const discordStatusNotice = $('#discord-status-notice');
+  const discordPresenceTemplateInput = $('#discord-presence-template-input');
+  const discordPresenceOnlineSelect = $('#discord-presence-online');
+  const discordPresenceOfflineSelect = $('#discord-presence-offline');
+  const discordPresenceStaleSelect = $('#discord-presence-stale');
+  const discordPresenceWaitingSelect = $('#discord-presence-waiting');
+  const discordStatusFieldInputs = Array.from(document.querySelectorAll('[data-status-field]'));
   const aqTicketsList = $('#aqTicketsList');
   const aqTicketsLoading = $('#aqTicketsLoading');
   const aqTicketsError = $('#aqTicketsError');
@@ -3645,6 +3660,8 @@
     renderAqTicketReply(getActiveAqTicketDetail());
   });
 
+  discordStatusForm?.addEventListener('submit', handleDiscordStatusSubmit);
+
   if (typeof window !== 'undefined') {
     window.addEventListener('workspace:server-selected', (event) => {
       const id = Number(event?.detail?.serverId);
@@ -3660,9 +3677,26 @@
     window.addEventListener('workspace:server-cleared', () => {
       resetAqTickets();
     });
+    window.addEventListener('workspace:server-selected', (event) => {
+      const id = Number(event?.detail?.serverId);
+      if (!Number.isFinite(id)) return;
+      const force = Boolean(event?.detail?.repeat);
+      loadWorkspaceDiscord(id, { force }).catch(() => {});
+    });
+    window.addEventListener('workspace:server-cleared', () => {
+      resetWorkspaceDiscord();
+    });
+    window.addEventListener('workspace:server-status', (event) => {
+      const id = Number(event?.detail?.serverId);
+      if (!Number.isFinite(id)) return;
+      if (Number(state.workspaceDiscord.serverId) !== id) return;
+      setWorkspaceDiscordStatus(event?.detail?.status || null);
+      updateWorkspaceDiscordUi();
+    });
   }
 
   resetAqTickets();
+  resetWorkspaceDiscord();
 
   function handleIncomingF7Report(payload) {
     if (!payload) return;
@@ -4689,16 +4723,6 @@
         updateTeamDiscordUi();
       }
       loadTeamAuthSettings({ force: true }).catch(() => {});
-      const selectedServer = state.teamDiscordServer.selectedServerId
-        || teamDiscordServerSelect?.value
-        || null;
-      if (selectedServer) {
-        state.teamDiscordServer.selectedServerId = selectedServer;
-        loadTeamDiscordServerIntegration(selectedServer).catch(() => {});
-      } else {
-        populateTeamDiscordServerOptions();
-        updateTeamDiscordServerUi();
-      }
     }
   }
 
@@ -4788,6 +4812,7 @@
     playerlist_failed: 'The server did not return a live player list.',
     missing_command: 'Provide a command before sending.',
     missing_token: 'Add the team Discord token before saving.',
+    missing_bot_token: 'Add the server Discord bot token before saving.',
     missing_guild_id: 'Add the Discord guild ID before saving.',
     no_server_selected: 'Select a server before sending commands.',
     forbidden: 'You do not have permission to perform this action.',
@@ -5301,6 +5326,388 @@
         lastCheck: status?.lastCheck || null
       }
     });
+  }
+
+  function defaultWorkspaceDiscordConfig() {
+    return {
+      presenceTemplate: DEFAULT_DISCORD_PRESENCE_TEMPLATE,
+      presenceStatuses: { ...DEFAULT_DISCORD_PRESENCE_STATUSES },
+      fields: { ...DEFAULT_DISCORD_STATUS_FIELDS }
+    };
+  }
+
+  function sanitizePresenceValue(value, key) {
+    const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (DISCORD_ALLOWED_PRESENCES.has(raw)) return raw;
+    return DEFAULT_DISCORD_PRESENCE_STATUSES[key] || DEFAULT_DISCORD_PRESENCE_STATUSES.online;
+  }
+
+  function normalizeWorkspacePresenceTemplate(value) {
+    if (typeof value !== 'string') return DEFAULT_DISCORD_PRESENCE_TEMPLATE;
+    const trimmed = value.trim();
+    if (!trimmed) return DEFAULT_DISCORD_PRESENCE_TEMPLATE;
+    return trimmed.slice(0, 190);
+  }
+
+  function normalizeWorkspacePresenceStatuses(statuses = {}) {
+    const base = DEFAULT_DISCORD_PRESENCE_STATUSES;
+    return {
+      online: sanitizePresenceValue(statuses.online, 'online'),
+      offline: sanitizePresenceValue(statuses.offline, 'offline'),
+      stale: sanitizePresenceValue(statuses.stale, 'stale'),
+      waiting: sanitizePresenceValue(statuses.waiting, 'waiting')
+    };
+  }
+
+  function normalizeWorkspaceStatusFields(fields = {}) {
+    const base = DEFAULT_DISCORD_STATUS_FIELDS;
+    return {
+      joining: typeof fields.joining === 'boolean' ? fields.joining : base.joining,
+      queued: typeof fields.queued === 'boolean' ? fields.queued : base.queued,
+      sleepers: typeof fields.sleepers === 'boolean' ? fields.sleepers : base.sleepers,
+      fps: typeof fields.fps === 'boolean' ? fields.fps : base.fps,
+      lastUpdate: typeof fields.lastUpdate === 'boolean' ? fields.lastUpdate : base.lastUpdate
+    };
+  }
+
+  function normalizeWorkspaceDiscordConfig(config = {}) {
+    const source = config && typeof config === 'object' ? config : {};
+    return {
+      presenceTemplate: normalizeWorkspacePresenceTemplate(source.presenceTemplate),
+      presenceStatuses: normalizeWorkspacePresenceStatuses(source.presenceStatuses || {}),
+      fields: normalizeWorkspaceStatusFields(source.fields || {})
+    };
+  }
+
+  function presenceLabelFor(value) {
+    const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return DISCORD_PRESENCE_LABELS[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : 'Offline');
+  }
+
+  function presenceClassFor(value) {
+    const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return DISCORD_PRESENCE_CLASS[key] || DISCORD_PRESENCE_CLASS.dnd;
+  }
+
+  function normalizeWorkspaceDiscordStatus(status) {
+    if (!status || typeof status !== 'object') return null;
+    const playersCurrent = Number(status.players?.current);
+    const playersMax = Number(status.players?.max);
+    const joiningRaw = Number(status.joining);
+    const presenceRaw = pickString(status.presence)?.toLowerCase();
+    const presence = DISCORD_ALLOWED_PRESENCES.has(presenceRaw)
+      ? presenceRaw
+      : (status.serverOnline ? 'online' : 'dnd');
+    const presenceLabel = pickString(status.presenceLabel) || presenceLabelFor(presence);
+    const lastCheck = pickString(status.lastCheck) || null;
+    return {
+      serverOnline: Boolean(status.serverOnline ?? presence === 'online'),
+      players: {
+        current: Number.isFinite(playersCurrent) && playersCurrent >= 0 ? playersCurrent : 0,
+        max: Number.isFinite(playersMax) && playersMax >= 0 ? playersMax : null
+      },
+      joining: Number.isFinite(joiningRaw) && joiningRaw >= 0 ? joiningRaw : null,
+      presence,
+      presenceLabel,
+      lastCheck
+    };
+  }
+
+  function setWorkspaceDiscordConfig(config) {
+    const normalized = normalizeWorkspaceDiscordConfig(config);
+    state.workspaceDiscord.config = normalized;
+    updateWorkspaceDiscordConfigUi(normalized);
+  }
+
+  function updateWorkspaceDiscordConfigUi(config = state.workspaceDiscord.config) {
+    const details = config || defaultWorkspaceDiscordConfig();
+    if (discordPresenceTemplateInput) discordPresenceTemplateInput.value = details.presenceTemplate || '';
+    if (discordPresenceTemplateSummary) {
+      const template = details.presenceTemplate || DEFAULT_DISCORD_PRESENCE_TEMPLATE;
+      discordPresenceTemplateSummary.textContent = template;
+      discordPresenceTemplateSummary.title = template;
+    }
+    if (discordPresenceOnlineSelect) discordPresenceOnlineSelect.value = details.presenceStatuses.online;
+    if (discordPresenceOfflineSelect) discordPresenceOfflineSelect.value = details.presenceStatuses.offline;
+    if (discordPresenceStaleSelect) discordPresenceStaleSelect.value = details.presenceStatuses.stale;
+    if (discordPresenceWaitingSelect) discordPresenceWaitingSelect.value = details.presenceStatuses.waiting;
+    if (discordPresenceStatusOnline) discordPresenceStatusOnline.textContent = presenceLabelFor(details.presenceStatuses.online);
+    if (discordPresenceStatusOffline) {
+      discordPresenceStatusOffline.textContent = presenceLabelFor(details.presenceStatuses.offline);
+    }
+    if (discordPresenceStatusStale) discordPresenceStatusStale.textContent = presenceLabelFor(details.presenceStatuses.stale);
+    if (discordPresenceStatusWaiting) {
+      discordPresenceStatusWaiting.textContent = presenceLabelFor(details.presenceStatuses.waiting);
+    }
+    discordStatusFieldInputs.forEach((input) => {
+      if (!input) return;
+      const key = input.dataset?.statusField;
+      if (!key) return;
+      input.checked = Boolean(details.fields[key]);
+    });
+    updateWorkspaceDiscordEnabledFields(details.fields);
+  }
+
+  function updateWorkspaceDiscordEnabledFields(fields = {}) {
+    if (!discordEnabledFieldsList) return;
+    discordEnabledFieldsList.innerHTML = '';
+    const active = Object.entries(fields)
+      .filter(([, value]) => Boolean(value))
+      .map(([key]) => key);
+    if (!active.length) {
+      if (discordEnabledFieldsEmpty) discordEnabledFieldsEmpty.classList.remove('hidden');
+      return;
+    }
+    active.forEach((key) => {
+      const label = DISCORD_STATUS_FIELD_LABELS[key] || key;
+      const item = document.createElement('li');
+      item.textContent = label;
+      discordEnabledFieldsList.appendChild(item);
+    });
+    if (discordEnabledFieldsEmpty) discordEnabledFieldsEmpty.classList.add('hidden');
+  }
+
+  function setWorkspaceDiscordStatus(status) {
+    const normalized = normalizeWorkspaceDiscordStatus(status);
+    state.workspaceDiscord.status = normalized;
+    updateWorkspaceDiscordStatusUi(normalized);
+  }
+
+  function updateWorkspaceDiscordStatusUi(status = state.workspaceDiscord.status) {
+    const details = status && typeof status === 'object' ? status : null;
+    if (!details) {
+      if (discordBotStatusPill) {
+        discordBotStatusPill.className = 'status-pill bot-status-pill offline';
+        discordBotStatusPill.textContent = 'Not linked';
+        discordBotStatusPill.title = '';
+      }
+      if (discordCurrentPlayers) discordCurrentPlayers.textContent = '—';
+      if (discordMaxPlayers) discordMaxPlayers.textContent = '—';
+      if (discordJoiningPlayers) discordJoiningPlayers.textContent = '—';
+      if (discordLastCheck) {
+        discordLastCheck.textContent = 'Last check: —';
+        discordLastCheck.removeAttribute('title');
+      }
+      return;
+    }
+    const presenceClass = presenceClassFor(details.presence);
+    if (discordBotStatusPill) {
+      discordBotStatusPill.className = `status-pill bot-status-pill ${presenceClass}`;
+      discordBotStatusPill.textContent = details.presenceLabel || presenceLabelFor(details.presence);
+      discordBotStatusPill.title = details.presenceLabel || '';
+    }
+    if (discordCurrentPlayers) {
+      const value = Number.isFinite(details.players?.current) ? details.players.current : 0;
+      discordCurrentPlayers.textContent = value.toLocaleString();
+    }
+    if (discordMaxPlayers) {
+      const max = Number.isFinite(details.players?.max) ? details.players.max : null;
+      discordMaxPlayers.textContent = max != null ? max.toLocaleString() : '—';
+    }
+    if (discordJoiningPlayers) {
+      const joining = Number.isFinite(details.joining) ? details.joining : null;
+      discordJoiningPlayers.textContent = joining != null ? joining.toLocaleString() : '—';
+    }
+    if (discordLastCheck) {
+      if (details.lastCheck) {
+        const relative = formatRelativeTime(details.lastCheck);
+        const absolute = formatDateTime(details.lastCheck);
+        discordLastCheck.textContent = `Last check: ${relative || absolute || details.lastCheck}`;
+        discordLastCheck.title = absolute || details.lastCheck;
+      } else {
+        discordLastCheck.textContent = 'Last check: —';
+        discordLastCheck.removeAttribute('title');
+      }
+    }
+  }
+
+  function setDiscordStatusFormDisabled(disabled) {
+    if (!discordStatusForm) return;
+    discordStatusForm.querySelectorAll('input, textarea, select, button').forEach((el) => {
+      el.disabled = disabled;
+    });
+    const busy = disabled && (state.workspaceDiscord.loading || state.workspaceDiscord.saving);
+    discordStatusForm.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+
+  function updateWorkspaceDiscordUi() {
+    updateWorkspaceDiscordConfigUi();
+    updateWorkspaceDiscordStatusUi();
+    if (discordSettingsGrid) {
+      discordSettingsGrid.setAttribute('aria-busy', state.workspaceDiscord.loading ? 'true' : 'false');
+    }
+    if (!discordStatusForm || !discordStatusNotice) return;
+
+    const serverId = state.workspaceDiscord.serverId;
+    if (!Number.isFinite(serverId)) {
+      setDiscordStatusFormDisabled(true);
+      showNotice(discordStatusNotice, 'Select a server to manage the Discord status embed.', 'info');
+      return;
+    }
+
+    if (!hasServerCapability('discord')) {
+      setDiscordStatusFormDisabled(true);
+      showNotice(discordStatusNotice, 'You do not have permission to manage the Discord bot for this server.', 'error');
+      return;
+    }
+
+    if (state.workspaceDiscord.loading) {
+      setDiscordStatusFormDisabled(true);
+      showNotice(discordStatusNotice, 'Loading Discord settings…', 'info');
+      return;
+    }
+
+    if (state.workspaceDiscord.error) {
+      setDiscordStatusFormDisabled(true);
+      showNotice(discordStatusNotice, state.workspaceDiscord.error, 'error');
+      return;
+    }
+
+    if (!state.workspaceDiscord.integration) {
+      setDiscordStatusFormDisabled(true);
+      showNotice(
+        discordStatusNotice,
+        'Link the server Discord bot in the Team → Discord tab to enable status embeds.',
+        'warning'
+      );
+      return;
+    }
+
+    setDiscordStatusFormDisabled(state.workspaceDiscord.saving);
+    if (state.workspaceDiscord.saving) {
+      showNotice(discordStatusNotice, 'Saving status settings…', 'info');
+    } else if (!discordStatusNotice.classList.contains('success')) {
+      hideNotice(discordStatusNotice);
+    }
+  }
+
+  async function loadWorkspaceDiscord(serverId, { force = false } = {}) {
+    const numericId = Number(serverId);
+    if (!Number.isFinite(numericId)) {
+      state.workspaceDiscord.serverId = null;
+      state.workspaceDiscord.integration = null;
+      state.workspaceDiscord.error = null;
+      setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
+      setWorkspaceDiscordStatus(null);
+      updateWorkspaceDiscordUi();
+      return;
+    }
+
+    state.workspaceDiscord.serverId = numericId;
+
+    if (!hasServerCapability('discord')) {
+      state.workspaceDiscord.integration = null;
+      state.workspaceDiscord.error = null;
+      setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
+      setWorkspaceDiscordStatus(null);
+      updateWorkspaceDiscordUi();
+      return;
+    }
+
+    if (!force && state.workspaceDiscord.integration && Number(state.workspaceDiscord.integration.serverId) === numericId) {
+      state.workspaceDiscord.error = null;
+      updateWorkspaceDiscordUi();
+      return;
+    }
+
+    state.workspaceDiscord.loading = true;
+    state.workspaceDiscord.error = null;
+    updateWorkspaceDiscordUi();
+    try {
+      const data = await api(`/servers/${encodeURIComponent(numericId)}/discord`);
+      const integration = data?.integration || null;
+      const status = data?.status || null;
+      state.workspaceDiscord.integration = integration;
+      setWorkspaceDiscordConfig(integration?.config || null);
+      setWorkspaceDiscordStatus(status);
+      state.workspaceDiscord.error = null;
+      hideNotice(discordStatusNotice);
+    } catch (err) {
+      const code = errorCode(err);
+      if (code === 'not_supported') {
+        state.workspaceDiscord.error = 'This server does not support Discord integrations.';
+      } else {
+        state.workspaceDiscord.error = 'Failed to load Discord settings: ' + describeError(err);
+      }
+      state.workspaceDiscord.integration = null;
+      setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
+      setWorkspaceDiscordStatus(null);
+    } finally {
+      state.workspaceDiscord.loading = false;
+      updateWorkspaceDiscordUi();
+    }
+  }
+
+  function resetWorkspaceDiscord() {
+    state.workspaceDiscord.serverId = null;
+    state.workspaceDiscord.loading = false;
+    state.workspaceDiscord.saving = false;
+    state.workspaceDiscord.error = null;
+    state.workspaceDiscord.integration = null;
+    setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
+    setWorkspaceDiscordStatus(null);
+    updateWorkspaceDiscordUi();
+  }
+
+  function gatherWorkspaceDiscordPayload() {
+    const template = normalizeWorkspacePresenceTemplate(discordPresenceTemplateInput?.value);
+    const statuses = {
+      online: sanitizePresenceValue(discordPresenceOnlineSelect?.value, 'online'),
+      offline: sanitizePresenceValue(discordPresenceOfflineSelect?.value, 'offline'),
+      stale: sanitizePresenceValue(discordPresenceStaleSelect?.value, 'stale'),
+      waiting: sanitizePresenceValue(discordPresenceWaitingSelect?.value, 'waiting')
+    };
+    const fields = { ...DEFAULT_DISCORD_STATUS_FIELDS };
+    discordStatusFieldInputs.forEach((input) => {
+      if (!input) return;
+      const key = input.dataset?.statusField;
+      if (!key) return;
+      fields[key] = Boolean(input.checked);
+    });
+    return {
+      presenceTemplate: template,
+      presenceStatuses: statuses,
+      fields
+    };
+  }
+
+  async function handleDiscordStatusSubmit(ev) {
+    ev?.preventDefault();
+    if (!hasServerCapability('discord')) {
+      showNotice(discordStatusNotice, 'You do not have permission to manage the Discord bot for this server.', 'error');
+      return;
+    }
+    const serverId = state.workspaceDiscord.serverId;
+    if (!Number.isFinite(serverId)) {
+      showNotice(discordStatusNotice, 'Select a server to manage the Discord status embed.', 'error');
+      return;
+    }
+    if (!state.workspaceDiscord.integration) {
+      showNotice(
+        discordStatusNotice,
+        'Link the server Discord bot in the Team → Discord tab before updating the status embed.',
+        'warning'
+      );
+      return;
+    }
+    const payload = gatherWorkspaceDiscordPayload();
+    state.workspaceDiscord.saving = true;
+    updateWorkspaceDiscordUi();
+    try {
+      const body = { config: payload };
+      const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, body, 'POST');
+      const integration = data?.integration || null;
+      state.workspaceDiscord.integration = integration;
+      setWorkspaceDiscordConfig(integration?.config || payload);
+      setWorkspaceDiscordStatus(data?.status || state.workspaceDiscord.status);
+      state.workspaceDiscord.error = null;
+      showNotice(discordStatusNotice, 'Discord status settings saved.', 'success');
+    } catch (err) {
+      showNotice(discordStatusNotice, describeError(err), 'error');
+    } finally {
+      state.workspaceDiscord.saving = false;
+      updateWorkspaceDiscordUi();
+    }
   }
 
   function showWorkspaceForServer(id) {
@@ -6460,21 +6867,6 @@
 
   moduleBus.on('servers:updated', () => {
     renderRoleServersOptions();
-    populateTeamDiscordServerOptions();
-    const selected = state.teamDiscordServer.selectedServerId;
-    if (selected && !state.serverItems.has(String(selected))) {
-      state.teamDiscordServer.selectedServerId = null;
-    }
-    if (!state.teamDiscordServer.selectedServerId && state.serverItems.size > 0) {
-      const firstKey = state.serverItems.keys().next().value;
-      state.teamDiscordServer.selectedServerId = firstKey || null;
-      if (teamDiscordServerSelect) teamDiscordServerSelect.value = firstKey || '';
-    }
-    if (state.teamDiscordServer.selectedServerId) {
-      loadTeamDiscordServerIntegration(state.teamDiscordServer.selectedServerId).catch(() => {});
-    } else {
-      updateTeamDiscordServerUi();
-    }
   });
 
   function renderRoleEditorFields() {
@@ -7034,374 +7426,6 @@
     return hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
   }
 
-  function normalizeRuststatusFields(fields = {}) {
-    const source = fields && typeof fields === 'object' ? fields : {};
-    return {
-      joining: typeof source.joining === 'boolean' ? source.joining : DEFAULT_RUSTSTATUS_FIELDS.joining,
-      queued: typeof source.queued === 'boolean' ? source.queued : DEFAULT_RUSTSTATUS_FIELDS.queued,
-      sleepers: typeof source.sleepers === 'boolean' ? source.sleepers : DEFAULT_RUSTSTATUS_FIELDS.sleepers,
-      fps: typeof source.fps === 'boolean' ? source.fps : DEFAULT_RUSTSTATUS_FIELDS.fps,
-      lastUpdate: typeof source.lastUpdate === 'boolean' ? source.lastUpdate : DEFAULT_RUSTSTATUS_FIELDS.lastUpdate
-    };
-  }
-
-  function normalizeTicketingConfig(config = {}) {
-    const source = config && typeof config === 'object' ? config : {};
-    return {
-      enabled: typeof source.enabled === 'boolean' ? source.enabled : DEFAULT_TICKETING_CONFIG.enabled,
-      categoryId: source.categoryId ? String(source.categoryId) : DEFAULT_TICKETING_CONFIG.categoryId,
-      logChannelId: source.logChannelId ? String(source.logChannelId) : DEFAULT_TICKETING_CONFIG.logChannelId,
-      staffRoleId: source.staffRoleId ? String(source.staffRoleId) : DEFAULT_TICKETING_CONFIG.staffRoleId,
-      welcomeMessage:
-        typeof source.welcomeMessage === 'string' && source.welcomeMessage.trim().length
-          ? source.welcomeMessage.trim()
-          : DEFAULT_TICKETING_CONFIG.welcomeMessage,
-      questionPrompt:
-        typeof source.questionPrompt === 'string' && source.questionPrompt.trim().length
-          ? source.questionPrompt.trim()
-          : DEFAULT_TICKETING_CONFIG.questionPrompt,
-      pingStaffOnOpen:
-        typeof source.pingStaffOnOpen === 'boolean'
-          ? source.pingStaffOnOpen
-          : DEFAULT_TICKETING_CONFIG.pingStaffOnOpen,
-      panelChannelId: source.panelChannelId ? String(source.panelChannelId) : DEFAULT_TICKETING_CONFIG.panelChannelId,
-      panelMessageId: source.panelMessageId ? String(source.panelMessageId) : DEFAULT_TICKETING_CONFIG.panelMessageId,
-      panelTitle:
-        typeof source.panelTitle === 'string' && source.panelTitle.trim().length
-          ? source.panelTitle.trim()
-          : DEFAULT_TICKETING_CONFIG.panelTitle,
-      panelDescription:
-        typeof source.panelDescription === 'string' && source.panelDescription.trim().length
-          ? source.panelDescription.trim()
-          : DEFAULT_TICKETING_CONFIG.panelDescription,
-      panelButtonLabel:
-        typeof source.panelButtonLabel === 'string' && source.panelButtonLabel.trim().length
-          ? source.panelButtonLabel.trim()
-          : DEFAULT_TICKETING_CONFIG.panelButtonLabel
-    };
-  }
-
-  function setTeamServerNotice(message, variant = 'info') {
-    if (!teamDiscordServerNotice) return;
-    if (!message) {
-      teamDiscordServerNotice.textContent = '';
-      teamDiscordServerNotice.classList.add('hidden');
-      teamDiscordServerNotice.classList.remove('error', 'success');
-      return;
-    }
-    teamDiscordServerNotice.textContent = message;
-    teamDiscordServerNotice.classList.remove('hidden', 'error', 'success');
-    if (variant === 'error') teamDiscordServerNotice.classList.add('error');
-    else if (variant === 'success') teamDiscordServerNotice.classList.add('success');
-  }
-
-  function applyTeamTicketingConfig(config) {
-    const normalized = normalizeTicketingConfig(config);
-    if (teamTicketingEnabled) teamTicketingEnabled.checked = normalized.enabled;
-    if (teamTicketingCategory) teamTicketingCategory.value = normalized.categoryId || '';
-    if (teamTicketingLog) teamTicketingLog.value = normalized.logChannelId || '';
-    if (teamTicketingStaffRole) teamTicketingStaffRole.value = normalized.staffRoleId || '';
-    if (teamTicketingPingStaff) teamTicketingPingStaff.checked = !!normalized.pingStaffOnOpen;
-    if (teamTicketingPanelChannel) teamTicketingPanelChannel.value = normalized.panelChannelId || '';
-    if (teamTicketingPanelMessage) teamTicketingPanelMessage.value = normalized.panelMessageId || '';
-    if (teamTicketingWelcome) teamTicketingWelcome.value = normalized.welcomeMessage || '';
-    if (teamTicketingPrompt) teamTicketingPrompt.value = normalized.questionPrompt || '';
-    if (teamTicketingPanelTitle) teamTicketingPanelTitle.value = normalized.panelTitle || '';
-    if (teamTicketingPanelDescription) teamTicketingPanelDescription.value = normalized.panelDescription || '';
-    if (teamTicketingPanelButton) teamTicketingPanelButton.value = normalized.panelButtonLabel || '';
-  }
-
-  function applyTeamRuststatusConfig(fields) {
-    const normalized = normalizeRuststatusFields(fields);
-    teamRuststatusFieldInputs.forEach((input) => {
-      if (!input) return;
-      const key = input.dataset?.ruststatusField;
-      if (!key) return;
-      input.checked = Boolean(normalized[key]);
-    });
-  }
-
-  function gatherTeamTicketingPayload() {
-    return {
-      enabled: !!teamTicketingEnabled?.checked,
-      categoryId: teamTicketingCategory?.value?.trim() || '',
-      logChannelId: teamTicketingLog?.value?.trim() || '',
-      staffRoleId: teamTicketingStaffRole?.value?.trim() || '',
-      pingStaffOnOpen: !!teamTicketingPingStaff?.checked,
-      panelChannelId: teamTicketingPanelChannel?.value?.trim() || '',
-      panelMessageId: teamTicketingPanelMessage?.value?.trim() || '',
-      welcomeMessage: teamTicketingWelcome?.value?.trim() || '',
-      questionPrompt: teamTicketingPrompt?.value?.trim() || '',
-      panelTitle: teamTicketingPanelTitle?.value?.trim() || '',
-      panelDescription: teamTicketingPanelDescription?.value?.trim() || '',
-      panelButtonLabel: teamTicketingPanelButton?.value?.trim() || ''
-    };
-  }
-
-  function gatherTeamRuststatusPayload() {
-    const fields = {};
-    teamRuststatusFieldInputs.forEach((input) => {
-      if (!input) return;
-      const key = input.dataset?.ruststatusField;
-      if (!key) return;
-      fields[key] = !!input.checked;
-    });
-    return normalizeRuststatusFields(fields);
-  }
-
-  function disableTeamTicketingForm(disabled) {
-    if (!teamTicketingForm) return;
-    const shouldDisable = !!disabled;
-    teamTicketingForm.querySelectorAll('input, textarea, button').forEach((el) => {
-      el.disabled = shouldDisable;
-    });
-  }
-
-  function disableTeamRuststatusForm(disabled) {
-    if (!teamRuststatusForm) return;
-    const shouldDisable = !!disabled;
-    teamRuststatusForm.querySelectorAll('input, textarea, button, select').forEach((el) => {
-      el.disabled = shouldDisable;
-    });
-  }
-
-  function disableTeamAuthForm(disabled) {
-    if (!teamAuthForm) return;
-    const shouldDisable = !!disabled;
-    teamAuthForm.querySelectorAll('input, button').forEach((el) => {
-      el.disabled = shouldDisable;
-    });
-  }
-
-  function populateTeamDiscordServerOptions() {
-    if (!teamDiscordServerSelect) return;
-    const servers = getServerList();
-    const previous = teamDiscordServerSelect.value;
-    teamDiscordServerSelect.innerHTML = '';
-    servers.forEach((server) => {
-      if (!server) return;
-      const option = document.createElement('option');
-      option.value = String(server.id);
-      option.textContent = server.name || `Server #${server.id}`;
-      teamDiscordServerSelect.appendChild(option);
-    });
-    if (servers.length === 0) {
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = 'No servers available';
-      placeholder.disabled = true;
-      placeholder.selected = true;
-      teamDiscordServerSelect.appendChild(placeholder);
-    } else if (previous && servers.some((server) => String(server.id) === previous)) {
-      teamDiscordServerSelect.value = previous;
-    } else {
-      teamDiscordServerSelect.value = String(servers[0].id);
-    }
-    state.teamDiscordServer.selectedServerId = teamDiscordServerSelect.value || null;
-  }
-
-  function updateTeamDiscordServerUi() {
-    if (!teamDiscordServerSection) return;
-    const canManage = canManageTeamDiscord();
-    const hasServers = state.serverItems.size > 0;
-    const loading = state.teamDiscordServer.loading;
-    teamDiscordServerSection.classList.toggle('hidden', !canManage || !hasServers);
-    teamDiscordServerSection.setAttribute('aria-hidden', canManage && hasServers ? 'false' : 'true');
-    if (!canManage || !hasServers) {
-      disableTeamTicketingForm(true);
-      disableTeamRuststatusForm(true);
-      setTeamServerNotice(hasServers ? 'You do not have permission to manage Discord features.' : 'Add a server to configure Discord features.');
-      return;
-    }
-    disableTeamTicketingForm(loading);
-    disableTeamRuststatusForm(loading);
-    if (!loading && teamDiscordServerNotice) {
-      setTeamServerNotice('');
-    }
-  }
-
-  function updateTeamAuthUi() {
-    if (!teamAuthSection) return;
-    const canManage = canManageTeamDiscord();
-    const loading = state.teamAuth.loading;
-    const loaded = state.teamAuth.loaded;
-    teamAuthSection.classList.toggle('hidden', !canManage);
-    teamAuthSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
-    if (!canManage) {
-      disableTeamAuthForm(true);
-      return;
-    }
-    disableTeamAuthForm(loading);
-    if (teamAuthEnabledInput && loaded && !loading) {
-      teamAuthEnabledInput.checked = !!state.teamAuth.enabled;
-    }
-    if (teamAuthRoleInput && loaded && !loading) {
-      teamAuthRoleInput.value = state.teamAuth.roleId ? String(state.teamAuth.roleId) : '';
-    }
-  }
-
-  async function loadTeamDiscordServerIntegration(serverId, { force = false } = {}) {
-    if (!teamDiscordServerSection || !serverId) {
-      state.teamDiscordServer.integration = null;
-      state.teamDiscordServer.config = { fields: { ...DEFAULT_RUSTSTATUS_FIELDS }, ticketing: { ...DEFAULT_TICKETING_CONFIG } };
-      applyTeamTicketingConfig(state.teamDiscordServer.config.ticketing);
-      applyTeamRuststatusConfig(state.teamDiscordServer.config.fields);
-      return;
-    }
-    if (!canManageTeamDiscord()) {
-      updateTeamDiscordServerUi();
-      return;
-    }
-    const selected = String(serverId);
-    if (!force && state.teamDiscordServer.integration && String(state.teamDiscordServer.integration.serverId) === selected) {
-      applyTeamTicketingConfig(state.teamDiscordServer.config.ticketing);
-      applyTeamRuststatusConfig(state.teamDiscordServer.config.fields);
-      return;
-    }
-    state.teamDiscordServer.loading = true;
-    updateTeamDiscordServerUi();
-    setTeamServerNotice('Loading server Discord settings…');
-    try {
-      const data = await api(`/servers/${encodeURIComponent(selected)}/discord`);
-      const integration = data?.integration || null;
-      state.teamDiscordServer.integration = integration;
-      if (!integration) {
-        state.teamDiscordServer.config = {
-          ticketing: { ...DEFAULT_TICKETING_CONFIG },
-          fields: { ...DEFAULT_RUSTSTATUS_FIELDS }
-        };
-        applyTeamTicketingConfig(state.teamDiscordServer.config.ticketing);
-        applyTeamRuststatusConfig(state.teamDiscordServer.config.fields);
-        setTeamServerNotice('This server has no Discord integration configured yet.', 'error');
-        return;
-      }
-      const ticketing = normalizeTicketingConfig(integration?.config?.ticketing || {});
-      const fields = normalizeRuststatusFields(integration?.config?.fields || {});
-      state.teamDiscordServer.config = { ticketing, fields };
-      applyTeamTicketingConfig(ticketing);
-      applyTeamRuststatusConfig(fields);
-      if (teamTicketingStatus) hideNotice(teamTicketingStatus);
-      if (teamRuststatusStatus) hideNotice(teamRuststatusStatus);
-      setTeamServerNotice('');
-    } catch (err) {
-      const code = errorCode(err);
-      setTeamServerNotice(describeError(code || err), 'error');
-    } finally {
-      state.teamDiscordServer.loading = false;
-      updateTeamDiscordServerUi();
-    }
-  }
-
-  async function loadTeamAuthSettings({ force = false } = {}) {
-    if (!teamAuthSection || !canManageTeamDiscord()) {
-      state.teamAuth.loaded = false;
-      updateTeamAuthUi();
-      return;
-    }
-    if (!force && state.teamAuth.loaded) {
-      updateTeamAuthUi();
-      return;
-    }
-    state.teamAuth.loading = true;
-    updateTeamAuthUi();
-    hideNotice(teamAuthStatus);
-    try {
-      const data = await api('/team/auth/settings');
-      state.teamAuth.enabled = !!data?.enabled;
-      state.teamAuth.roleId = data?.roleId != null && data.roleId !== '' ? String(data.roleId) : null;
-      state.teamAuth.loaded = true;
-    } catch (err) {
-      const code = errorCode(err);
-      showNotice(teamAuthStatus, describeError(code || err), 'error');
-    } finally {
-      state.teamAuth.loading = false;
-      updateTeamAuthUi();
-    }
-  }
-
-  async function handleTeamServerChange() {
-    if (!teamDiscordServerSelect) return;
-    const value = teamDiscordServerSelect.value;
-    state.teamDiscordServer.selectedServerId = value || null;
-    await loadTeamDiscordServerIntegration(value, { force: true });
-  }
-
-  async function handleTeamTicketingSubmit(ev) {
-    ev?.preventDefault();
-    if (!canManageTeamDiscord()) return;
-    const serverId = state.teamDiscordServer.selectedServerId;
-    if (!serverId) {
-      showNotice(teamTicketingStatus, 'Select a server to save ticketing settings.', 'error');
-      return;
-    }
-    state.teamDiscordServer.loading = true;
-    updateTeamDiscordServerUi();
-    disableTeamTicketingForm(true);
-    showNotice(teamTicketingStatus, 'Saving ticketing settings…', 'info');
-    try {
-      const payload = gatherTeamTicketingPayload();
-      const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, { config: { ticketing: payload } }, 'POST');
-      const integration = data?.integration || null;
-      if (integration) {
-        state.teamDiscordServer.integration = integration;
-        const ticketing = normalizeTicketingConfig(integration.config?.ticketing || payload);
-        state.teamDiscordServer.config.ticketing = ticketing;
-        applyTeamTicketingConfig(ticketing);
-      }
-      showNotice(teamTicketingStatus, 'Ticketing settings saved.', 'success');
-    } catch (err) {
-      const code = errorCode(err);
-      showNotice(teamTicketingStatus, describeError(code || err), 'error');
-    } finally {
-      disableTeamTicketingForm(false);
-      state.teamDiscordServer.loading = false;
-      updateTeamDiscordServerUi();
-    }
-  }
-
-  async function handleTeamRuststatusSubmit(ev) {
-    ev?.preventDefault();
-    if (!canManageTeamDiscord()) return;
-    const serverId = state.teamDiscordServer.selectedServerId;
-    if (!serverId) {
-      showNotice(teamRuststatusStatus, 'Select a server to update Ruststatus settings.', 'error');
-      return;
-    }
-    state.teamDiscordServer.loading = true;
-    updateTeamDiscordServerUi();
-    disableTeamRuststatusForm(true);
-    showNotice(teamRuststatusStatus, 'Saving Ruststatus settings…', 'info');
-    try {
-      const fields = gatherTeamRuststatusPayload();
-      const commandInput = teamCommandToken?.value?.trim();
-      const body = { config: { fields } };
-      if (commandInput) {
-        if (commandInput.toLowerCase() === 'reset') {
-          body.clearCommandBotToken = true;
-        } else {
-          body.commandBotToken = commandInput;
-        }
-      }
-      const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, body, 'POST');
-      const integration = data?.integration || null;
-      if (integration) {
-        state.teamDiscordServer.integration = integration;
-        const updatedFields = normalizeRuststatusFields(integration.config?.fields || fields);
-        state.teamDiscordServer.config.fields = updatedFields;
-        applyTeamRuststatusConfig(updatedFields);
-      }
-      if (teamCommandToken) teamCommandToken.value = '';
-      showNotice(teamRuststatusStatus, 'Ruststatus settings saved.', 'success');
-    } catch (err) {
-      const code = errorCode(err);
-      showNotice(teamRuststatusStatus, describeError(code || err), 'error');
-    } finally {
-      disableTeamRuststatusForm(false);
-      state.teamDiscordServer.loading = false;
-      updateTeamDiscordServerUi();
-    }
-  }
-
   async function handleTeamAuthSubmit(ev) {
     ev?.preventDefault();
     if (!canManageTeamDiscord()) return;
@@ -7470,10 +7494,6 @@
         teamDiscordSummaryToken.textContent = 'Not linked';
       }
     }
-    if (canManage) {
-      populateTeamDiscordServerOptions();
-    }
-    updateTeamDiscordServerUi();
     updateTeamAuthUi();
   }
 
@@ -7527,16 +7547,6 @@
       updateTeamDiscordUi();
       if (canManageTeamDiscord()) {
         loadTeamAuthSettings({ force: true }).catch(() => {});
-        const selectedServer = state.teamDiscordServer.selectedServerId
-          || teamDiscordServerSelect?.value
-          || null;
-        if (selectedServer) {
-          state.teamDiscordServer.selectedServerId = selectedServer;
-          loadTeamDiscordServerIntegration(selectedServer).catch(() => {});
-        } else {
-          populateTeamDiscordServerOptions();
-          updateTeamDiscordServerUi();
-        }
       }
     }
     if (unauthorized) return;
@@ -7980,9 +7990,6 @@
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
-    teamDiscordServerSelect?.addEventListener('change', handleTeamServerChange);
-    teamTicketingForm?.addEventListener('submit', handleTeamTicketingSubmit);
-    teamRuststatusForm?.addEventListener('submit', handleTeamRuststatusSubmit);
     teamAuthForm?.addEventListener('submit', handleTeamAuthSubmit);
     btnCreateUser?.addEventListener('click', async () => {
       if (!hasGlobalPermission('manageUsers')) return;
