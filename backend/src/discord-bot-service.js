@@ -62,11 +62,11 @@ const TEAM_AUTH_LINK_TTL_MS = (() => {
   if (Number.isFinite(value) && value >= 60 * 1000) return Math.floor(value);
   return 15 * 60 * 1000;
 })();
-const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL
-  ? process.env.PUBLIC_APP_URL.trim().replace(/\/+$/, '')
-  : null;
 const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
 const PANEL_PUBLIC_URL = normalizeBaseUrl(process.env.PANEL_PUBLIC_URL);
+const APP_URL_FROM_ENV = normalizeBaseUrl(process.env.APP_URL);
+const LEGACY_PUBLIC_APP_URL = normalizeBaseUrl(process.env.PUBLIC_APP_URL);
+const TEAM_AUTH_APP_URL = APP_URL_FROM_ENV || PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || '';
 
 // Server-specific Discord bots are limited to presence/status updates only. All
 // interactive slash commands are handled by the team-level bot instead.
@@ -235,7 +235,7 @@ const DEFAULT_TEAM_AUTH_SETTINGS = Object.freeze({
 function buildTeamAuthLink(token) {
   const safe = typeof token === 'string' ? token.trim() : '';
   if (!safe) return null;
-  if (PUBLIC_APP_URL) return `${PUBLIC_APP_URL}/auth/requests/${safe}`;
+  if (TEAM_AUTH_APP_URL) return `${TEAM_AUTH_APP_URL}/auth/requests/${safe}`;
   return `/auth/requests/${safe}`;
 }
 
@@ -789,7 +789,7 @@ function buildCommandDefinitions() {
     },
     {
       name: 'auth',
-      description: 'Link your Steam account with the Rust control panel',
+      description: 'Link your Discord and Steam accounts for the Rust control panel',
       dm_permission: false,
       options: [
         {
@@ -805,12 +805,12 @@ function buildCommandDefinitions() {
         {
           type: ApplicationCommandOptionType.Subcommand,
           name: 'enable',
-          description: 'Enable Discord account linking for this team'
+          description: 'Enable Discord/Steam account linking for this control panel'
         },
         {
           type: ApplicationCommandOptionType.Subcommand,
           name: 'disable',
-          description: 'Disable Discord account linking for this team'
+          description: 'Disable Discord/Steam account linking for this control panel'
         },
         {
           type: ApplicationCommandOptionType.Subcommand,
@@ -2247,7 +2247,7 @@ async function handleHelpCommand(interaction, { state = null, teamState = null }
     '• `/rustlookup player <query>` — Search for player records by name or SteamID.',
     '• `/rustlookup steamid <id>` — Retrieve the detailed record for a specific SteamID64.',
     '',
-    '• `/auth link` — Generate a private link to connect your Steam account.',
+    '• `/auth link` — Generate a private link to connect your Discord and Steam accounts.',
     '• `/auth status` — Show whether linking is enabled and which role is granted.',
     '• `/auth enable` or `/auth disable` — Toggle linking (Manage Server/Roles required).',
     '• `/auth setrole` — Choose the Discord role granted after successful linking.',
@@ -2499,7 +2499,7 @@ async function handleAuthCommand(state, interaction) {
         ? `Linked players will receive <@&${refreshed.roleId}> after completing the flow.`
         : 'No role is configured yet. Use `/auth setrole` if you want to grant one automatically.';
       await interaction.editReply(
-        `Discord account linking is now **enabled** for this team. ${roleNotice}`
+        `Discord/Steam account linking is now **enabled** for this control panel. ${roleNotice}`
       );
       return;
     }
@@ -2514,7 +2514,7 @@ async function handleAuthCommand(state, interaction) {
         return;
       }
       await saveTeamAuthSettings(teamId, { enabled: false });
-      await interaction.editReply('Discord account linking has been disabled. Existing links remain valid.');
+      await interaction.editReply('Discord/Steam account linking has been disabled. Existing links remain valid, but new profiles cannot be created until it is re-enabled.');
       return;
     }
 
@@ -2581,7 +2581,7 @@ async function handleAuthCommand(state, interaction) {
       }
       const expiresStamp = `<t:${Math.floor(expiresAt.getTime() / 1000)}:R>`;
       const response = [
-        'Use the link below to connect your Steam account to the control panel:',
+        'Use the link below to connect your Discord and Steam accounts so we can build your player profile:',
         link,
         `This link expires ${expiresStamp} (about ${ttlLabel}).`
       ];
