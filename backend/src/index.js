@@ -5250,7 +5250,7 @@ async function decoratePlayersWithTeamAuth(teamId, players, { includeAlts = fals
     return players;
   }
   const profileMap = new Map();
-  for (const raw of Array.isArray(rawProfiles) ? raw : []) {
+  for (const raw of Array.isArray(rawProfiles) ? rawProfiles : []) {
     const projected = projectTeamAuthProfile(raw, { includeAlts });
     if (projected?.steamId) {
       profileMap.set(String(raw.steamid || projected.steamId), projected);
