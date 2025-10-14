@@ -1003,7 +1003,9 @@ label.inline input[type="checkbox"]:focus-visible,
   gap: 6px;
 }
 
-.team-discord-form input {
+.team-discord-form input,
+.team-discord-form textarea,
+.team-discord-form select {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1012,9 +1014,48 @@ label.inline input[type="checkbox"]:focus-visible,
   font-size: 0.95rem;
 }
 
-.team-discord-form input:focus {
+.team-discord-form small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.team-discord-form input:focus,
+.team-discord-form textarea:focus,
+.team-discord-form select:focus {
   outline: 2px solid rgba(59, 130, 246, 0.35);
   outline-offset: 2px;
+}
+
+.team-discord-form textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.team-discord-form h5 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.team-discord-server-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.team-discord-panels {
+  display: grid;
+  gap: 24px;
+}
+
+.team-discord-panels .team-discord-form {
+  max-width: none;
+}
+
+@media (min-width: 960px) {
+  .team-discord-panels {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    align-items: start;
+  }
 }
 
 .team-discord-form .row {
@@ -4062,7 +4103,7 @@ button.chat-filter-btn:focus-visible {
 }
 
 .discord-status,
-.discord-form-wrap {
+.discord-status-editor {
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -4116,28 +4157,83 @@ button.chat-filter-btn:focus-visible {
   color: var(--muted);
 }
 
-.discord-form {
+.discord-status-form {
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
-.discord-form .field {
+.discord-status-form .field {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.discord-form .field-label {
+.discord-status-form .field-label {
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
 }
 
-.discord-form .field small {
+.discord-status-form .field small {
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+.discord-status-form textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.field-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.field-grid legend.field-label {
+  margin: 0;
+}
+
+.field-grid-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.field-grid-row label.inline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 200px;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.checkbox input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
 }
 
 .discord-config-summary {
@@ -4220,13 +4316,13 @@ button.chat-filter-btn:focus-visible {
   margin: 0;
 }
 
-.discord-form .form-actions {
+.discord-status-form .form-actions {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
 }
 
-.discord-form .form-actions button {
+.discord-status-form .form-actions button {
   min-width: 150px;
 }
 

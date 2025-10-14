@@ -41,6 +41,29 @@
   const cmdInput = $('#cmd');
   const cmdInputDefaultPlaceholder = cmdInput?.getAttribute('placeholder') || '';
 
+  const DEFAULT_RUSTSTATUS_FIELDS = {
+    joining: true,
+    queued: true,
+    sleepers: true,
+    fps: true,
+    lastUpdate: true
+  };
+
+  const DEFAULT_TICKETING_CONFIG = {
+    enabled: false,
+    categoryId: '',
+    logChannelId: '',
+    staffRoleId: '',
+    welcomeMessage: 'Thanks for contacting the Rust server team! A staff member will be with you shortly.',
+    questionPrompt: 'Please describe your issue so the team can help.',
+    pingStaffOnOpen: true,
+    panelChannelId: '',
+    panelMessageId: '',
+    panelTitle: 'Need assistance from the team?',
+    panelDescription: 'Use the button below to open a ticket and let us know how we can help.',
+    panelButtonLabel: 'Open Ticket'
+  };
+
   const state = {
     API: '',
     TOKEN: localStorage.getItem('token') || '',
@@ -56,7 +79,14 @@
     teams: [],
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] },
-    teamDiscord: { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null }
+    teamDiscord: { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null },
+    teamDiscordServer: {
+      loading: false,
+      selectedServerId: null,
+      integration: null,
+      config: { fields: { ...DEFAULT_RUSTSTATUS_FIELDS }, ticketing: { ...DEFAULT_TICKETING_CONFIG } }
+    },
+    teamAuth: { loading: false, enabled: false, roleId: null, loaded: false }
   };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
@@ -88,6 +118,32 @@
   const teamDiscordSummary = $('#teamDiscordSummary');
   const teamDiscordSummaryGuild = $('#teamDiscordSummaryGuild');
   const teamDiscordSummaryToken = $('#teamDiscordSummaryToken');
+  const teamDiscordServerSection = $('#teamDiscordServerSection');
+  const teamDiscordServerSelect = $('#teamDiscordServerSelect');
+  const teamDiscordServerNotice = $('#teamDiscordServerNotice');
+  const teamTicketingForm = $('#teamDiscordTicketingForm');
+  const teamTicketingEnabled = $('#teamTicketingEnabled');
+  const teamTicketingCategory = $('#teamTicketingCategory');
+  const teamTicketingLog = $('#teamTicketingLog');
+  const teamTicketingStaffRole = $('#teamTicketingStaffRole');
+  const teamTicketingPingStaff = $('#teamTicketingPingStaff');
+  const teamTicketingPanelChannel = $('#teamTicketingPanelChannel');
+  const teamTicketingPanelMessage = $('#teamTicketingPanelMessage');
+  const teamTicketingWelcome = $('#teamTicketingWelcome');
+  const teamTicketingPrompt = $('#teamTicketingPrompt');
+  const teamTicketingPanelTitle = $('#teamTicketingPanelTitle');
+  const teamTicketingPanelDescription = $('#teamTicketingPanelDescription');
+  const teamTicketingPanelButton = $('#teamTicketingPanelButton');
+  const teamTicketingStatus = $('#teamTicketingStatus');
+  const teamRuststatusForm = $('#teamRuststatusForm');
+  const teamCommandToken = $('#teamCommandToken');
+  const teamRuststatusStatus = $('#teamRuststatusStatus');
+  const teamRuststatusFieldInputs = Array.from(document.querySelectorAll('[data-ruststatus-field]'));
+  const teamAuthSection = $('#teamAuthSection');
+  const teamAuthForm = $('#teamAuthForm');
+  const teamAuthEnabledInput = $('#teamAuthEnabled');
+  const teamAuthRoleInput = $('#teamAuthRole');
+  const teamAuthStatus = $('#teamAuthStatus');
   const roleSelect = $('#roleSelect');
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
@@ -4626,8 +4682,23 @@
     }
 
     updateTeamAccessView({ refreshUsers: isTeam });
-    if (isDiscord && state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
-      loadTeamDiscord().catch(() => {});
+    if (isDiscord) {
+      if (state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
+        loadTeamDiscord({ force: true }).catch(() => {});
+      } else {
+        updateTeamDiscordUi();
+      }
+      loadTeamAuthSettings({ force: true }).catch(() => {});
+      const selectedServer = state.teamDiscordServer.selectedServerId
+        || teamDiscordServerSelect?.value
+        || null;
+      if (selectedServer) {
+        state.teamDiscordServer.selectedServerId = selectedServer;
+        loadTeamDiscordServerIntegration(selectedServer).catch(() => {});
+      } else {
+        populateTeamDiscordServerOptions();
+        updateTeamDiscordServerUi();
+      }
     }
   }
 
@@ -6389,6 +6460,21 @@
 
   moduleBus.on('servers:updated', () => {
     renderRoleServersOptions();
+    populateTeamDiscordServerOptions();
+    const selected = state.teamDiscordServer.selectedServerId;
+    if (selected && !state.serverItems.has(String(selected))) {
+      state.teamDiscordServer.selectedServerId = null;
+    }
+    if (!state.teamDiscordServer.selectedServerId && state.serverItems.size > 0) {
+      const firstKey = state.serverItems.keys().next().value;
+      state.teamDiscordServer.selectedServerId = firstKey || null;
+      if (teamDiscordServerSelect) teamDiscordServerSelect.value = firstKey || '';
+    }
+    if (state.teamDiscordServer.selectedServerId) {
+      loadTeamDiscordServerIntegration(state.teamDiscordServer.selectedServerId).catch(() => {});
+    } else {
+      updateTeamDiscordServerUi();
+    }
   });
 
   function renderRoleEditorFields() {
@@ -6948,6 +7034,400 @@
     return hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
   }
 
+  function normalizeRuststatusFields(fields = {}) {
+    const source = fields && typeof fields === 'object' ? fields : {};
+    return {
+      joining: typeof source.joining === 'boolean' ? source.joining : DEFAULT_RUSTSTATUS_FIELDS.joining,
+      queued: typeof source.queued === 'boolean' ? source.queued : DEFAULT_RUSTSTATUS_FIELDS.queued,
+      sleepers: typeof source.sleepers === 'boolean' ? source.sleepers : DEFAULT_RUSTSTATUS_FIELDS.sleepers,
+      fps: typeof source.fps === 'boolean' ? source.fps : DEFAULT_RUSTSTATUS_FIELDS.fps,
+      lastUpdate: typeof source.lastUpdate === 'boolean' ? source.lastUpdate : DEFAULT_RUSTSTATUS_FIELDS.lastUpdate
+    };
+  }
+
+  function normalizeTicketingConfig(config = {}) {
+    const source = config && typeof config === 'object' ? config : {};
+    return {
+      enabled: typeof source.enabled === 'boolean' ? source.enabled : DEFAULT_TICKETING_CONFIG.enabled,
+      categoryId: source.categoryId ? String(source.categoryId) : DEFAULT_TICKETING_CONFIG.categoryId,
+      logChannelId: source.logChannelId ? String(source.logChannelId) : DEFAULT_TICKETING_CONFIG.logChannelId,
+      staffRoleId: source.staffRoleId ? String(source.staffRoleId) : DEFAULT_TICKETING_CONFIG.staffRoleId,
+      welcomeMessage:
+        typeof source.welcomeMessage === 'string' && source.welcomeMessage.trim().length
+          ? source.welcomeMessage.trim()
+          : DEFAULT_TICKETING_CONFIG.welcomeMessage,
+      questionPrompt:
+        typeof source.questionPrompt === 'string' && source.questionPrompt.trim().length
+          ? source.questionPrompt.trim()
+          : DEFAULT_TICKETING_CONFIG.questionPrompt,
+      pingStaffOnOpen:
+        typeof source.pingStaffOnOpen === 'boolean'
+          ? source.pingStaffOnOpen
+          : DEFAULT_TICKETING_CONFIG.pingStaffOnOpen,
+      panelChannelId: source.panelChannelId ? String(source.panelChannelId) : DEFAULT_TICKETING_CONFIG.panelChannelId,
+      panelMessageId: source.panelMessageId ? String(source.panelMessageId) : DEFAULT_TICKETING_CONFIG.panelMessageId,
+      panelTitle:
+        typeof source.panelTitle === 'string' && source.panelTitle.trim().length
+          ? source.panelTitle.trim()
+          : DEFAULT_TICKETING_CONFIG.panelTitle,
+      panelDescription:
+        typeof source.panelDescription === 'string' && source.panelDescription.trim().length
+          ? source.panelDescription.trim()
+          : DEFAULT_TICKETING_CONFIG.panelDescription,
+      panelButtonLabel:
+        typeof source.panelButtonLabel === 'string' && source.panelButtonLabel.trim().length
+          ? source.panelButtonLabel.trim()
+          : DEFAULT_TICKETING_CONFIG.panelButtonLabel
+    };
+  }
+
+  function setTeamServerNotice(message, variant = 'info') {
+    if (!teamDiscordServerNotice) return;
+    if (!message) {
+      teamDiscordServerNotice.textContent = '';
+      teamDiscordServerNotice.classList.add('hidden');
+      teamDiscordServerNotice.classList.remove('error', 'success');
+      return;
+    }
+    teamDiscordServerNotice.textContent = message;
+    teamDiscordServerNotice.classList.remove('hidden', 'error', 'success');
+    if (variant === 'error') teamDiscordServerNotice.classList.add('error');
+    else if (variant === 'success') teamDiscordServerNotice.classList.add('success');
+  }
+
+  function applyTeamTicketingConfig(config) {
+    const normalized = normalizeTicketingConfig(config);
+    if (teamTicketingEnabled) teamTicketingEnabled.checked = normalized.enabled;
+    if (teamTicketingCategory) teamTicketingCategory.value = normalized.categoryId || '';
+    if (teamTicketingLog) teamTicketingLog.value = normalized.logChannelId || '';
+    if (teamTicketingStaffRole) teamTicketingStaffRole.value = normalized.staffRoleId || '';
+    if (teamTicketingPingStaff) teamTicketingPingStaff.checked = !!normalized.pingStaffOnOpen;
+    if (teamTicketingPanelChannel) teamTicketingPanelChannel.value = normalized.panelChannelId || '';
+    if (teamTicketingPanelMessage) teamTicketingPanelMessage.value = normalized.panelMessageId || '';
+    if (teamTicketingWelcome) teamTicketingWelcome.value = normalized.welcomeMessage || '';
+    if (teamTicketingPrompt) teamTicketingPrompt.value = normalized.questionPrompt || '';
+    if (teamTicketingPanelTitle) teamTicketingPanelTitle.value = normalized.panelTitle || '';
+    if (teamTicketingPanelDescription) teamTicketingPanelDescription.value = normalized.panelDescription || '';
+    if (teamTicketingPanelButton) teamTicketingPanelButton.value = normalized.panelButtonLabel || '';
+  }
+
+  function applyTeamRuststatusConfig(fields) {
+    const normalized = normalizeRuststatusFields(fields);
+    teamRuststatusFieldInputs.forEach((input) => {
+      if (!input) return;
+      const key = input.dataset?.ruststatusField;
+      if (!key) return;
+      input.checked = Boolean(normalized[key]);
+    });
+  }
+
+  function gatherTeamTicketingPayload() {
+    return {
+      enabled: !!teamTicketingEnabled?.checked,
+      categoryId: teamTicketingCategory?.value?.trim() || '',
+      logChannelId: teamTicketingLog?.value?.trim() || '',
+      staffRoleId: teamTicketingStaffRole?.value?.trim() || '',
+      pingStaffOnOpen: !!teamTicketingPingStaff?.checked,
+      panelChannelId: teamTicketingPanelChannel?.value?.trim() || '',
+      panelMessageId: teamTicketingPanelMessage?.value?.trim() || '',
+      welcomeMessage: teamTicketingWelcome?.value?.trim() || '',
+      questionPrompt: teamTicketingPrompt?.value?.trim() || '',
+      panelTitle: teamTicketingPanelTitle?.value?.trim() || '',
+      panelDescription: teamTicketingPanelDescription?.value?.trim() || '',
+      panelButtonLabel: teamTicketingPanelButton?.value?.trim() || ''
+    };
+  }
+
+  function gatherTeamRuststatusPayload() {
+    const fields = {};
+    teamRuststatusFieldInputs.forEach((input) => {
+      if (!input) return;
+      const key = input.dataset?.ruststatusField;
+      if (!key) return;
+      fields[key] = !!input.checked;
+    });
+    return normalizeRuststatusFields(fields);
+  }
+
+  function disableTeamTicketingForm(disabled) {
+    if (!teamTicketingForm) return;
+    const shouldDisable = !!disabled;
+    teamTicketingForm.querySelectorAll('input, textarea, button').forEach((el) => {
+      el.disabled = shouldDisable;
+    });
+  }
+
+  function disableTeamRuststatusForm(disabled) {
+    if (!teamRuststatusForm) return;
+    const shouldDisable = !!disabled;
+    teamRuststatusForm.querySelectorAll('input, textarea, button, select').forEach((el) => {
+      el.disabled = shouldDisable;
+    });
+  }
+
+  function disableTeamAuthForm(disabled) {
+    if (!teamAuthForm) return;
+    const shouldDisable = !!disabled;
+    teamAuthForm.querySelectorAll('input, button').forEach((el) => {
+      el.disabled = shouldDisable;
+    });
+  }
+
+  function populateTeamDiscordServerOptions() {
+    if (!teamDiscordServerSelect) return;
+    const servers = getServerList();
+    const previous = teamDiscordServerSelect.value;
+    teamDiscordServerSelect.innerHTML = '';
+    servers.forEach((server) => {
+      if (!server) return;
+      const option = document.createElement('option');
+      option.value = String(server.id);
+      option.textContent = server.name || `Server #${server.id}`;
+      teamDiscordServerSelect.appendChild(option);
+    });
+    if (servers.length === 0) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'No servers available';
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      teamDiscordServerSelect.appendChild(placeholder);
+    } else if (previous && servers.some((server) => String(server.id) === previous)) {
+      teamDiscordServerSelect.value = previous;
+    } else {
+      teamDiscordServerSelect.value = String(servers[0].id);
+    }
+    state.teamDiscordServer.selectedServerId = teamDiscordServerSelect.value || null;
+  }
+
+  function updateTeamDiscordServerUi() {
+    if (!teamDiscordServerSection) return;
+    const canManage = canManageTeamDiscord();
+    const hasServers = state.serverItems.size > 0;
+    const loading = state.teamDiscordServer.loading;
+    teamDiscordServerSection.classList.toggle('hidden', !canManage || !hasServers);
+    teamDiscordServerSection.setAttribute('aria-hidden', canManage && hasServers ? 'false' : 'true');
+    if (!canManage || !hasServers) {
+      disableTeamTicketingForm(true);
+      disableTeamRuststatusForm(true);
+      setTeamServerNotice(hasServers ? 'You do not have permission to manage Discord features.' : 'Add a server to configure Discord features.');
+      return;
+    }
+    disableTeamTicketingForm(loading);
+    disableTeamRuststatusForm(loading);
+    if (!loading && teamDiscordServerNotice) {
+      setTeamServerNotice('');
+    }
+  }
+
+  function updateTeamAuthUi() {
+    if (!teamAuthSection) return;
+    const canManage = canManageTeamDiscord();
+    const loading = state.teamAuth.loading;
+    const loaded = state.teamAuth.loaded;
+    teamAuthSection.classList.toggle('hidden', !canManage);
+    teamAuthSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    if (!canManage) {
+      disableTeamAuthForm(true);
+      return;
+    }
+    disableTeamAuthForm(loading);
+    if (teamAuthEnabledInput && loaded && !loading) {
+      teamAuthEnabledInput.checked = !!state.teamAuth.enabled;
+    }
+    if (teamAuthRoleInput && loaded && !loading) {
+      teamAuthRoleInput.value = state.teamAuth.roleId ? String(state.teamAuth.roleId) : '';
+    }
+  }
+
+  async function loadTeamDiscordServerIntegration(serverId, { force = false } = {}) {
+    if (!teamDiscordServerSection || !serverId) {
+      state.teamDiscordServer.integration = null;
+      state.teamDiscordServer.config = { fields: { ...DEFAULT_RUSTSTATUS_FIELDS }, ticketing: { ...DEFAULT_TICKETING_CONFIG } };
+      applyTeamTicketingConfig(state.teamDiscordServer.config.ticketing);
+      applyTeamRuststatusConfig(state.teamDiscordServer.config.fields);
+      return;
+    }
+    if (!canManageTeamDiscord()) {
+      updateTeamDiscordServerUi();
+      return;
+    }
+    const selected = String(serverId);
+    if (!force && state.teamDiscordServer.integration && String(state.teamDiscordServer.integration.serverId) === selected) {
+      applyTeamTicketingConfig(state.teamDiscordServer.config.ticketing);
+      applyTeamRuststatusConfig(state.teamDiscordServer.config.fields);
+      return;
+    }
+    state.teamDiscordServer.loading = true;
+    updateTeamDiscordServerUi();
+    setTeamServerNotice('Loading server Discord settings…');
+    try {
+      const data = await api(`/servers/${encodeURIComponent(selected)}/discord`);
+      const integration = data?.integration || null;
+      state.teamDiscordServer.integration = integration;
+      if (!integration) {
+        state.teamDiscordServer.config = {
+          ticketing: { ...DEFAULT_TICKETING_CONFIG },
+          fields: { ...DEFAULT_RUSTSTATUS_FIELDS }
+        };
+        applyTeamTicketingConfig(state.teamDiscordServer.config.ticketing);
+        applyTeamRuststatusConfig(state.teamDiscordServer.config.fields);
+        setTeamServerNotice('This server has no Discord integration configured yet.', 'error');
+        return;
+      }
+      const ticketing = normalizeTicketingConfig(integration?.config?.ticketing || {});
+      const fields = normalizeRuststatusFields(integration?.config?.fields || {});
+      state.teamDiscordServer.config = { ticketing, fields };
+      applyTeamTicketingConfig(ticketing);
+      applyTeamRuststatusConfig(fields);
+      if (teamTicketingStatus) hideNotice(teamTicketingStatus);
+      if (teamRuststatusStatus) hideNotice(teamRuststatusStatus);
+      setTeamServerNotice('');
+    } catch (err) {
+      const code = errorCode(err);
+      setTeamServerNotice(describeError(code || err), 'error');
+    } finally {
+      state.teamDiscordServer.loading = false;
+      updateTeamDiscordServerUi();
+    }
+  }
+
+  async function loadTeamAuthSettings({ force = false } = {}) {
+    if (!teamAuthSection || !canManageTeamDiscord()) {
+      state.teamAuth.loaded = false;
+      updateTeamAuthUi();
+      return;
+    }
+    if (!force && state.teamAuth.loaded) {
+      updateTeamAuthUi();
+      return;
+    }
+    state.teamAuth.loading = true;
+    updateTeamAuthUi();
+    hideNotice(teamAuthStatus);
+    try {
+      const data = await api('/team/auth/settings');
+      state.teamAuth.enabled = !!data?.enabled;
+      state.teamAuth.roleId = data?.roleId != null && data.roleId !== '' ? String(data.roleId) : null;
+      state.teamAuth.loaded = true;
+    } catch (err) {
+      const code = errorCode(err);
+      showNotice(teamAuthStatus, describeError(code || err), 'error');
+    } finally {
+      state.teamAuth.loading = false;
+      updateTeamAuthUi();
+    }
+  }
+
+  async function handleTeamServerChange() {
+    if (!teamDiscordServerSelect) return;
+    const value = teamDiscordServerSelect.value;
+    state.teamDiscordServer.selectedServerId = value || null;
+    await loadTeamDiscordServerIntegration(value, { force: true });
+  }
+
+  async function handleTeamTicketingSubmit(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    const serverId = state.teamDiscordServer.selectedServerId;
+    if (!serverId) {
+      showNotice(teamTicketingStatus, 'Select a server to save ticketing settings.', 'error');
+      return;
+    }
+    state.teamDiscordServer.loading = true;
+    updateTeamDiscordServerUi();
+    disableTeamTicketingForm(true);
+    showNotice(teamTicketingStatus, 'Saving ticketing settings…', 'info');
+    try {
+      const payload = gatherTeamTicketingPayload();
+      const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, { config: { ticketing: payload } }, 'POST');
+      const integration = data?.integration || null;
+      if (integration) {
+        state.teamDiscordServer.integration = integration;
+        const ticketing = normalizeTicketingConfig(integration.config?.ticketing || payload);
+        state.teamDiscordServer.config.ticketing = ticketing;
+        applyTeamTicketingConfig(ticketing);
+      }
+      showNotice(teamTicketingStatus, 'Ticketing settings saved.', 'success');
+    } catch (err) {
+      const code = errorCode(err);
+      showNotice(teamTicketingStatus, describeError(code || err), 'error');
+    } finally {
+      disableTeamTicketingForm(false);
+      state.teamDiscordServer.loading = false;
+      updateTeamDiscordServerUi();
+    }
+  }
+
+  async function handleTeamRuststatusSubmit(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    const serverId = state.teamDiscordServer.selectedServerId;
+    if (!serverId) {
+      showNotice(teamRuststatusStatus, 'Select a server to update Ruststatus settings.', 'error');
+      return;
+    }
+    state.teamDiscordServer.loading = true;
+    updateTeamDiscordServerUi();
+    disableTeamRuststatusForm(true);
+    showNotice(teamRuststatusStatus, 'Saving Ruststatus settings…', 'info');
+    try {
+      const fields = gatherTeamRuststatusPayload();
+      const commandInput = teamCommandToken?.value?.trim();
+      const body = { config: { fields } };
+      if (commandInput) {
+        if (commandInput.toLowerCase() === 'reset') {
+          body.clearCommandBotToken = true;
+        } else {
+          body.commandBotToken = commandInput;
+        }
+      }
+      const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, body, 'POST');
+      const integration = data?.integration || null;
+      if (integration) {
+        state.teamDiscordServer.integration = integration;
+        const updatedFields = normalizeRuststatusFields(integration.config?.fields || fields);
+        state.teamDiscordServer.config.fields = updatedFields;
+        applyTeamRuststatusConfig(updatedFields);
+      }
+      if (teamCommandToken) teamCommandToken.value = '';
+      showNotice(teamRuststatusStatus, 'Ruststatus settings saved.', 'success');
+    } catch (err) {
+      const code = errorCode(err);
+      showNotice(teamRuststatusStatus, describeError(code || err), 'error');
+    } finally {
+      disableTeamRuststatusForm(false);
+      state.teamDiscordServer.loading = false;
+      updateTeamDiscordServerUi();
+    }
+  }
+
+  async function handleTeamAuthSubmit(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    state.teamAuth.loading = true;
+    updateTeamAuthUi();
+    disableTeamAuthForm(true);
+    showNotice(teamAuthStatus, 'Saving authentication settings…', 'info');
+    const payload = {
+      enabled: !!teamAuthEnabledInput?.checked,
+      roleId: teamAuthRoleInput?.value?.trim() || null
+    };
+    try {
+      const data = await api('/team/auth/settings', payload, 'POST');
+      state.teamAuth.enabled = !!(data?.enabled ?? payload.enabled);
+      state.teamAuth.roleId = data?.roleId != null && data.roleId !== '' ? String(data.roleId) : (payload.roleId || null);
+      state.teamAuth.loaded = true;
+      showNotice(teamAuthStatus, 'Authentication settings saved.', 'success');
+    } catch (err) {
+      const code = errorCode(err);
+      showNotice(teamAuthStatus, describeError(code || err), 'error');
+    } finally {
+      state.teamAuth.loading = false;
+      disableTeamAuthForm(false);
+      updateTeamAuthUi();
+    }
+  }
   function updateTeamDiscordUi() {
     if (!teamDiscordSection) return;
     const canManage = canManageTeamDiscord();
@@ -6990,6 +7470,11 @@
         teamDiscordSummaryToken.textContent = 'Not linked';
       }
     }
+    if (canManage) {
+      populateTeamDiscordServerOptions();
+    }
+    updateTeamDiscordServerUi();
+    updateTeamAuthUi();
   }
 
   async function loadTeamDiscord({ force = false } = {}) {
@@ -7040,6 +7525,19 @@
         state.teamDiscord.tokenPreview = null;
       }
       updateTeamDiscordUi();
+      if (canManageTeamDiscord()) {
+        loadTeamAuthSettings({ force: true }).catch(() => {});
+        const selectedServer = state.teamDiscordServer.selectedServerId
+          || teamDiscordServerSelect?.value
+          || null;
+        if (selectedServer) {
+          state.teamDiscordServer.selectedServerId = selectedServer;
+          loadTeamDiscordServerIntegration(selectedServer).catch(() => {});
+        } else {
+          populateTeamDiscordServerOptions();
+          updateTeamDiscordServerUi();
+        }
+      }
     }
     if (unauthorized) return;
   }
@@ -7482,6 +7980,10 @@
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
+    teamDiscordServerSelect?.addEventListener('change', handleTeamServerChange);
+    teamTicketingForm?.addEventListener('submit', handleTeamTicketingSubmit);
+    teamRuststatusForm?.addEventListener('submit', handleTeamRuststatusSubmit);
+    teamAuthForm?.addEventListener('submit', handleTeamAuthSubmit);
     btnCreateUser?.addEventListener('click', async () => {
       if (!hasGlobalPermission('manageUsers')) return;
       hideNotice(userFeedback);
