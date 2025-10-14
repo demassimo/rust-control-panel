@@ -39,7 +39,7 @@ import {
   isRustMapMetadataStale,
   purgeRustMapCacheIfDue
 } from './rustmaps.js';
-import { parseDiscordBotConfig } from './discord-config.js';
+import { encodeDiscordBotConfig, normaliseDiscordBotConfig, parseDiscordBotConfig } from './discord-config.js';
 import {
   normaliseRolePermissions,
   serialiseRolePermissions,
@@ -5285,6 +5285,49 @@ function projectDiscordIntegration(row) {
   };
 }
 
+function mergeDiscordBotConfig(baseConfig, updates) {
+  const base = parseDiscordBotConfig(baseConfig);
+  if (!updates || typeof updates !== 'object') {
+    return base;
+  }
+
+  const next = {
+    presenceTemplate: base.presenceTemplate,
+    presenceStatuses: { ...base.presenceStatuses },
+    colors: { ...base.colors },
+    fields: { ...base.fields },
+    ticketing: { ...base.ticketing }
+  };
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'presenceTemplate')) {
+    next.presenceTemplate = updates.presenceTemplate;
+  }
+
+  if (updates.presenceStatuses && typeof updates.presenceStatuses === 'object') {
+    for (const [key, value] of Object.entries(updates.presenceStatuses)) {
+      next.presenceStatuses[key] = value;
+    }
+  }
+
+  if (updates.colors && typeof updates.colors === 'object') {
+    for (const [key, value] of Object.entries(updates.colors)) {
+      next.colors[key] = value;
+    }
+  }
+
+  if (updates.fields && typeof updates.fields === 'object') {
+    for (const [key, value] of Object.entries(updates.fields)) {
+      next.fields[key] = value;
+    }
+  }
+
+  if (updates.ticketing && typeof updates.ticketing === 'object') {
+    next.ticketing = { ...next.ticketing, ...updates.ticketing };
+  }
+
+  return normaliseDiscordBotConfig(next);
+}
+
 function describeDiscordStatus(serverId) {
   const numericId = Number(serverId);
   const status = Number.isFinite(numericId) ? statusMap.get(numericId) : null;
@@ -5869,6 +5912,83 @@ app.delete('/api/team/discord', auth, async (req, res) => {
     });
   } catch (err) {
     console.error('failed to clear team discord token', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/team/auth/settings', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.getTeamAuthSettings !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const settings = await db.getTeamAuthSettings(teamId);
+    res.json({
+      enabled: Boolean(settings?.enabled),
+      roleId:
+        settings?.roleId != null && settings.roleId !== ''
+          ? String(settings.roleId)
+          : null
+    });
+  } catch (err) {
+    console.error('failed to load team auth settings', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/team/auth/settings', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.setTeamAuthSettings !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const body = req.body || {};
+  const enabledRaw = body.enabled ?? body.enable ?? body.active;
+  const roleInput = sanitizeDiscordSnowflake(body.roleId ?? body.role_id ?? body.role);
+  const updates = {};
+  if (enabledRaw != null) {
+    updates.enabled = Boolean(enabledRaw);
+  }
+  if (body.roleId !== undefined || body.role_id !== undefined || body.role !== undefined) {
+    updates.roleId = roleInput ?? null;
+  }
+  try {
+    await db.setTeamAuthSettings(teamId, updates);
+    if (req.authUser?.id && typeof loadUserContext === 'function') {
+      try {
+        const refreshed = await loadUserContext(req.authUser.id);
+        if (refreshed) req.authUser = refreshed;
+      } catch (err) {
+        console.warn('failed to refresh auth context after team auth update', err);
+      }
+    }
+    if (typeof db.getTeamAuthSettings === 'function') {
+      try {
+        const settings = await db.getTeamAuthSettings(teamId);
+        return res.json({
+          enabled: Boolean(settings?.enabled),
+          roleId:
+            settings?.roleId != null && settings.roleId !== ''
+              ? String(settings.roleId)
+              : null
+        });
+      } catch (err) {
+        console.warn('failed to reload team auth settings after update', err);
+      }
+    }
+    res.json({
+      enabled: updates.enabled != null ? Boolean(updates.enabled) : undefined,
+      roleId: updates.roleId != null ? String(updates.roleId) : null
+    });
+  } catch (err) {
+    console.error('failed to update team auth settings', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
@@ -6728,28 +6848,46 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
     if (!server) return res.status(404).json({ error: 'not_found' });
     const existing = await db.getServerDiscordIntegration(id);
     const body = req.body || {};
-    const guildId = sanitizeDiscordSnowflake(body.guildId ?? body.guild_id);
-    const channelId = sanitizeDiscordSnowflake(body.channelId ?? body.channel_id);
+    const guildInput = sanitizeDiscordSnowflake(body.guildId ?? body.guild_id);
+    const channelInput = sanitizeDiscordSnowflake(body.channelId ?? body.channel_id);
     const tokenInput = sanitizeDiscordToken(body.botToken ?? body.bot_token);
     const commandTokenInput = sanitizeDiscordToken(body.commandBotToken ?? body.command_bot_token);
+    const clearCommandToken = Boolean(
+      body.clearCommandBotToken ?? body.clear_command_bot_token ?? body.resetCommandBotToken ?? body.reset_command_bot_token
+    );
+
+    const existingGuildId = existing?.guild_id ?? existing?.guildId ?? null;
+    const existingChannelId = existing?.channel_id ?? existing?.channelId ?? null;
+
+    const guildId = guildInput || existingGuildId;
+    const channelId = channelInput || existingChannelId;
     if (!guildId || !channelId) return res.status(400).json({ error: 'missing_fields' });
+
     let botToken = tokenInput;
     if (!botToken) {
-      const existingToken = existing?.bot_token;
+      const existingToken = existing?.bot_token ?? null;
       if (existingToken) botToken = existingToken;
       else return res.status(400).json({ error: 'missing_bot_token' });
     }
+
     let commandBotToken = commandTokenInput;
-    if (!commandBotToken) {
+    if (clearCommandToken) {
+      commandBotToken = '';
+    }
+    if (!commandBotToken && !clearCommandToken) {
       const existingCommandToken = existing?.command_bot_token ?? existing?.commandBotToken;
       if (existingCommandToken) commandBotToken = existingCommandToken;
       else commandBotToken = botToken;
     }
+
     let statusMessageId = existing?.status_message_id ?? existing?.statusMessageId ?? null;
-    if (existing?.channel_id && existing.channel_id !== channelId) {
+    if (existingChannelId && channelId && existingChannelId !== channelId) {
       statusMessageId = null;
     }
-    const configJson = existing?.config_json ?? existing?.configJson ?? null;
+
+    const mergedConfig = mergeDiscordBotConfig(existing?.config_json ?? existing?.configJson ?? null, body.config);
+    const configJson = encodeDiscordBotConfig(mergedConfig);
+
     await db.saveServerDiscordIntegration(id, {
       bot_token: botToken,
       command_bot_token: commandBotToken,

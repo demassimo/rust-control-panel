@@ -9,13 +9,16 @@
   const maxPlayersEl = document.getElementById('discord-max-players');
   const joiningEl = document.getElementById('discord-joining');
   const lastCheckEl = document.getElementById('discord-last-check');
-  const form = document.getElementById('discord-form');
-  const tokenInput = document.getElementById('discord-bot-token');
-  const guildInput = document.getElementById('discord-guild-id');
-  const channelInput = document.getElementById('discord-channel-id');
-  const removeBtn = document.getElementById('discord-remove');
-  const noticeEl = document.getElementById('discord-notice');
   const presenceTemplateEl = document.getElementById('discord-presence-template');
+  const statusForm = document.getElementById('discord-status-form');
+  const statusNoticeEl = document.getElementById('discord-status-notice');
+  const statusTemplateInput = document.getElementById('discord-presence-template-input');
+  const presenceSelectEls = {
+    online: document.getElementById('discord-presence-online'),
+    offline: document.getElementById('discord-presence-offline'),
+    stale: document.getElementById('discord-presence-stale'),
+    waiting: document.getElementById('discord-presence-waiting')
+  };
   const presenceStatusEls = {
     online: document.getElementById('discord-presence-status-online'),
     offline: document.getElementById('discord-presence-status-offline'),
@@ -24,15 +27,7 @@
   };
   const enabledFieldsList = document.getElementById('discord-enabled-fields');
   const enabledFieldsEmpty = document.getElementById('discord-enabled-fields-empty');
-  const ticketingStatusEl = document.getElementById('discord-ticketing-status');
-  const ticketingCategoryEl = document.getElementById('discord-ticketing-category');
-  const ticketingLogEl = document.getElementById('discord-ticketing-log');
-  const ticketingPanelChannelEl = document.getElementById('discord-ticketing-panel-channel');
-  const ticketingPanelMessageEl = document.getElementById('discord-ticketing-panel-message');
-  const ticketingStaffRoleEl = document.getElementById('discord-ticketing-staff-role');
-  const ticketingPingEl = document.getElementById('discord-ticketing-ping');
-  const botTokenStatusEl = document.getElementById('discord-bot-token-status');
-  const commandTokenStatusEl = document.getElementById('discord-command-token-status');
+  const statusFieldCheckboxes = Array.from(settingsRoot.querySelectorAll('[data-status-field]'));
 
   const FIELD_LABELS = {
     joining: 'Joining players',
@@ -109,60 +104,26 @@
     return normalizeApiBase('http://localhost');
   }
 
+  const DEFAULT_STATUS_CONFIG = {
+    presenceTemplate: '{statusEmoji} {playerCount} on {serverName}',
+    presenceStatuses: { online: 'online', offline: 'dnd', stale: 'idle', waiting: 'idle' },
+    fields: { joining: true, queued: true, sleepers: true, fps: true, lastUpdate: true }
+  };
+
   const state = {
     integration: null,
+    config: DEFAULT_STATUS_CONFIG,
     pollTimer: null,
     serverId: null,
     apiBase: detectInitialApiBase(),
     refreshToken: 0,
-    dirty: {
-      token: false,
-      guild: false,
-      channel: false
-    }
+    statusDirty: false
   };
-
-  function setDirty(field, value = true) {
-    if (!state.dirty || !(field in state.dirty)) return;
-    state.dirty[field] = !!value;
-  }
-
-  function resetDirty() {
-    if (!state.dirty) return;
-    for (const key of Object.keys(state.dirty)) {
-      state.dirty[key] = false;
-    }
-  }
 
   function buildError(message, code) {
     const err = new Error(message || code || 'api_error');
     if (code) err.code = code;
     return err;
-  }
-
-  function setNotice(message, variant = 'info') {
-    if (!noticeEl) return;
-    if (!message) {
-      clearNotice();
-      return;
-    }
-    noticeEl.textContent = message || '';
-    noticeEl.classList.remove('hidden', 'error', 'success');
-    if (variant === 'error') noticeEl.classList.add('error');
-    else if (variant === 'success') noticeEl.classList.add('success');
-  }
-
-  function clearNotice() {
-    if (!noticeEl) return;
-    noticeEl.textContent = '';
-    noticeEl.classList.add('hidden');
-    noticeEl.classList.remove('error', 'success');
-  }
-
-  function formatSnowflake(value) {
-    if (value == null) return '—';
-    const text = String(value).trim();
-    return text.length ? text : '—';
   }
 
   function describePresence(value) {
@@ -199,7 +160,114 @@
     }
   }
 
-  function updateConfigSummary(config, integration) {
+  function normalizeStatusConfig(config) {
+    const source = config && typeof config === 'object' ? config : {};
+    const base = DEFAULT_STATUS_CONFIG;
+    const statuses = source && typeof source.presenceStatuses === 'object' ? source.presenceStatuses : {};
+    const fields = source && typeof source.fields === 'object' ? source.fields : {};
+    const template = typeof source.presenceTemplate === 'string' && source.presenceTemplate.trim().length
+      ? source.presenceTemplate.trim()
+      : base.presenceTemplate;
+    return {
+      presenceTemplate: template,
+      presenceStatuses: {
+        online: statuses.online || base.presenceStatuses.online,
+        offline: statuses.offline || base.presenceStatuses.offline,
+        stale: statuses.stale || base.presenceStatuses.stale,
+        waiting: statuses.waiting || base.presenceStatuses.waiting
+      },
+      fields: {
+        joining: typeof fields.joining === 'boolean' ? fields.joining : base.fields.joining,
+        queued: typeof fields.queued === 'boolean' ? fields.queued : base.fields.queued,
+        sleepers: typeof fields.sleepers === 'boolean' ? fields.sleepers : base.fields.sleepers,
+        fps: typeof fields.fps === 'boolean' ? fields.fps : base.fields.fps,
+        lastUpdate: typeof fields.lastUpdate === 'boolean' ? fields.lastUpdate : base.fields.lastUpdate
+      }
+    };
+  }
+
+  function setStatusNotice(message, variant = 'info') {
+    if (!statusNoticeEl) return;
+    if (!message) {
+      clearStatusNotice();
+      return;
+    }
+    statusNoticeEl.textContent = message;
+    statusNoticeEl.classList.remove('hidden', 'error', 'success');
+    if (variant === 'error') statusNoticeEl.classList.add('error');
+    else if (variant === 'success') statusNoticeEl.classList.add('success');
+    else statusNoticeEl.classList.remove('error', 'success');
+  }
+
+  function clearStatusNotice() {
+    if (!statusNoticeEl) return;
+    statusNoticeEl.textContent = '';
+    statusNoticeEl.classList.add('hidden');
+    statusNoticeEl.classList.remove('error', 'success');
+  }
+
+  function disableStatusForm(disabled) {
+    if (!statusForm) return;
+    const shouldDisable = !!disabled || !state.serverId;
+    statusForm.querySelectorAll('textarea, input, select, button').forEach((el) => {
+      el.disabled = shouldDisable;
+    });
+  }
+
+  function applyStatusConfig(config, { force = false } = {}) {
+    const normalized = normalizeStatusConfig(config);
+    state.config = normalized;
+    const shouldApply = force || !state.statusDirty;
+
+    if (shouldApply) {
+      if (statusTemplateInput) {
+        statusTemplateInput.value = normalized.presenceTemplate;
+      }
+      for (const [key, select] of Object.entries(presenceSelectEls)) {
+        if (!select) continue;
+        const desired = normalized.presenceStatuses[key] || DEFAULT_STATUS_CONFIG.presenceStatuses[key];
+        const hasOption = Array.from(select.options || []).some((opt) => opt.value === desired);
+        select.value = hasOption ? desired : DEFAULT_STATUS_CONFIG.presenceStatuses[key];
+      }
+      statusFieldCheckboxes.forEach((checkbox) => {
+        if (!checkbox) return;
+        const fieldKey = checkbox.dataset?.statusField;
+        if (!fieldKey) return;
+        checkbox.checked = Boolean(normalized.fields[fieldKey]);
+      });
+      state.statusDirty = false;
+    }
+  }
+
+  function resetStatusForm() {
+    applyStatusConfig(DEFAULT_STATUS_CONFIG, { force: true });
+    clearStatusNotice();
+  }
+
+  function markStatusDirty() {
+    state.statusDirty = true;
+    clearStatusNotice();
+  }
+
+  function gatherStatusPayload() {
+    const template = statusTemplateInput?.value?.trim() || '';
+    const presenceStatuses = {};
+    for (const [key, select] of Object.entries(presenceSelectEls)) {
+      if (!select) continue;
+      const value = select.value || DEFAULT_STATUS_CONFIG.presenceStatuses[key];
+      presenceStatuses[key] = value;
+    }
+    const fields = {};
+    statusFieldCheckboxes.forEach((checkbox) => {
+      if (!checkbox) return;
+      const fieldKey = checkbox.dataset?.statusField;
+      if (!fieldKey) return;
+      fields[fieldKey] = checkbox.checked;
+    });
+    return { presenceTemplate: template, presenceStatuses, fields };
+  }
+
+  function updateConfigSummary(config) {
     const cfg = config && typeof config === 'object' ? config : null;
     if (presenceTemplateEl) {
       const template = typeof cfg?.presenceTemplate === 'string' && cfg.presenceTemplate.trim().length
@@ -214,39 +282,6 @@
     if (presenceStatusEls.waiting) presenceStatusEls.waiting.textContent = describePresence(statuses.waiting);
 
     updateEnabledFields(cfg?.fields || null);
-
-    const ticketing = cfg?.ticketing || {};
-    if (ticketingStatusEl) ticketingStatusEl.textContent = ticketing.enabled ? 'Enabled' : 'Disabled';
-    if (ticketingCategoryEl) ticketingCategoryEl.textContent = formatSnowflake(ticketing.categoryId);
-    if (ticketingLogEl) ticketingLogEl.textContent = formatSnowflake(ticketing.logChannelId);
-    if (ticketingPanelChannelEl) ticketingPanelChannelEl.textContent = formatSnowflake(ticketing.panelChannelId);
-    if (ticketingPanelMessageEl) ticketingPanelMessageEl.textContent = formatSnowflake(ticketing.panelMessageId);
-    if (ticketingStaffRoleEl) ticketingStaffRoleEl.textContent = formatSnowflake(ticketing.staffRoleId);
-    if (ticketingPingEl) ticketingPingEl.textContent = ticketing.enabled && ticketing.pingStaffOnOpen ? 'Yes' : 'No';
-
-    const hasToken = Boolean(integration?.hasToken);
-    const hasCommandToken = Boolean(integration?.hasCommandToken);
-    if (botTokenStatusEl) {
-      botTokenStatusEl.textContent = hasToken ? 'Stored (hidden)' : 'Not stored';
-    }
-    if (commandTokenStatusEl) {
-      const commandText = hasCommandToken
-        ? 'Stored (hidden)'
-        : hasToken
-          ? 'Uses status bot token'
-          : 'Not stored';
-      commandTokenStatusEl.textContent = commandText;
-    }
-  }
-
-  function disableForm(disabled) {
-    if (!form) return;
-    const shouldDisable = !!disabled || !state.serverId;
-    form.querySelectorAll('input, button').forEach((el) => {
-      if (el === removeBtn) return;
-      el.disabled = shouldDisable;
-    });
-    if (removeBtn) removeBtn.disabled = shouldDisable || !state.integration;
   }
 
   function updateBadge(presenceLabel, presence) {
@@ -282,35 +317,17 @@
   function applyIntegration(integration, options = {}) {
     const { force = false } = options;
     state.integration = integration;
-    if (guildInput && (force || !state.dirty.guild)) {
-      guildInput.value = integration?.guildId || '';
-      setDirty('guild', false);
-    }
-    if (channelInput && (force || !state.dirty.channel)) {
-      channelInput.value = integration?.channelId || '';
-      setDirty('channel', false);
-    }
-    if (tokenInput) {
-      if (force || !state.dirty.token) {
-        tokenInput.value = '';
-        setDirty('token', false);
-      }
-      tokenInput.placeholder = integration?.hasToken
-        ? 'Token stored — enter to replace'
-        : 'Paste bot token';
-    }
-    if (removeBtn) removeBtn.disabled = !state.serverId || !integration;
-    if (force) resetDirty();
-    updateConfigSummary(integration?.config || null, integration);
+    updateConfigSummary(integration?.config || null);
+    applyStatusConfig(integration?.config || DEFAULT_STATUS_CONFIG, { force });
   }
 
   function describeError(code) {
     switch (code) {
       case 'missing_fields':
-        return 'Provide both the guild and channel IDs.';
+        return 'Complete the Discord bot setup from the Team → Discord tab before editing status.';
       case 'missing_bot_token':
       case 'missing_token':
-        return 'Add the Discord bot token before saving.';
+        return 'Add the Discord bot token from the Team → Discord tab before editing status.';
       case 'unauthorized':
         return 'Sign in to configure Discord integration.';
       case 'not_found':
@@ -324,7 +341,7 @@
       case 'missing_server':
         return 'Select a server to manage the Discord bot.';
       default:
-        return 'An unexpected error occurred while updating Discord integration.';
+        return 'An unexpected error occurred while updating Discord status settings.';
     }
   }
 
@@ -377,21 +394,6 @@
     return payload || {};
   }
 
-  function handleError(err, { silent = false } = {}) {
-    const code = err?.code || err?.message || 'api_error';
-    if (code === 'unauthorized' || code === 'missing_server') {
-      disableForm(true);
-      if (!silent) setNotice(describeError(code), 'error');
-      return;
-    }
-    if (code === 'network_error' || code === 'not_found' || code === 'not_supported' || code === 'db_error' || code === 'missing_fields' || code === 'missing_bot_token') {
-      if (!silent) setNotice(describeError(code), 'error');
-      if (code === 'not_found' || code === 'not_supported') disableForm(true);
-      return;
-    }
-    if (!silent) setNotice(describeError(code), 'error');
-  }
-
   function stopPolling() {
     if (state.pollTimer) {
       clearInterval(state.pollTimer);
@@ -411,91 +413,72 @@
     const { silent = false } = options;
 
     if (!state.serverId) {
-      handleError(buildError('missing_server', 'missing_server'), { silent });
+      disableStatusForm(true);
+      resetView();
+      if (!silent) setStatusNotice(describeError('missing_server'), 'error');
       return;
     }
 
     const activeServer = state.serverId;
     const token = ++state.refreshToken;
 
-    const hasUnsavedChanges = Object.values(state.dirty || {}).some(Boolean);
-    const shouldDisableForm = !silent || !hasUnsavedChanges;
+    const shouldShowLoading = !silent && !state.statusDirty;
 
-    if (!silent) setNotice('Loading Discord integration…');
-    if (shouldDisableForm) disableForm(true);
+    if (shouldShowLoading) setStatusNotice('Loading Discord status…');
+    disableStatusForm(true);
 
     try {
       const data = await apiRequest('GET');
       if (state.serverId !== activeServer || state.refreshToken !== token) return;
       applyIntegration(data.integration || null);
       updateStatusView(data.status || {});
-      if (shouldDisableForm) disableForm(false);
-      clearNotice();
+      disableStatusForm(false);
+      if (shouldShowLoading) clearStatusNotice();
     } catch (err) {
       if (state.serverId !== activeServer || state.refreshToken !== token) return;
-      if (shouldDisableForm) disableForm(false);
-      handleError(err, { silent });
+      disableStatusForm(false);
+      const code = err?.code || err?.message || 'api_error';
+      if (code === 'unauthorized') {
+        setStatusNotice(describeError(code), 'error');
+        disableStatusForm(true);
+        stopPolling();
+        return;
+      }
+      if (code === 'missing_server') {
+        setStatusNotice(describeError(code), 'error');
+        disableStatusForm(true);
+        return;
+      }
+      if (!silent) setStatusNotice(describeError(code), 'error');
     }
   }
 
-  async function saveIntegration(event) {
+  async function saveStatusConfig(event) {
     event?.preventDefault();
-    if (!form) return;
     if (!state.serverId) {
-      setNotice(describeError('missing_server'), 'error');
+      setStatusNotice(describeError('missing_server'), 'error');
       return;
     }
-
-    const payload = {
-      botToken: tokenInput?.value?.trim() || '',
-      guildId: guildInput?.value?.trim() || '',
-      channelId: channelInput?.value?.trim() || ''
-    };
-
-    disableForm(true);
-    setNotice('Saving Discord integration…');
-
+    disableStatusForm(true);
+    setStatusNotice('Saving status settings…');
     try {
+      const payload = { config: gatherStatusPayload() };
       const data = await apiRequest('POST', payload);
       applyIntegration(data.integration || null, { force: true });
       updateStatusView(data.status || {});
-      if (tokenInput) tokenInput.value = '';
-      disableForm(false);
-      setNotice('Discord integration saved.', 'success');
+      disableStatusForm(false);
+      setStatusNotice('Status settings saved.', 'success');
     } catch (err) {
-      disableForm(false);
-      handleError(err);
-    }
-  }
-
-  async function removeIntegration() {
-    if (!state.serverId) {
-      setNotice(describeError('missing_server'), 'error');
-      return;
-    }
-    if (!state.integration) {
-      setNotice('No Discord integration is configured for this server.', 'error');
-      return;
-    }
-
-    disableForm(true);
-    setNotice('Removing Discord integration…');
-
-    try {
-      const data = await apiRequest('DELETE');
-      applyIntegration(null, { force: true });
-      updateStatusView(data.status || {});
-      disableForm(false);
-      setNotice('Discord integration removed.', 'success');
-    } catch (err) {
-      disableForm(false);
-      handleError(err);
+      disableStatusForm(false);
+      const code = err?.code || err?.message || 'api_error';
+      setStatusNotice(describeError(code), 'error');
     }
   }
 
   function resetView() {
     applyIntegration(null, { force: true });
     updateStatusView({ presence: 'dnd', presenceLabel: 'Do Not Disturb' });
+    resetStatusForm();
   }
 
   function selectServer(id) {
@@ -509,26 +492,28 @@
     stopPolling();
 
     if (!normalized) {
-      disableForm(true);
+      disableStatusForm(true);
       resetView();
-      setNotice(describeError('missing_server'));
+      setStatusNotice(describeError('missing_server'), 'error');
       return;
     }
 
     resetView();
-    disableForm(true);
-    setNotice('Loading Discord integration…');
+    disableStatusForm(true);
     refresh().finally(() => {
       if (state.serverId === normalized) schedulePolling();
     });
   }
 
-  if (form) form.addEventListener('submit', saveIntegration);
-  if (removeBtn) removeBtn.addEventListener('click', removeIntegration);
+  statusForm?.addEventListener('submit', saveStatusConfig);
 
-  tokenInput?.addEventListener('input', () => setDirty('token', true));
-  guildInput?.addEventListener('input', () => setDirty('guild', true));
-  channelInput?.addEventListener('input', () => setDirty('channel', true));
+  statusTemplateInput?.addEventListener('input', markStatusDirty);
+  Object.values(presenceSelectEls).forEach((select) => {
+    select?.addEventListener('change', markStatusDirty);
+  });
+  statusFieldCheckboxes.forEach((checkbox) => {
+    checkbox?.addEventListener('change', markStatusDirty);
+  });
 
   window.addEventListener('beforeunload', () => {
     stopPolling();
@@ -568,8 +553,8 @@
   } else if (typeof window !== 'undefined' && typeof window.__workspaceSelectedServer !== 'undefined') {
     selectServer(window.__workspaceSelectedServer);
   } else {
-    disableForm(true);
+    disableStatusForm(true);
     resetView();
-    setNotice(describeError('missing_server'));
+    setStatusNotice(describeError('missing_server'), 'error');
   }
 })();
