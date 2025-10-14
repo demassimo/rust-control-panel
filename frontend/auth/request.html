@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="panel-api-base" content="/api" />
+  <title>Link your Steam account</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      background: radial-gradient(circle at top, #1f2937, #0f172a 70%);
+      color: #e2e8f0;
+      font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+    }
+    main {
+      width: 100%;
+      max-width: 620px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.8rem, 2vw + 1rem, 2.4rem);
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .lead {
+      margin: 0;
+      color: #cbd5f5;
+    }
+    .card {
+      margin-top: 20px;
+      padding: 24px;
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.85);
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.45);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .card--status {
+      font-weight: 500;
+      text-align: center;
+    }
+    .card--error {
+      border-color: rgba(248, 113, 113, 0.45);
+      background: rgba(127, 29, 29, 0.6);
+      color: #fee2e2;
+    }
+    .card--success {
+      border-color: rgba(134, 239, 172, 0.45);
+      background: rgba(20, 83, 45, 0.6);
+      color: #dcfce7;
+    }
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(15, 23, 42, 0.6);
+      color: #f8fafc;
+      font-size: 1rem;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+    }
+    button {
+      align-self: flex-start;
+      padding: 12px 22px;
+      border-radius: 999px;
+      border: none;
+      background: linear-gradient(135deg, #38bdf8, #6366f1);
+      color: #0f172a;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    button:hover:not([disabled]) {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 25px rgba(79, 70, 229, 0.35);
+    }
+    button:disabled {
+      cursor: progress;
+      opacity: 0.7;
+      box-shadow: none;
+    }
+    a {
+      color: #38bdf8;
+    }
+    a:hover {
+      color: #93c5fd;
+    }
+    .hint {
+      margin: -8px 0 0;
+      font-size: 0.9rem;
+      color: rgba(226, 232, 240, 0.85);
+    }
+    .discord-tag {
+      font-weight: 600;
+      color: #facc15;
+    }
+    .error-text {
+      margin: -4px 0 0;
+      color: #fecaca;
+      font-weight: 500;
+      min-height: 1.2em;
+    }
+    .success-grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .success-grid div {
+      background: rgba(15, 23, 42, 0.55);
+      border-radius: 12px;
+      padding: 14px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }
+    .success-grid dt {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 0 0 4px;
+      color: rgba(226, 232, 240, 0.7);
+    }
+    .success-grid dd {
+      margin: 0;
+      font-size: 1rem;
+      color: #f8fafc;
+      word-break: break-word;
+    }
+    @media (max-width: 520px) {
+      body {
+        padding: 24px 12px;
+      }
+      .card {
+        padding: 20px;
+      }
+      button {
+        width: 100%;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Link your Steam account</h1>
+      <p class="lead">This page links your Steam account to <span data-team-name>our Rust servers</span> so we can build your player profile.</p>
+    </header>
+
+    <section id="status" class="card card--status" aria-live="polite">Checking your request…</section>
+
+    <form id="link-form" class="card" hidden>
+      <div>
+        <h2 style="margin-top: 0; margin-bottom: 6px; font-size: 1.35rem;">Confirm your Steam ID</h2>
+        <p class="hint" id="discord-hint"></p>
+        <p class="hint" id="expiry-hint"></p>
+      </div>
+      <label for="steam-id">SteamID64</label>
+      <input id="steam-id" name="steam-id" type="text" inputmode="numeric" autocomplete="off" placeholder="7656119XXXXXXXXXX" required />
+      <p class="hint">You can find this 17-digit number on <a href="https://steamid.io/lookup" target="_blank" rel="noopener">steamid.io</a> or from your Steam profile URL.</p>
+      <button id="submit-button" type="submit">Complete linking</button>
+      <p id="form-error" class="error-text" role="alert" aria-live="assertive"></p>
+    </form>
+
+    <section id="success" class="card card--success" hidden aria-live="polite">
+      <h2 style="margin-top: 0; font-size: 1.4rem;">You're all set!</h2>
+      <p id="success-message"></p>
+      <dl class="success-grid">
+        <div>
+          <dt>Discord account</dt>
+          <dd id="success-discord">—</dd>
+        </div>
+        <div>
+          <dt>Steam ID</dt>
+          <dd id="success-steamid">—</dd>
+        </div>
+        <div id="success-role-row" hidden>
+          <dt>Discord role</dt>
+          <dd id="success-role">—</dd>
+        </div>
+      </dl>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const apiBaseMeta = document.querySelector('meta[name="panel-api-base"]');
+      const apiBase = apiBaseMeta?.content?.trim() || '/api';
+      const statusCard = document.getElementById('status');
+      const form = document.getElementById('link-form');
+      const successCard = document.getElementById('success');
+      const steamInput = document.getElementById('steam-id');
+      const submitButton = document.getElementById('submit-button');
+      const formError = document.getElementById('form-error');
+      const discordHint = document.getElementById('discord-hint');
+      const expiryHint = document.getElementById('expiry-hint');
+      const successMessage = document.getElementById('success-message');
+      const successDiscord = document.getElementById('success-discord');
+      const successSteam = document.getElementById('success-steamid');
+      const successRoleRow = document.getElementById('success-role-row');
+      const successRole = document.getElementById('success-role');
+      const teamNameTargets = document.querySelectorAll('[data-team-name]');
+
+      let requestDetails = null;
+
+      function normaliseToken(raw) {
+        if (typeof raw !== 'string') return '';
+        const trimmed = raw.trim();
+        return trimmed.replace(/[^a-z0-9]/gi, '');
+      }
+
+      function setStatus(message, tone = 'info') {
+        statusCard.textContent = message;
+        statusCard.hidden = false;
+        statusCard.classList.remove('card--error', 'card--success');
+        if (tone === 'error') {
+          statusCard.classList.add('card--error');
+        } else if (tone === 'success') {
+          statusCard.classList.add('card--success');
+        }
+      }
+
+      function hideStatus() {
+        statusCard.hidden = true;
+      }
+
+      function setTeamName(name) {
+        if (name) {
+          teamNameTargets.forEach((el) => {
+            el.textContent = name;
+          });
+          document.title = `Link your Steam account · ${name}`;
+        }
+      }
+
+      function describeDiscordUser(record) {
+        const tag = record?.discordUsername || record?.discordId || '';
+        if (!tag) return 'Discord account';
+        if (record.discordUsername && record.discordId) {
+          return `${record.discordUsername} (${record.discordId})`;
+        }
+        return tag;
+      }
+
+      function formatExpiry(iso) {
+        if (!iso) return '';
+        const date = new Date(iso);
+        if (Number.isNaN(date.valueOf())) return '';
+        return date.toLocaleString(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short'
+        });
+      }
+
+      function extractTokenFromLocation() {
+        const url = new URL(window.location.href);
+        const paramsToken = normaliseToken(url.searchParams.get('token'));
+        if (paramsToken) return paramsToken;
+        const parts = url.pathname.split('/').filter(Boolean);
+        const requestIndex = parts.lastIndexOf('requests');
+        if (requestIndex !== -1 && parts[requestIndex + 1]) {
+          return normaliseToken(parts[requestIndex + 1]);
+        }
+        if (parts.length >= 2 && parts[parts.length - 2] === 'auth') {
+          return normaliseToken(parts[parts.length - 1]);
+        }
+        return '';
+      }
+
+      function mapApiError(code) {
+        switch (code) {
+          case 'not_found':
+            return 'This link could not be found. Ask your admin for a new one.';
+          case 'already_completed':
+            return 'This link was already used. Request a fresh link if you still need access.';
+          case 'expired':
+            return 'This link has expired. Generate a new link from the control panel to continue.';
+          case 'invalid_token':
+            return 'The request token is missing or invalid.';
+          case 'discord_mismatch':
+            return 'The Discord account on this link does not match the one that opened it.';
+          case 'invalid_steam_id':
+            return 'That SteamID64 did not look valid. Double-check the number and try again.';
+          case 'profile_upsert_failed':
+            return 'We could not save the profile. Please try again in a moment.';
+          case 'not_supported':
+            return 'Account linking is not enabled on this server yet.';
+          default:
+            return 'Something went wrong while completing the link. Please try again shortly.';
+        }
+      }
+
+      async function loadRequest(token) {
+        setStatus('Checking your request…');
+        try {
+          const response = await fetch(`${apiBase}/auth/requests/${encodeURIComponent(token)}`, {
+            credentials: 'include'
+          });
+          if (!response.ok) {
+            let message = 'This link is not available right now.';
+            try {
+              const body = await response.json();
+              message = mapApiError(body?.error);
+            } catch (err) {
+              console.warn('Failed to parse auth request error', err);
+            }
+            setStatus(message, 'error');
+            return;
+          }
+          const data = await response.json();
+          requestDetails = { ...data, token: data.token || token };
+          setTeamName(data.teamName);
+          if (data.discordUsername || data.discordId) {
+            const label = describeDiscordUser(data);
+            discordHint.textContent = `Discord account: ${label}`;
+          } else {
+            discordHint.textContent = '';
+          }
+          const expiresAt = formatExpiry(data.expiresAt);
+          if (expiresAt) {
+            expiryHint.textContent = `This link expires on ${expiresAt}.`;
+          } else {
+            expiryHint.textContent = '';
+          }
+          hideStatus();
+          form.hidden = false;
+          steamInput.focus({ preventScroll: true });
+        } catch (err) {
+          console.error('Failed to load account link request', err);
+          setStatus('We could not reach the server. Please refresh the page and try again.', 'error');
+        }
+      }
+
+      async function submitForm(event) {
+        event.preventDefault();
+        if (!requestDetails?.token) {
+          setStatus('This link is no longer valid. Please request a new one.', 'error');
+          form.hidden = true;
+          return;
+        }
+        const steamId = steamInput.value.trim();
+        if (!/^\d{17}$/.test(steamId)) {
+          formError.textContent = 'Enter the 17-digit SteamID64 linked to your Steam account.';
+          steamInput.focus();
+          return;
+        }
+        formError.textContent = '';
+        submitButton.disabled = true;
+        submitButton.textContent = 'Linking…';
+        try {
+          const response = await fetch(`${apiBase}/auth/requests/${encodeURIComponent(requestDetails.token)}/complete`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ steamId })
+          });
+          if (!response.ok) {
+            let message = 'Something went wrong while completing the link. Please try again.';
+            try {
+              const body = await response.json();
+              message = mapApiError(body?.error);
+            } catch (err) {
+              console.warn('Failed to parse account link completion error', err);
+            }
+            formError.textContent = message;
+            submitButton.disabled = false;
+            submitButton.textContent = 'Complete linking';
+            return;
+          }
+          const result = await response.json();
+          form.hidden = true;
+          form.reset();
+          const linkedTeam = requestDetails.teamName || '';
+          successMessage.textContent = linkedTeam
+            ? `Your player profile for ${linkedTeam} is now connected. You can return to Discord and continue.`
+            : 'Your player profile is now connected. You can return to Discord and continue.';
+          successDiscord.textContent = describeDiscordUser({
+            discordUsername: result.discordUsername || requestDetails.discordUsername,
+            discordId: result.discordId || requestDetails.discordId
+          });
+          successSteam.textContent = result.steamId || steamId;
+          if (result.assignedDiscordRoleId) {
+            successRoleRow.hidden = false;
+            successRole.textContent = result.assignedDiscordRoleId;
+          } else {
+            successRoleRow.hidden = true;
+            successRole.textContent = '—';
+          }
+          setStatus('Link completed successfully!', 'success');
+          successCard.hidden = false;
+          successCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (err) {
+          console.error('Failed to complete account link request', err);
+          formError.textContent = 'We could not reach the server. Please check your connection and try again.';
+          submitButton.disabled = false;
+          submitButton.textContent = 'Complete linking';
+        }
+      }
+
+      const token = extractTokenFromLocation();
+      if (!token) {
+        setStatus('This link is missing its request token. Please use the full link you received.', 'error');
+        return;
+      }
+      loadRequest(token);
+      form.addEventListener('submit', submitForm);
+    })();
+  </script>
+</body>
+</html>

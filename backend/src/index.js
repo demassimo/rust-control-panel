@@ -58,6 +58,9 @@ const MAP_STORAGE_DIR = path.join(DATA_DIR, 'maps');
 const MAX_MAP_IMAGE_BYTES = 40 * 1024 * 1024;
 const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
 const PANEL_PUBLIC_URL = normalizeBaseUrl(process.env.PANEL_PUBLIC_URL);
+const APP_URL_FROM_ENV = normalizeBaseUrl(process.env.APP_URL);
+const LEGACY_PUBLIC_APP_URL = normalizeBaseUrl(process.env.PUBLIC_APP_URL);
+const TEAM_AUTH_APP_URL = APP_URL_FROM_ENV || PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || '';
 
 import {
   extractInteger,
@@ -114,9 +117,6 @@ const TEAM_AUTH_LINK_TTL_MS = (() => {
   if (Number.isFinite(value) && value >= 60 * 1000) return Math.floor(value);
   return 15 * 60 * 1000;
 })();
-const PUBLIC_APP_URL = process.env.PUBLIC_APP_URL
-  ? process.env.PUBLIC_APP_URL.trim().replace(/\/+$/, '')
-  : null;
 const AUTH_COOKIE_SECURE = (() => {
   if (typeof process.env.COOKIE_SECURE === 'string') {
     const flag = process.env.COOKIE_SECURE.trim().toLowerCase();
@@ -5100,7 +5100,7 @@ function generateTeamAuthToken() {
 function buildTeamAuthLink(token) {
   const safe = typeof token === 'string' ? token.trim() : '';
   if (!safe) return null;
-  if (PUBLIC_APP_URL) return `${PUBLIC_APP_URL}/auth/requests/${safe}`;
+  if (TEAM_AUTH_APP_URL) return `${TEAM_AUTH_APP_URL}/auth/requests/${safe}`;
   return `/auth/requests/${safe}`;
 }
 
@@ -6074,6 +6074,23 @@ app.get('/api/auth/requests/:token', async (req, res) => {
         teamName = team?.name || null;
       } catch (err) {
         console.warn('failed to load team for auth request', err);
+      }
+    }
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    let cookieId = sanitizeCookieId(cookieJar.get(TEAM_AUTH_COOKIE_NAME) || null);
+    if (!cookieId) {
+      cookieId = sanitizeCookieId(crypto.randomBytes(16).toString('hex'));
+      if (cookieId) {
+        try {
+          res.cookie(TEAM_AUTH_COOKIE_NAME, cookieId, {
+            httpOnly: true,
+            sameSite: 'lax',
+            maxAge: TEAM_AUTH_COOKIE_MAX_AGE_MS,
+            secure: AUTH_COOKIE_SECURE
+          });
+        } catch (err) {
+          console.warn('failed to prime team auth cookie', err);
+        }
       }
     }
     res.json({
