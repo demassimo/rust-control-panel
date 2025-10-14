@@ -777,8 +777,13 @@ function createApi(dbh, dialect) {
       const discordId = typeof discord_id === 'string' ? discord_id.trim() : '';
       const expires = expires_at instanceof Date ? expires_at.toISOString() : (typeof expires_at === 'string' ? expires_at : '');
       if (!token || !discordId || !expires) return null;
-      const requestedBy = Number(requested_by_user_id);
-      const requestedByValue = Number.isFinite(requestedBy) ? Math.trunc(requestedBy) : null;
+      let requestedByValue = null;
+      if (requested_by_user_id != null) {
+        const requestedBy = Number(requested_by_user_id);
+        if (Number.isFinite(requestedBy) && requestedBy > 0) {
+          requestedByValue = Math.trunc(requestedBy);
+        }
+      }
       const usernameValue = typeof discord_username === 'string' ? discord_username : null;
       const refreshRequest = async (existing) => {
         if (!existing?.id) return null;
