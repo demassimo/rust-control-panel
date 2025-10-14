@@ -780,17 +780,8 @@ function createApi(dbh, dialect) {
       const requestedBy = Number(requested_by_user_id);
       const requestedByValue = Number.isFinite(requestedBy) ? Math.trunc(requestedBy) : null;
       const usernameValue = typeof discord_username === 'string' ? discord_username : null;
-      const existing = await dbh.get(
-        `SELECT *
-           FROM team_auth_requests
-          WHERE team_id=?
-            AND discord_id=?
-            AND completed_at IS NULL
-          ORDER BY id DESC
-          LIMIT 1`,
-        [teamNumeric, discordId]
-      );
-      if (existing?.id != null) {
+      const refreshRequest = async (existing) => {
+        if (!existing?.id) return null;
         const nextRequestedBy = requestedByValue != null ? requestedByValue : (existing.requested_by_user_id ?? null);
         const nextUsername = usernameValue != null ? usernameValue : (existing.discord_username ?? null);
         await dbh.run(
@@ -805,13 +796,44 @@ function createApi(dbh, dialect) {
           [nextRequestedBy, nextUsername, token, expires, existing.id]
         );
         return await dbh.get('SELECT * FROM team_auth_requests WHERE id=?', [existing.id]);
-      }
-      const result = await dbh.run(
-        `INSERT INTO team_auth_requests(team_id, requested_by_user_id, discord_id, discord_username, state_token, expires_at)
-         VALUES(?,?,?,?,?,?)`,
-        [teamNumeric, requestedByValue, discordId, usernameValue, token, expires]
+      };
+      const existing = await dbh.get(
+        `SELECT *
+           FROM team_auth_requests
+          WHERE team_id=?
+            AND discord_id=?
+            AND completed_at IS NULL
+          ORDER BY id DESC
+          LIMIT 1`,
+        [teamNumeric, discordId]
       );
-      return await dbh.get('SELECT * FROM team_auth_requests WHERE id=?', [result.lastID]);
+      if (existing?.id != null) {
+        return await refreshRequest(existing);
+      }
+      try {
+        const result = await dbh.run(
+          `INSERT INTO team_auth_requests(team_id, requested_by_user_id, discord_id, discord_username, state_token, expires_at)
+           VALUES(?,?,?,?,?,?)`,
+          [teamNumeric, requestedByValue, discordId, usernameValue, token, expires]
+        );
+        return await dbh.get('SELECT * FROM team_auth_requests WHERE id=?', [result.lastID]);
+      } catch (err) {
+        if (err?.code === 'SQLITE_CONSTRAINT') {
+          const fallback = await dbh.get(
+            `SELECT *
+               FROM team_auth_requests
+              WHERE team_id=?
+                AND discord_id=?
+              ORDER BY id DESC
+              LIMIT 1`,
+            [teamNumeric, discordId]
+          );
+          if (fallback?.id != null) {
+            return await refreshRequest(fallback);
+          }
+        }
+        throw err;
+      }
     },
     async getTeamAuthRequestByToken(token) {
       const trimmed = typeof token === 'string' ? token.trim() : '';
