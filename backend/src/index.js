@@ -5100,8 +5100,10 @@ function generateTeamAuthToken() {
 function buildTeamAuthLink(token) {
   const safe = typeof token === 'string' ? token.trim() : '';
   if (!safe) return null;
-  if (TEAM_AUTH_APP_URL) return `${TEAM_AUTH_APP_URL}/auth/requests/${safe}`;
-  return `/auth/requests/${safe}`;
+  if (TEAM_AUTH_APP_URL) {
+    return `${TEAM_AUTH_APP_URL}/auth/request.html?token=${safe}`;
+  }
+  return `/auth/request.html?token=${safe}`;
 }
 
 async function ensureDiscordMemberRole({ token, guildId, userId, roleId }) {
