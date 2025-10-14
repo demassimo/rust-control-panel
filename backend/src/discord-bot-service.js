@@ -235,8 +235,8 @@ const DEFAULT_TEAM_AUTH_SETTINGS = Object.freeze({
 function buildTeamAuthLink(token) {
   const safe = typeof token === 'string' ? token.trim() : '';
   if (!safe) return null;
-  if (TEAM_AUTH_APP_URL) return `${TEAM_AUTH_APP_URL}/auth/requests/${safe}`;
-  return `/auth/requests/${safe}`;
+  if (TEAM_AUTH_APP_URL) return `${TEAM_AUTH_APP_URL}/request.html?token=${safe}`;
+  return `/request.html?token=${safe}`;
 }
 
 async function loadTeamAuthSettings(teamId) {
