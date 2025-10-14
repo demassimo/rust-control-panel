@@ -244,7 +244,7 @@ async function loadTeamAuthSettings(teamId) {
     return { ...DEFAULT_TEAM_AUTH_SETTINGS };
   }
   const numeric = Number(teamId);
-  if (!Number.isFinite(numeric)) {
+  if (!Number.isFinite(numeric) || numeric <= 0) {
     return { ...DEFAULT_TEAM_AUTH_SETTINGS };
   }
   try {
@@ -264,7 +264,7 @@ async function loadTeamAuthSettings(teamId) {
 async function saveTeamAuthSettings(teamId, updates) {
   if (typeof db.setTeamAuthSettings !== 'function') return 0;
   const numeric = Number(teamId);
-  if (!Number.isFinite(numeric)) return 0;
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
   try {
     return await db.setTeamAuthSettings(numeric, updates);
   } catch (err) {
@@ -2365,9 +2365,13 @@ async function handleRustStatusCommand(state, interaction) {
 }
 
 async function handleAuthCommand(state, interaction) {
-  const teamId = Number(state?.teamId);
+  const rawTeamId = state?.teamId;
+  const numericTeamId = rawTeamId == null ? Number.NaN : Number(rawTeamId);
+  const teamId = Number.isFinite(numericTeamId) && numericTeamId > 0
+    ? Math.trunc(numericTeamId)
+    : null;
   const supported =
-    Number.isFinite(teamId) &&
+    teamId != null &&
     typeof db.createTeamAuthRequest === 'function' &&
     typeof db.getTeamAuthSettings === 'function';
   if (!supported) {

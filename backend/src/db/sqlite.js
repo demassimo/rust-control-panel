@@ -772,7 +772,7 @@ function createApi(dbh, dialect) {
     },
     async createTeamAuthRequest({ team_id, requested_by_user_id = null, discord_id, discord_username = null, state_token, expires_at }) {
       const teamNumeric = Number(team_id);
-      if (!Number.isFinite(teamNumeric)) return null;
+      if (!Number.isFinite(teamNumeric) || teamNumeric <= 0) return null;
       const token = typeof state_token === 'string' ? state_token.trim() : '';
       const discordId = typeof discord_id === 'string' ? discord_id.trim() : '';
       const expires = expires_at instanceof Date ? expires_at.toISOString() : (typeof expires_at === 'string' ? expires_at : '');
