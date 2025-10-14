@@ -656,21 +656,16 @@ function createApi(pool, dialect) {
       const discordId = typeof discord_id === 'string' ? discord_id.trim() : '';
       const expires = normaliseDateTime(expires_at);
       if (!token || !discordId || !expires) return null;
-      const requestedBy = Number(requested_by_user_id);
-      const requestedByValue = Number.isFinite(requestedBy) ? Math.trunc(requestedBy) : null;
+      let requestedByValue = null;
+      if (requested_by_user_id != null) {
+        const requestedBy = Number(requested_by_user_id);
+        if (Number.isFinite(requestedBy) && requestedBy > 0) {
+          requestedByValue = Math.trunc(requestedBy);
+        }
+      }
       const usernameValue = typeof discord_username === 'string' ? discord_username : null;
-      const existingRows = await exec(
-        `SELECT *
-           FROM team_auth_requests
-          WHERE team_id=?
-            AND discord_id=?
-            AND completed_at IS NULL
-          ORDER BY id DESC
-          LIMIT 1`,
-        [teamNumeric, discordId]
-      );
-      if (Array.isArray(existingRows) && existingRows.length) {
-        const existing = existingRows[0];
+      const refreshRequest = async (existing) => {
+        if (!existing?.id) return null;
         const nextRequestedBy = requestedByValue != null ? requestedByValue : (existing.requested_by_user_id ?? null);
         const nextUsername = usernameValue != null ? usernameValue : (existing.discord_username ?? null);
         await exec(
@@ -686,14 +681,45 @@ function createApi(pool, dialect) {
         );
         const refreshed = await exec('SELECT * FROM team_auth_requests WHERE id=? LIMIT 1', [existing.id]);
         return Array.isArray(refreshed) && refreshed.length ? refreshed[0] : null;
-      }
-      await exec(
-        `INSERT INTO team_auth_requests(team_id, requested_by_user_id, discord_id, discord_username, state_token, expires_at)
-         VALUES(?,?,?,?,?,?)`,
-        [teamNumeric, requestedByValue, discordId, usernameValue, token, expires]
+      };
+      const existingRows = await exec(
+        `SELECT *
+           FROM team_auth_requests
+          WHERE team_id=?
+            AND discord_id=?
+            AND completed_at IS NULL
+          ORDER BY id DESC
+          LIMIT 1`,
+        [teamNumeric, discordId]
       );
-      const rows = await exec('SELECT * FROM team_auth_requests WHERE state_token=?', [token]);
-      return Array.isArray(rows) && rows.length ? rows[0] : null;
+      if (Array.isArray(existingRows) && existingRows.length) {
+        return await refreshRequest(existingRows[0]);
+      }
+      try {
+        await exec(
+          `INSERT INTO team_auth_requests(team_id, requested_by_user_id, discord_id, discord_username, state_token, expires_at)
+           VALUES(?,?,?,?,?,?)`,
+          [teamNumeric, requestedByValue, discordId, usernameValue, token, expires]
+        );
+        const rows = await exec('SELECT * FROM team_auth_requests WHERE state_token=?', [token]);
+        return Array.isArray(rows) && rows.length ? rows[0] : null;
+      } catch (err) {
+        if (err?.code === 'ER_DUP_ENTRY') {
+          const fallback = await exec(
+            `SELECT *
+               FROM team_auth_requests
+              WHERE team_id=?
+                AND discord_id=?
+              ORDER BY id DESC
+              LIMIT 1`,
+            [teamNumeric, discordId]
+          );
+          if (Array.isArray(fallback) && fallback.length) {
+            return await refreshRequest(fallback[0]);
+          }
+        }
+        throw err;
+      }
     },
     async getTeamAuthRequestByToken(token) {
       const trimmed = typeof token === 'string' ? token.trim() : '';
