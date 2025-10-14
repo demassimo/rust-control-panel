@@ -1969,7 +1969,14 @@ async function ensureStatusMessage(state, embed) {
   let message = null;
   if (state.statusMessageId) {
     try {
-      message = await channel.messages.fetch(state.statusMessageId);
+      message = await withDiscordRetry(
+        () => channel.messages.fetch(state.statusMessageId),
+        {
+          attempts: 4,
+          delayMs: 1500,
+          description: `fetch status message ${state.statusMessageId} for server ${state.serverId}`
+        }
+      );
     } catch (err) {
       if (err?.code !== 10008) {
         console.error(`failed to fetch status message ${state.statusMessageId} for server ${state.serverId}`, err);
@@ -1981,9 +1988,23 @@ async function ensureStatusMessage(state, embed) {
 
   try {
     if (message) {
-      await message.edit({ embeds: [embed] });
+      await withDiscordRetry(
+        () => message.edit({ embeds: [embed] }),
+        {
+          attempts: 4,
+          delayMs: 1500,
+          description: `edit status message ${state.statusMessageId} for server ${state.serverId}`
+        }
+      );
     } else {
-      const sent = await channel.send({ embeds: [embed] });
+      const sent = await withDiscordRetry(
+        () => channel.send({ embeds: [embed] }),
+        {
+          attempts: 4,
+          delayMs: 1500,
+          description: `send status message for server ${state.serverId}`
+        }
+      );
       state.statusMessageId = sent.id;
       await persistIntegration(state);
     }
@@ -1991,6 +2012,41 @@ async function ensureStatusMessage(state, embed) {
   } catch (err) {
     console.error(`failed to update status embed for server ${state.serverId}`, err);
   }
+}
+
+function isRetryableDiscordError(err) {
+  if (!err) return false;
+  const retryableCodes = new Set(['EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT']);
+  const code = typeof err.code === 'string' ? err.code : typeof err.errno === 'string' ? err.errno : null;
+  if (code && retryableCodes.has(code)) {
+    return true;
+  }
+  const message = typeof err.message === 'string' ? err.message : '';
+  return retryableCodes.has('EAI_AGAIN') && message.includes('EAI_AGAIN');
+}
+
+async function withDiscordRetry(operation, { attempts = 3, delayMs = 1000, description = 'discord operation' } = {}) {
+  let attempt = 0;
+  let lastError = null;
+  while (attempt < attempts) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastError = err;
+      attempt += 1;
+      if (!isRetryableDiscordError(err) || attempt >= attempts) {
+        throw err;
+      }
+      const waitTime = Math.max(delayMs, 50);
+      console.warn(
+        `temporary failure attempting to ${description}; retrying (${attempt}/${attempts}) in ${waitTime}ms`,
+        err
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+      delayMs = Math.min(delayMs * 2, 10000);
+    }
+  }
+  throw lastError;
 }
 
 async function updateBot(state, integration) {
