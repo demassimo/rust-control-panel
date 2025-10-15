@@ -352,33 +352,6 @@
           </section>
         </section>
 
-        <section id="discordModulesSection" class="team-section" aria-labelledby="discordModulesTitle">
-          <div class="team-section-head">
-            <h4 id="discordModulesTitle">Discord modules</h4>
-            <p class="muted small">Configure ticketing, Ruststates, and authentication tooling for your team.</p>
-          </div>
-          <div class="card module-card module-hidden" data-module-card="discord-ticketing">
-            <div class="card-header">
-              <h3><span data-module-title>Ticket module</span></h3>
-              <div class="module-actions" data-module-actions></div>
-            </div>
-            <div class="module-body" data-module-slot="discord-ticketing"></div>
-          </div>
-          <div class="card module-card module-hidden" data-module-card="discord-ruststates">
-            <div class="card-header">
-              <h3><span data-module-title>Ruststates module</span></h3>
-              <div class="module-actions" data-module-actions></div>
-            </div>
-            <div class="module-body" data-module-slot="discord-ruststates"></div>
-          </div>
-          <div class="card module-card module-hidden" data-module-card="discord-auth">
-            <div class="card-header">
-              <h3><span data-module-title>Auth module</span></h3>
-              <div class="module-actions" data-module-actions></div>
-            </div>
-            <div class="module-body" data-module-slot="discord-auth"></div>
-          </div>
-        </section>
       </section>
 
       <div id="userDetailsOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
@@ -604,6 +577,27 @@
                             No stats will be posted.
                           </p>
                         </div>
+                        <div class="discord-config-group">
+                          <h5 class="discord-config-title">Ticketing</h5>
+                          <dl class="discord-config-list">
+                            <div>
+                              <dt>Status</dt>
+                              <dd id="discord-ticketing-summary-status">Disabled</dd>
+                            </div>
+                            <div>
+                              <dt>Category</dt>
+                              <dd id="discord-ticketing-summary-category">Not set</dd>
+                            </div>
+                            <div>
+                              <dt>Log channel</dt>
+                              <dd id="discord-ticketing-summary-log">Not set</dd>
+                            </div>
+                            <div>
+                              <dt>Staff role</dt>
+                              <dd id="discord-ticketing-summary-role">Not set</dd>
+                            </div>
+                          </dl>
+                        </div>
                       </div>
                     </section>
                     <section class="discord-status-editor">
@@ -691,6 +685,76 @@
                               <span>Last update timestamp</span>
                             </label>
                           </div>
+                        </fieldset>
+                        <fieldset class="field-grid">
+                          <legend class="field-label">Ticketing</legend>
+                          <label class="checkbox">
+                            <input type="checkbox" id="discord-ticketing-enabled" />
+                            <span>Enable Discord ticketing panel</span>
+                          </label>
+                          <div class="field-grid-row">
+                            <label class="inline" for="discord-ticketing-category">
+                              Ticket category ID
+                              <input
+                                type="text"
+                                id="discord-ticketing-category"
+                                inputmode="numeric"
+                                autocomplete="off"
+                                spellcheck="false"
+                                placeholder="e.g. 123456789012345678"
+                              />
+                            </label>
+                            <label class="inline" for="discord-ticketing-log">
+                              Log channel ID
+                              <input
+                                type="text"
+                                id="discord-ticketing-log"
+                                inputmode="numeric"
+                                autocomplete="off"
+                                spellcheck="false"
+                                placeholder="Optional"
+                              />
+                            </label>
+                          </div>
+                          <div class="field-grid-row">
+                            <label class="inline" for="discord-ticketing-role">
+                              Staff role ID
+                              <input
+                                type="text"
+                                id="discord-ticketing-role"
+                                inputmode="numeric"
+                                autocomplete="off"
+                                spellcheck="false"
+                                placeholder="Role allowed to manage tickets"
+                              />
+                            </label>
+                            <label class="checkbox">
+                              <input type="checkbox" id="discord-ticketing-ping" />
+                              <span>Ping staff role when a ticket opens</span>
+                            </label>
+                          </div>
+                          <label class="inline" for="discord-ticketing-panel-channel">
+                            Panel channel ID
+                            <input
+                              type="text"
+                              id="discord-ticketing-panel-channel"
+                              inputmode="numeric"
+                              autocomplete="off"
+                              spellcheck="false"
+                              placeholder="Optional panel channel"
+                            />
+                          </label>
+                          <label class="inline" for="discord-ticketing-panel-message">
+                            Panel message ID
+                            <input
+                              type="text"
+                              id="discord-ticketing-panel-message"
+                              inputmode="numeric"
+                              autocomplete="off"
+                              spellcheck="false"
+                              placeholder="Optional existing panel message"
+                            />
+                          </label>
                         </fieldset>
                         <div class="form-actions">
                           <button type="submit" class="accent" id="discord-status-save">Save status settings</button>
@@ -1093,6 +1157,7 @@
   <script src="assets/modules/players.js"></script>
   <script src="assets/modules/team-auth.js"></script>
   <script src="assets/modules/map.js"></script>
+  <script src="assets/modules/discord-modules.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
   <script src="assets/js/server-settings.js"></script>
   <script src="assets/app.js"></script>
