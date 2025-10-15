@@ -42,6 +42,7 @@ When a player chooses the Steam option the backend issues an OpenID request, val
 1. As an administrator, create a new team-auth request from **Team access → Invite teammate** (the current UI entry point for account linking) to generate a `/request.html?token=...` link.
 2. Open the link in an incognito window and complete the Discord login. You should be redirected back with a `discord_status=linked` parameter and a `team_auth_session` cookie.
 3. Repeat for Steam — the page should now show `steam_status=linked`.
+   - While the request page is open, the backend inspects the persistent cookie and responds with a `cookieMatches` array so staff can review any other Discord/Steam identities that used the same browser before completing the link.【F:backend/src/index.js†L6690-L6745】【F:backend/src/index.js†L5495-L5566】
 4. Submit the SteamID64 form to finish the request. The backend verifies both sessions, links the Discord snowflake to the SteamID64 for alt-account discovery, and clears the temporary cookies before marking the linking record complete.【F:backend/src/index.js†L6525-L6664】
 
 If any step fails, inspect the query parameters appended to the return URL for specific error codes and review the backend logs for detailed traces.

@@ -996,6 +996,17 @@ function createApi(dbh, dialect) {
       const updated = await dbh.get('SELECT * FROM team_auth_cookies WHERE id=?', [result.lastID]);
       return { existing: null, updated };
     },
+    async getTeamAuthCookieHistory(teamId, cookieId) {
+      const teamNumeric = Number(teamId);
+      if (!Number.isFinite(teamNumeric)) return [];
+      const cookie = typeof cookieId === 'string' ? cookieId.trim() : '';
+      if (!cookie) return [];
+      const rows = await dbh.all(
+        'SELECT * FROM team_auth_cookies WHERE team_id=? AND cookie_id=? ORDER BY datetime(last_seen_at) DESC, id DESC',
+        [teamNumeric, cookie]
+      );
+      return Array.isArray(rows) ? rows : [];
+    },
     async createTeamAuthAltLink({ team_id, primary_profile_id, alt_profile_id, reason = null }) {
       const teamNumeric = Number(team_id);
       const primaryId = Number(primary_profile_id);
