@@ -612,6 +612,18 @@ label.inline input[type="checkbox"]:focus-visible,
   backdrop-filter: blur(16px);
 }
 
+.linked-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-glow);
+  padding: 32px;
+  backdrop-filter: blur(16px);
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -1034,6 +1046,23 @@ label.inline input[type="checkbox"]:focus-visible,
 .team-discord-form h5 {
   margin: 0;
   font-size: 1rem;
+}
+
+.team-discord-status {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.workspace-discord-section {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.team-discord-server-select {
+  max-width: 420px;
 }
 
 .team-discord-server-body {
@@ -4110,7 +4139,8 @@ button.chat-filter-btn:focus-visible {
 }
 
 .discord-status,
-.discord-status-editor {
+.discord-status-editor,
+.discord-config {
   display: flex;
   flex-direction: column;
   gap: 20px;

@@ -42,7 +42,7 @@ The frontend dashboard is composed from a static HTML shell (`frontend/index.htm
   `id`, declare the card title/icon, and provide a `setup(ctx)` function. Import shared utilities from `frontend/assets/app.js`
   or create a reusable helper under `frontend/assets/js/`.
 - **Linked account directory**: `frontend/assets/modules/team-auth.js` demonstrates consuming the `/api/team/auth/profiles`
-  endpoint to render Discord/Steam link data inside the workspace. Use it as a reference for modules that need to listen to
+  endpoint to render Discord/Steam link data on the dashboard. Use it as a reference for modules that need to listen to
   team-switch events or call authenticated APIs from within the module context.
 - **Global scripts**: Cross-cutting helpers that need to run before modules are initialised belong in `frontend/assets/js/`. These
   scripts are loaded directly via `<script>` tags in `frontend/index.html`.

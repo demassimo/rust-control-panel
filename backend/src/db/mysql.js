@@ -878,6 +878,17 @@ function createApi(pool, dialect) {
       const inserted = await exec('SELECT * FROM team_auth_cookies WHERE id=?', [insert.insertId]);
       return { existing: null, updated: Array.isArray(inserted) && inserted.length ? inserted[0] : null };
     },
+    async getTeamAuthCookieHistory(teamId, cookieId) {
+      const teamNumeric = Number(teamId);
+      if (!Number.isFinite(teamNumeric)) return [];
+      const cookie = typeof cookieId === 'string' ? cookieId.trim() : '';
+      if (!cookie) return [];
+      const rows = await exec(
+        'SELECT * FROM team_auth_cookies WHERE team_id=? AND cookie_id=? ORDER BY last_seen_at DESC, id DESC',
+        [teamNumeric, cookie]
+      );
+      return Array.isArray(rows) ? rows : [];
+    },
     async createTeamAuthAltLink({ team_id, primary_profile_id, alt_profile_id, reason = null }) {
       const teamNumeric = Number(team_id);
       const primaryId = Number(primary_profile_id);

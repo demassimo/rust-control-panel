@@ -2218,7 +2218,6 @@
 
         const moderationMenuState = { open: false };
         const moderationMenuAboveClass = 'player-moderation-menu-list--above';
-        const moderationMenuGap = 6;
 
         const onModerationMenuDocumentClick = (event) => {
           if (!moderationMenu.contains(event.target)) {
@@ -2232,27 +2231,15 @@
           moderationMenuToggle.setAttribute('aria-expanded', 'true');
           moderationMenuList.classList.remove('hidden');
           moderationMenuList.classList.remove(moderationMenuAboveClass);
-          moderationMenuList.style.maxHeight = '';
 
           const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || document.body?.clientHeight || 0;
           if (viewportHeight) {
             const toggleRect = moderationMenuToggle.getBoundingClientRect();
-            const spaceBelow = Math.max(0, viewportHeight - toggleRect.bottom - moderationMenuGap);
-            const spaceAbove = Math.max(0, toggleRect.top - moderationMenuGap);
-            const viewportLimitedMax = Math.min(360, Math.round(viewportHeight * 0.7));
-            let availableSpace = spaceBelow;
-
-            if (spaceBelow < viewportLimitedMax && spaceAbove > spaceBelow) {
-              availableSpace = spaceAbove;
+            const menuRect = moderationMenuList.getBoundingClientRect();
+            const spaceBelow = viewportHeight - toggleRect.bottom;
+            const spaceAbove = toggleRect.top;
+            if (menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
               moderationMenuList.classList.add(moderationMenuAboveClass);
-            }
-
-            const computedMaxHeight = Math.min(
-              viewportLimitedMax,
-              availableSpace || viewportLimitedMax
-            );
-            if (computedMaxHeight > 0) {
-              moderationMenuList.style.maxHeight = `${computedMaxHeight}px`;
             }
           }
 
@@ -2265,7 +2252,6 @@
           moderationMenuToggle.setAttribute('aria-expanded', 'false');
           moderationMenuList.classList.add('hidden');
           moderationMenuList.classList.remove(moderationMenuAboveClass);
-          moderationMenuList.style.maxHeight = '';
           document.removeEventListener('click', onModerationMenuDocumentClick, true);
         }
 
