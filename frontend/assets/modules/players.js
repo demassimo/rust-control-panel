@@ -2217,6 +2217,7 @@
         footer.appendChild(actions);
 
         const moderationMenuState = { open: false };
+        const moderationMenuAboveClass = 'player-moderation-menu-list--above';
 
         const onModerationMenuDocumentClick = (event) => {
           if (!moderationMenu.contains(event.target)) {
@@ -2229,6 +2230,19 @@
           moderationMenuState.open = true;
           moderationMenuToggle.setAttribute('aria-expanded', 'true');
           moderationMenuList.classList.remove('hidden');
+          moderationMenuList.classList.remove(moderationMenuAboveClass);
+
+          const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || document.body?.clientHeight || 0;
+          if (viewportHeight) {
+            const toggleRect = moderationMenuToggle.getBoundingClientRect();
+            const menuRect = moderationMenuList.getBoundingClientRect();
+            const spaceBelow = viewportHeight - toggleRect.bottom;
+            const spaceAbove = toggleRect.top;
+            if (menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
+              moderationMenuList.classList.add(moderationMenuAboveClass);
+            }
+          }
+
           document.addEventListener('click', onModerationMenuDocumentClick, true);
         }
 
@@ -2237,6 +2251,7 @@
           moderationMenuState.open = false;
           moderationMenuToggle.setAttribute('aria-expanded', 'false');
           moderationMenuList.classList.add('hidden');
+          moderationMenuList.classList.remove(moderationMenuAboveClass);
           document.removeEventListener('click', onModerationMenuDocumentClick, true);
         }
 
