@@ -8781,15 +8781,34 @@ app.patch('/api/servers/:serverId/players/:steamid', auth, async (req, res) => {
 
 app.get('/api/players/:steamid', auth, async (req, res) => {
   try {
-    const p = await db.getPlayer(req.params.steamid);
-    if (!p) return res.status(404).json({ error: 'not_found' });
+    const baseRow = await db.getPlayer(req.params.steamid);
+    if (!baseRow) return res.status(404).json({ error: 'not_found' });
     const events = await db.listPlayerEvents(req.params.steamid, { limit: 50, offset: 0 });
     const teamId = req.authUser?.activeTeamId;
     let teamAuth = null;
     if (teamId != null) {
       teamAuth = await loadTeamAuthProfile(teamId, req.params.steamid, { includeAlts: true });
     }
-    res.json({ ...p, events, team_auth: teamAuth });
+
+    const payload = { ...baseRow, ...normaliseDbPlayer(baseRow) };
+    const rawServerId = req.query?.serverId ?? req.query?.server_id ?? null;
+    const serverId = toServerId(rawServerId);
+    if (
+      serverId != null &&
+      typeof db.getServerPlayer === 'function' &&
+      canAccessServer(req.authUser, serverId, 'players')
+    ) {
+      try {
+        const serverRow = await db.getServerPlayer(serverId, req.params.steamid);
+        if (serverRow) {
+          Object.assign(payload, normaliseServerPlayer(serverRow));
+        }
+      } catch (err) {
+        console.warn('failed to load server player details', err);
+      }
+    }
+
+    res.json({ ...payload, events, team_auth: teamAuth });
   } catch {
     res.status(500).json({ error: 'db_error' });
   }

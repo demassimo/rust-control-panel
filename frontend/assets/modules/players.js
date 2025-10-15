@@ -1972,7 +1972,14 @@
         if (basePlayer) renderModal(basePlayer, null);
         if (showLoading) setModalLoading(true);
         try {
-          const details = await ctx.api(`/players/${steamid}`);
+          let serverQuery = '';
+          const globalState = ctx.getState?.();
+          const serverIdValue = Number(state.serverId ?? globalState?.currentServerId);
+          if (Number.isFinite(serverIdValue) && serverIdValue > 0) {
+            const serverId = Math.trunc(serverIdValue);
+            serverQuery = `?serverId=${encodeURIComponent(serverId)}`;
+          }
+          const details = await ctx.api(`/players/${encodeURIComponent(steamid)}${serverQuery}`);
           if (!modalState.open || modalState.steamid !== target) return;
           renderModal(null, details);
           setModalStatus('');
