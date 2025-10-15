@@ -71,7 +71,9 @@ Team authentication links now rely on OAuth flows for both Discord and Steam. Co
 - `STEAM_OPENID_REALM` — optional OpenID realm sent to Steam (defaults to the request origin).
 - `TEAM_AUTH_STATE_SECRET` — secret used to sign OAuth state and session cookies (falls back to `JWT_SECRET`, but a dedicated value is recommended).
 
-With these values in place the `/request.html` flow prompts users to sign in with both providers before the panel links their Steam ID and assigns the Discord role configured for team authentication.
+With these values in place the `/request.html` flow prompts users to sign in with both providers before the panel links their Steam ID to their Discord account, assigns the configured team-auth role, and gives staff better visibility into potential alternate accounts.
+
+See [docs/team-auth-oauth.md](docs/team-auth-oauth.md) for a full walkthrough that covers provider setup, required environment variables, and troubleshooting tips for the linking flow.
 
 ## Access control
 

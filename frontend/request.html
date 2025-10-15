@@ -216,7 +216,7 @@
   <main>
     <header>
       <h1>Link your Discord and Steam accounts</h1>
-      <p class="lead">Securely connect both accounts to <span data-team-name>our Rust servers</span> so we can build your player profile and assign the correct Discord role.</p>
+      <p class="lead">Securely connect both accounts to <span data-team-name>our Rust servers</span> so staff can assign the correct Discord role to your player profile.</p>
     </header>
 
     <section id="status" class="card card--status" aria-live="polite">Checking your request…</section>
@@ -232,7 +232,7 @@
           <h3>Step 1 · Discord</h3>
           <span class="status-badge" id="discord-status-badge">Not connected</span>
         </header>
-        <p class="hint" id="discord-step-hint">Sign in with the Discord account that requested this link.</p>
+        <p class="hint" id="discord-step-hint">Sign in with the Discord account you're verifying so we can confirm the right Discord user.</p>
         <button type="button" id="discord-button" class="oauth-button oauth-button--discord">Connect Discord</button>
       </section>
       <section class="oauth-step" id="steam-step">
@@ -240,7 +240,7 @@
           <h3>Step 2 · Steam</h3>
           <span class="status-badge" id="steam-status-badge">Not connected</span>
         </header>
-        <p class="hint" id="steam-step-hint">Connect your Steam account after Discord is verified.</p>
+        <p class="hint" id="steam-step-hint">Connect the Steam account you play with so we can finish linking.</p>
         <button type="button" id="steam-button" class="oauth-button oauth-button--steam">Connect Steam</button>
       </section>
       <button id="submit-button" type="submit" disabled>Complete linking</button>
@@ -458,7 +458,7 @@
       if (discordErrorParam) {
         registerOAuthStatus(mapDiscordOAuthFeedback(discordErrorParam), 'error');
       } else if (discordStatusParam === 'linked') {
-        registerOAuthStatus('Discord account connected. Continue by linking Steam.', 'success');
+        registerOAuthStatus('Discord account connected. Continue by linking Steam to finish the setup.', 'success');
       }
 
       if (steamErrorParam) {
@@ -622,8 +622,8 @@
           form.hidden = true;
           const linkedTeam = requestDetails.teamName || '';
           successMessage.textContent = linkedTeam
-            ? `Your player profile for ${linkedTeam} is now connected. You can return to Discord and continue.`
-            : 'Your player profile is now connected. You can return to Discord and continue.';
+            ? `Your player profile for ${linkedTeam} is now linked to your Discord and Steam accounts. You can return to Discord and continue.`
+            : 'Your player profile is now linked to your Discord and Steam accounts. You can return to Discord and continue.';
           const discordSummary = {
             discordDisplayName: result.discordDisplayName || discordOAuth.discordDisplayName || null,
             discordUsername: result.discordUsername || discordOAuth.discordUsername || requestDetails.discordUsername,
