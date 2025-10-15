@@ -2234,21 +2234,24 @@
           moderationMenuList.style.transform = '';
 
           const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || document.body?.clientHeight || 0;
-          if (viewportHeight) {
+          const viewportRect = typeof overlay?.getBoundingClientRect === 'function' ? overlay.getBoundingClientRect() : null;
+          const viewportTop = viewportRect ? viewportRect.top : 0;
+          const viewportBottom = viewportRect ? viewportRect.bottom : viewportHeight;
+          if (Number.isFinite(viewportBottom) && Number.isFinite(viewportTop) && viewportBottom > viewportTop) {
             const toggleRect = moderationMenuToggle.getBoundingClientRect();
             const menuRect = moderationMenuList.getBoundingClientRect();
-            const spaceBelow = viewportHeight - toggleRect.bottom;
-            const spaceAbove = toggleRect.top;
+            const spaceBelow = viewportBottom - toggleRect.bottom;
+            const spaceAbove = toggleRect.top - viewportTop;
             if (menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
               moderationMenuList.classList.add(moderationMenuAboveClass);
             }
 
             const adjustedRect = moderationMenuList.getBoundingClientRect();
             let shift = 0;
-            if (adjustedRect.top < 0) {
-              shift = -adjustedRect.top;
-            } else if (adjustedRect.bottom > viewportHeight) {
-              shift = viewportHeight - adjustedRect.bottom;
+            if (adjustedRect.top < viewportTop) {
+              shift = viewportTop - adjustedRect.top;
+            } else if (adjustedRect.bottom > viewportBottom) {
+              shift = viewportBottom - adjustedRect.bottom;
             }
             if (shift !== 0) {
               moderationMenuList.style.transform = `translateY(${shift}px)`;
