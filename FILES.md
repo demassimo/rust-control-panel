@@ -14,7 +14,7 @@ This document summarizes the purpose of the key files and directories that make 
 ## Backend service (`backend/`)
 - `package.json` / `package-lock.json` – Declare backend runtime dependencies (Express, Socket.IO, sqlite/mysql clients, Discord SDK) and start scripts.
 - `Dockerfile` – Produces a container image for the backend with Node.js 18, copying the source and installing dependencies.
-- `src/index.js` – Entry point that boots Express, attaches Socket.IO, seeds the database, manages RCON sessions, persists chat history, streams kill-feed events, exposes REST APIs (including the Discord/Steam player linking flow), and streams live server data to clients.【F:backend/src/index.js†L1-L160】【F:backend/src/index.js†L708-L846】【F:backend/src/index.js†L5996-L6231】
+- `src/index.js` – Entry point that boots Express, attaches Socket.IO, seeds the database, manages RCON sessions, persists chat history, streams kill-feed events, exposes REST APIs (including the Discord/Steam player linking flow), and streams live server data to clients. Also emits optional audit messages to a configured Discord log channel whenever a player completes the linking flow.【F:backend/src/index.js†L1-L160】【F:backend/src/index.js†L708-L846】【F:backend/src/index.js†L6640-L6742】
 - `src/auth.js` – JWT-based authentication helpers used by HTTP routes and WebSocket handshakes, including middleware for enforcing admin access.【F:backend/src/auth.js†L1-L36】
 - `src/permissions.js` – Normalises role definitions, checks per-server capabilities, filters data by access level, and serialises permission payloads.【F:backend/src/permissions.js†L1-L120】
 - `src/db/index.js` – Chooses the configured database driver (SQLite or MySQL), ensures schema migrations, seeds default roles, and provisions the first admin account.【F:backend/src/db/index.js†L1-L63】
@@ -37,6 +37,7 @@ This document summarizes the purpose of the key files and directories that make 
 - `assets/modules/live-players.js` – Displays the live player list and syncs statuses from the backend.
 - `assets/modules/players-graph.js` – Visualises historical player counts for the selected server.
 - `assets/modules/players.js` – Provides searchable player management tools, including moderation actions, player notes, profile metadata, and now surfaced Discord identity/alt signals from the team-auth API.
+- `assets/modules/team-auth.js` – Lists linked Discord/Steam accounts for the active team, supports filtering, and deep-links into the player directory for moderation follow-up.【F:frontend/assets/modules/team-auth.js†L1-L212】
 - `assets/modules/map.js` – Integrates with RustMaps data to render the live map overlay, monument markers, real-time world-event icons (cargo ship, patrol helicopter), and player positions.
 
 ## Documentation (`docs/`)

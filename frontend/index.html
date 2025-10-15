@@ -313,6 +313,16 @@
               <label for="teamAuthRole">Auto-assign role ID
                 <input id="teamAuthRole" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 123456789012345678" />
               </label>
+              <label for="teamAuthLogChannel">Log channel ID
+                <input
+                  id="teamAuthLogChannel"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  placeholder="Optional: 123456789012345678"
+                />
+              </label>
+              <p class="muted small">When set, completed links are announced in the selected Discord channel.</p>
               <div class="row">
                 <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
               </div>
@@ -1011,6 +1021,7 @@
   <script src="assets/modules/players-graph.js"></script>
   <script src="assets/modules/live-players.js"></script>
   <script src="assets/modules/players.js"></script>
+  <script src="assets/modules/team-auth.js"></script>
   <script src="assets/modules/map.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
   <script src="assets/js/server-settings.js"></script>
