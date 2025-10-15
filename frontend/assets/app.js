@@ -124,6 +124,7 @@
   const rolesDescription = $('#rolesDescription');
   const rolesSection = roleManager?.closest('.team-section') || null;
   const teamDiscordSection = $('#teamDiscordSection');
+  const teamDiscordStatusSection = $('#teamDiscordStatusSection');
   const teamDiscordForm = $('#teamDiscordForm');
   const teamDiscordGuildId = $('#teamDiscordGuildId');
   const teamDiscordToken = $('#teamDiscordToken');
@@ -192,6 +193,7 @@
   const workspaceChatNotice = $('#workspaceChatNotice');
   const discordBotStatusPill = $('#discord-bot-status');
   const discordSettingsGrid = $('#discord-settings');
+  const discordStatusServerSelect = $('#discord-status-server');
   const discordCurrentPlayers = $('#discord-current-players');
   const discordMaxPlayers = $('#discord-max-players');
   const discordJoiningPlayers = $('#discord-joining');
@@ -3663,6 +3665,7 @@
   });
 
   discordStatusForm?.addEventListener('submit', handleDiscordStatusSubmit);
+  discordStatusServerSelect?.addEventListener('change', handleDiscordStatusServerChange);
 
   if (typeof window !== 'undefined') {
     window.addEventListener('workspace:server-selected', (event) => {
@@ -3683,6 +3686,14 @@
       const id = Number(event?.detail?.serverId);
       if (!Number.isFinite(id)) return;
       const force = Boolean(event?.detail?.repeat);
+      if (discordStatusServerSelect) {
+        const idStr = String(id);
+        const hasOption = Array.from(discordStatusServerSelect.options).some((opt) => opt.value === idStr);
+        if (!hasOption) {
+          renderDiscordStatusServerOptions();
+        }
+        discordStatusServerSelect.value = idStr;
+      }
       loadWorkspaceDiscord(id, { force }).catch(() => {});
     });
     window.addEventListener('workspace:server-cleared', () => {
@@ -4778,6 +4789,7 @@
         updateTeamDiscordUi();
       }
       loadTeamAuthSettings({ force: true }).catch(() => {});
+      ensureDiscordStatusSelection();
     }
   }
 
@@ -5645,10 +5657,23 @@
       setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
       setWorkspaceDiscordStatus(null);
       updateWorkspaceDiscordUi();
+      if (discordStatusServerSelect && discordStatusServerSelect.value !== '') {
+        discordStatusServerSelect.value = '';
+      }
       return;
     }
 
     state.workspaceDiscord.serverId = numericId;
+    if (discordStatusServerSelect) {
+      const targetValue = String(numericId);
+      if (discordStatusServerSelect.value !== targetValue) {
+        const hasOption = Array.from(discordStatusServerSelect.options).some((opt) => opt.value === targetValue);
+        if (!hasOption) {
+          renderDiscordStatusServerOptions();
+        }
+        discordStatusServerSelect.value = targetValue;
+      }
+    }
 
     if (!hasServerCapability('discord')) {
       state.workspaceDiscord.integration = null;
@@ -5702,6 +5727,10 @@
     setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
     setWorkspaceDiscordStatus(null);
     updateWorkspaceDiscordUi();
+    if (discordStatusServerSelect) {
+      discordStatusServerSelect.value = '';
+    }
+    renderDiscordStatusServerOptions();
   }
 
   function gatherWorkspaceDiscordPayload() {
@@ -5763,6 +5792,25 @@
       state.workspaceDiscord.saving = false;
       updateWorkspaceDiscordUi();
     }
+  }
+
+  function handleDiscordStatusServerChange() {
+    if (!discordStatusServerSelect) return;
+    if (!canManageTeamDiscord()) {
+      discordStatusServerSelect.value = '';
+      return;
+    }
+    const value = discordStatusServerSelect.value;
+    if (!value) {
+      loadWorkspaceDiscord(null, { force: true }).catch(() => {});
+      return;
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      loadWorkspaceDiscord(null, { force: true }).catch(() => {});
+      return;
+    }
+    loadWorkspaceDiscord(numeric, { force: true }).catch(() => {});
   }
 
   function showWorkspaceForServer(id) {
@@ -6500,6 +6548,103 @@
     return state.serverItems.get(String(id))?.data || null;
   }
 
+  function getManageableDiscordServers() {
+    return getServerList().filter((server) => canAccessServerId(server.id));
+  }
+
+  function renderDiscordStatusServerOptions() {
+    if (!discordStatusServerSelect) return;
+    const select = discordStatusServerSelect;
+    const servers = getManageableDiscordServers();
+    const currentValue = select.value;
+    const desiredValue = (() => {
+      const selectedId = Number.isFinite(state.workspaceDiscord.serverId)
+        ? String(state.workspaceDiscord.serverId)
+        : '';
+      if (selectedId && servers.some((server) => String(server.id) === selectedId)) return selectedId;
+      if (currentValue && servers.some((server) => String(server.id) === currentValue)) return currentValue;
+      return '';
+    })();
+
+    select.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = servers.length ? 'Select a server…' : 'No servers available';
+    placeholder.disabled = servers.length === 0;
+    placeholder.selected = desiredValue === '';
+    select.appendChild(placeholder);
+
+    for (const server of servers) {
+      const option = document.createElement('option');
+      option.value = String(server.id);
+      option.textContent = server.name;
+      option.selected = option.value === desiredValue;
+      select.appendChild(option);
+    }
+
+    if (desiredValue) {
+      select.value = desiredValue;
+    } else {
+      select.value = '';
+    }
+
+    const canManage = canManageTeamDiscord();
+    select.disabled = !canManage || servers.length === 0;
+  }
+
+  function ensureDiscordStatusSelection({ force = false } = {}) {
+    if (!discordStatusServerSelect) return;
+    renderDiscordStatusServerOptions();
+    const servers = getManageableDiscordServers();
+    const canManage = canManageTeamDiscord();
+    if (!canManage || servers.length === 0) {
+      if (discordStatusServerSelect.value !== '') {
+        discordStatusServerSelect.value = '';
+      }
+      if (state.workspaceDiscord.serverId != null) {
+        loadWorkspaceDiscord(null, { force: true }).catch(() => {});
+      } else {
+        updateWorkspaceDiscordUi();
+      }
+      return;
+    }
+
+    let targetId = null;
+    if (Number.isFinite(state.workspaceDiscord.serverId)) {
+      const numeric = Number(state.workspaceDiscord.serverId);
+      if (servers.some((server) => Number(server.id) === numeric)) {
+        targetId = numeric;
+      }
+    }
+    if (!Number.isFinite(targetId) && Number.isFinite(state.currentServerId)) {
+      const numeric = Number(state.currentServerId);
+      if (servers.some((server) => Number(server.id) === numeric)) {
+        targetId = numeric;
+      }
+    }
+    if (!Number.isFinite(targetId) && servers.length > 0) {
+      targetId = Number(servers[0].id);
+    }
+
+    if (!Number.isFinite(targetId)) {
+      if (discordStatusServerSelect.value !== '') {
+        discordStatusServerSelect.value = '';
+      }
+      loadWorkspaceDiscord(null, { force: true }).catch(() => {});
+      return;
+    }
+
+    const targetValue = String(targetId);
+    if (discordStatusServerSelect.value !== targetValue) {
+      discordStatusServerSelect.value = targetValue;
+      force = true;
+    }
+
+    if (force || Number(state.workspaceDiscord.serverId) !== targetId) {
+      loadWorkspaceDiscord(targetId, { force }).catch(() => {});
+    }
+  }
+
   function isAbsoluteUrl(value) {
     return /^https?:\/\//i.test(String(value || ''));
   }
@@ -6927,6 +7072,14 @@
 
   moduleBus.on('servers:updated', () => {
     renderRoleServersOptions();
+  });
+
+  moduleBus.on('servers:updated', () => {
+    if (state.activePanel === 'discord') {
+      ensureDiscordStatusSelection();
+    } else {
+      renderDiscordStatusServerOptions();
+    }
   });
 
   function renderRoleEditorFields() {
@@ -7629,6 +7782,16 @@
       } else {
         teamDiscordSummaryToken.textContent = 'Not linked';
       }
+    }
+    if (teamDiscordStatusSection) {
+      teamDiscordStatusSection.classList.toggle('hidden', !canManage);
+      teamDiscordStatusSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    }
+    if (canManage) {
+      renderDiscordStatusServerOptions();
+    } else if (discordStatusServerSelect) {
+      discordStatusServerSelect.value = '';
+      discordStatusServerSelect.disabled = true;
     }
     updateTeamAuthUi();
   }
