@@ -2231,6 +2231,7 @@
           moderationMenuToggle.setAttribute('aria-expanded', 'true');
           moderationMenuList.classList.remove('hidden');
           moderationMenuList.classList.remove(moderationMenuAboveClass);
+          moderationMenuList.style.transform = '';
 
           const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || document.body?.clientHeight || 0;
           if (viewportHeight) {
@@ -2240,6 +2241,17 @@
             const spaceAbove = toggleRect.top;
             if (menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
               moderationMenuList.classList.add(moderationMenuAboveClass);
+            }
+
+            const adjustedRect = moderationMenuList.getBoundingClientRect();
+            let shift = 0;
+            if (adjustedRect.top < 0) {
+              shift = -adjustedRect.top;
+            } else if (adjustedRect.bottom > viewportHeight) {
+              shift = viewportHeight - adjustedRect.bottom;
+            }
+            if (shift !== 0) {
+              moderationMenuList.style.transform = `translateY(${shift}px)`;
             }
           }
 
@@ -2252,6 +2264,7 @@
           moderationMenuToggle.setAttribute('aria-expanded', 'false');
           moderationMenuList.classList.add('hidden');
           moderationMenuList.classList.remove(moderationMenuAboveClass);
+          moderationMenuList.style.transform = '';
           document.removeEventListener('click', onModerationMenuDocumentClick, true);
         }
 
