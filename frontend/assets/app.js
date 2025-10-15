@@ -68,6 +68,15 @@
     fps: true,
     lastUpdate: true
   };
+  const DEFAULT_DISCORD_TICKETING_CONFIG = {
+    enabled: false,
+    categoryId: '',
+    logChannelId: '',
+    staffRoleId: '',
+    pingStaffOnOpen: true,
+    panelChannelId: '',
+    panelMessageId: ''
+  };
   const DISCORD_STATUS_FIELD_LABELS = {
     joining: 'Joining players',
     queued: 'Queue length',
@@ -205,6 +214,10 @@
   const discordPresenceStatusWaiting = $('#discord-presence-status-waiting');
   const discordEnabledFieldsList = $('#discord-enabled-fields');
   const discordEnabledFieldsEmpty = $('#discord-enabled-fields-empty');
+  const discordTicketingSummaryStatus = $('#discord-ticketing-summary-status');
+  const discordTicketingSummaryCategory = $('#discord-ticketing-summary-category');
+  const discordTicketingSummaryLog = $('#discord-ticketing-summary-log');
+  const discordTicketingSummaryRole = $('#discord-ticketing-summary-role');
   const discordStatusForm = $('#discord-status-form');
   const discordStatusNotice = $('#discord-status-notice');
   const discordPresenceTemplateInput = $('#discord-presence-template-input');
@@ -213,6 +226,13 @@
   const discordPresenceStaleSelect = $('#discord-presence-stale');
   const discordPresenceWaitingSelect = $('#discord-presence-waiting');
   const discordStatusFieldInputs = Array.from(document.querySelectorAll('[data-status-field]'));
+  const discordTicketingEnabledInput = $('#discord-ticketing-enabled');
+  const discordTicketingCategoryInput = $('#discord-ticketing-category');
+  const discordTicketingLogInput = $('#discord-ticketing-log');
+  const discordTicketingRoleInput = $('#discord-ticketing-role');
+  const discordTicketingPingInput = $('#discord-ticketing-ping');
+  const discordTicketingPanelChannelInput = $('#discord-ticketing-panel-channel');
+  const discordTicketingPanelMessageInput = $('#discord-ticketing-panel-message');
   const aqTicketsList = $('#aqTicketsList');
   const aqTicketsLoading = $('#aqTicketsLoading');
   const aqTicketsError = $('#aqTicketsError');
@@ -3670,6 +3690,37 @@
   discordStatusForm?.addEventListener('submit', handleDiscordStatusSubmit);
   discordStatusServerSelect?.addEventListener('change', handleDiscordStatusServerChange);
 
+  const ticketingInputs = [
+    discordTicketingCategoryInput,
+    discordTicketingLogInput,
+    discordTicketingRoleInput,
+    discordTicketingPanelChannelInput,
+    discordTicketingPanelMessageInput
+  ];
+
+  function updateTicketingState() {
+    if (!state.workspaceDiscord.config) {
+      state.workspaceDiscord.config = defaultWorkspaceDiscordConfig();
+    }
+    const ticketing = state.workspaceDiscord.config.ticketing || { ...DEFAULT_DISCORD_TICKETING_CONFIG };
+    ticketing.enabled = Boolean(discordTicketingEnabledInput?.checked);
+    ticketing.categoryId = (discordTicketingCategoryInput?.value || '').trim();
+    ticketing.logChannelId = (discordTicketingLogInput?.value || '').trim();
+    ticketing.staffRoleId = (discordTicketingRoleInput?.value || '').trim();
+    ticketing.pingStaffOnOpen = Boolean(discordTicketingPingInput?.checked);
+    ticketing.panelChannelId = (discordTicketingPanelChannelInput?.value || '').trim();
+    ticketing.panelMessageId = (discordTicketingPanelMessageInput?.value || '').trim();
+    state.workspaceDiscord.config.ticketing = ticketing;
+    hideNotice(discordStatusNotice);
+    updateWorkspaceDiscordConfigUi(state.workspaceDiscord.config);
+  }
+
+  discordTicketingEnabledInput?.addEventListener('change', updateTicketingState);
+  discordTicketingPingInput?.addEventListener('change', updateTicketingState);
+  ticketingInputs.forEach((input) => {
+    input?.addEventListener('input', updateTicketingState);
+  });
+
   if (typeof window !== 'undefined') {
     window.addEventListener('workspace:server-selected', (event) => {
       const id = Number(event?.detail?.serverId);
@@ -5401,7 +5452,8 @@
     return {
       presenceTemplate: DEFAULT_DISCORD_PRESENCE_TEMPLATE,
       presenceStatuses: { ...DEFAULT_DISCORD_PRESENCE_STATUSES },
-      fields: { ...DEFAULT_DISCORD_STATUS_FIELDS }
+      fields: { ...DEFAULT_DISCORD_STATUS_FIELDS },
+      ticketing: { ...DEFAULT_DISCORD_TICKETING_CONFIG }
     };
   }
 
@@ -5439,12 +5491,33 @@
     };
   }
 
+  function normalizeSnowflake(value) {
+    if (value == null) return '';
+    const text = String(value).trim();
+    return text;
+  }
+
+  function normalizeWorkspaceTicketing(ticketing = {}) {
+    const source = ticketing && typeof ticketing === 'object' ? ticketing : {};
+    const base = DEFAULT_DISCORD_TICKETING_CONFIG;
+    return {
+      enabled: typeof source.enabled === 'boolean' ? source.enabled : base.enabled,
+      categoryId: normalizeSnowflake(source.categoryId ?? source.category_id ?? base.categoryId),
+      logChannelId: normalizeSnowflake(source.logChannelId ?? source.log_channel_id ?? base.logChannelId),
+      staffRoleId: normalizeSnowflake(source.staffRoleId ?? source.staff_role_id ?? base.staffRoleId),
+      pingStaffOnOpen: typeof source.pingStaffOnOpen === 'boolean' ? source.pingStaffOnOpen : base.pingStaffOnOpen,
+      panelChannelId: normalizeSnowflake(source.panelChannelId ?? source.panel_channel_id ?? base.panelChannelId),
+      panelMessageId: normalizeSnowflake(source.panelMessageId ?? source.panel_message_id ?? base.panelMessageId)
+    };
+  }
+
   function normalizeWorkspaceDiscordConfig(config = {}) {
     const source = config && typeof config === 'object' ? config : {};
     return {
       presenceTemplate: normalizeWorkspacePresenceTemplate(source.presenceTemplate),
       presenceStatuses: normalizeWorkspacePresenceStatuses(source.presenceStatuses || {}),
-      fields: normalizeWorkspaceStatusFields(source.fields || {})
+      fields: normalizeWorkspaceStatusFields(source.fields || {}),
+      ticketing: normalizeWorkspaceTicketing(source.ticketing || {})
     };
   }
 
@@ -5515,6 +5588,57 @@
       input.checked = Boolean(details.fields[key]);
     });
     updateWorkspaceDiscordEnabledFields(details.fields);
+
+    const ticketing = details.ticketing || DEFAULT_DISCORD_TICKETING_CONFIG;
+    const ticketingEnabled = Boolean(ticketing.enabled);
+    if (discordTicketingEnabledInput && !discordTicketingEnabledInput.matches(':focus')) {
+      discordTicketingEnabledInput.checked = ticketingEnabled;
+    }
+    if (discordTicketingCategoryInput && document.activeElement !== discordTicketingCategoryInput) {
+      discordTicketingCategoryInput.value = ticketing.categoryId || '';
+    }
+    if (discordTicketingLogInput && document.activeElement !== discordTicketingLogInput) {
+      discordTicketingLogInput.value = ticketing.logChannelId || '';
+    }
+    if (discordTicketingRoleInput && document.activeElement !== discordTicketingRoleInput) {
+      discordTicketingRoleInput.value = ticketing.staffRoleId || '';
+    }
+    if (discordTicketingPingInput) {
+      discordTicketingPingInput.checked = Boolean(ticketing.pingStaffOnOpen);
+    }
+    if (discordTicketingPanelChannelInput && document.activeElement !== discordTicketingPanelChannelInput) {
+      discordTicketingPanelChannelInput.value = ticketing.panelChannelId || '';
+    }
+    if (discordTicketingPanelMessageInput && document.activeElement !== discordTicketingPanelMessageInput) {
+      discordTicketingPanelMessageInput.value = ticketing.panelMessageId || '';
+    }
+    const ticketingInputs = [
+      discordTicketingCategoryInput,
+      discordTicketingLogInput,
+      discordTicketingRoleInput,
+      discordTicketingPanelChannelInput,
+      discordTicketingPanelMessageInput
+    ];
+    ticketingInputs.forEach((input) => {
+      if (!input) return;
+      input.disabled = !ticketingEnabled;
+    });
+    if (discordTicketingSummaryStatus) {
+      discordTicketingSummaryStatus.textContent = ticketingEnabled ? 'Enabled' : 'Disabled';
+    }
+    const formatTicketValue = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+      return text ? text : 'Not set';
+    };
+    if (discordTicketingSummaryCategory) {
+      discordTicketingSummaryCategory.textContent = formatTicketValue(ticketing.categoryId);
+    }
+    if (discordTicketingSummaryLog) {
+      discordTicketingSummaryLog.textContent = formatTicketValue(ticketing.logChannelId);
+    }
+    if (discordTicketingSummaryRole) {
+      discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId);
+    }
   }
 
   function updateWorkspaceDiscordEnabledFields(fields = {}) {
@@ -5750,10 +5874,24 @@
       if (!key) return;
       fields[key] = Boolean(input.checked);
     });
+    const toOptionalId = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+      return text ? text : null;
+    };
+    const ticketing = {
+      enabled: Boolean(discordTicketingEnabledInput?.checked),
+      categoryId: toOptionalId(discordTicketingCategoryInput?.value),
+      logChannelId: toOptionalId(discordTicketingLogInput?.value),
+      staffRoleId: toOptionalId(discordTicketingRoleInput?.value),
+      pingStaffOnOpen: Boolean(discordTicketingPingInput?.checked),
+      panelChannelId: toOptionalId(discordTicketingPanelChannelInput?.value),
+      panelMessageId: toOptionalId(discordTicketingPanelMessageInput?.value)
+    };
     return {
       presenceTemplate: template,
       presenceStatuses: statuses,
-      fields
+      fields,
+      ticketing
     };
   }
 
