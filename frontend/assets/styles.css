@@ -612,6 +612,18 @@ label.inline input[type="checkbox"]:focus-visible,
   backdrop-filter: blur(16px);
 }
 
+.linked-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-glow);
+  padding: 32px;
+  backdrop-filter: blur(16px);
+}
+
 .section-head {
   display: flex;
   align-items: center;

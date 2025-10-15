@@ -82,6 +82,7 @@
           </div>
           <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
             <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
+            <button id="navLinked" type="button" class="nav-btn">Linked Accounts</button>
             <button id="navTeam" type="button" class="nav-btn">Team</button>
             <button id="navDiscord" type="button" class="nav-btn">Discord</button>
           </nav>
@@ -121,24 +122,27 @@
             </div>
           </div>
         </section>
-        <section
-          id="dashboardLinkedAccountsSection"
-          class="team-section"
-          aria-labelledby="dashboardLinkedAccountsTitle"
-        >
-          <div class="team-section-head">
-            <h3 id="dashboardLinkedAccountsTitle">Linked accounts</h3>
-            <p class="muted small">Review Discord and Steam links completed by your players.</p>
-          </div>
-          <div class="card module-card module-hidden" data-module-card="team-auth-profiles">
-            <div class="card-header">
-              <h3><span data-module-title>Linked Accounts</span></h3>
-              <div class="module-actions" data-module-actions></div>
-            </div>
-            <div class="module-body" data-module-slot="team-auth-profiles"></div>
-          </div>
-        </section>
       </main>
+
+      <section
+        id="linkedAccountsPanel"
+        class="linked-panel hidden"
+        aria-labelledby="linkedAccountsTitle"
+      >
+        <div class="section-head">
+          <div>
+            <h2 id="linkedAccountsTitle">Linked accounts</h2>
+            <p class="muted">Review Discord and Steam links completed by your players.</p>
+          </div>
+        </div>
+        <div class="module-card card module-hidden" data-module-card="team-auth-profiles">
+          <div class="card-header">
+            <h3><span data-module-title>Linked Accounts</span></h3>
+            <div class="module-actions" data-module-actions></div>
+          </div>
+          <div class="module-body" data-module-slot="team-auth-profiles"></div>
+        </div>
+      </section>
 
       <section id="teamPanel" class="team-panel hidden" aria-labelledby="teamPanelTitle">
         <div class="team-panel-head section-head">
