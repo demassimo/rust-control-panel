@@ -121,6 +121,23 @@
             </div>
           </div>
         </section>
+        <section
+          id="dashboardLinkedAccountsSection"
+          class="team-section"
+          aria-labelledby="dashboardLinkedAccountsTitle"
+        >
+          <div class="team-section-head">
+            <h3 id="dashboardLinkedAccountsTitle">Linked accounts</h3>
+            <p class="muted small">Review Discord and Steam links completed by your players.</p>
+          </div>
+          <div class="card module-card module-hidden" data-module-card="team-auth-profiles">
+            <div class="card-header">
+              <h3><span data-module-title>Linked Accounts</span></h3>
+              <div class="module-actions" data-module-actions></div>
+            </div>
+            <div class="module-body" data-module-slot="team-auth-profiles"></div>
+          </div>
+        </section>
       </main>
 
       <section id="teamPanel" class="team-panel hidden" aria-labelledby="teamPanelTitle">
@@ -299,7 +316,7 @@
             </div>
             <p id="teamDiscordStatus" class="notice hidden"></p>
           </form>
-          <p class="muted small">Server-specific Discord features, such as ticketing panels or Ruststatus embeds, are managed below.</p>
+          <p class="muted small">Server-specific Discord features, such as ticketing panels or Ruststatus embeds, are managed from each server workspace.</p>
           <section id="teamAuthSection" class="team-discord-auth">
             <div class="team-section-head">
               <h4 id="teamAuthTitle">Discord authentication</h4>
@@ -326,166 +343,36 @@
               <div class="row">
                 <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
               </div>
-            <p id="teamAuthStatus" class="notice hidden"></p>
-          </form>
+              <p id="teamAuthStatus" class="notice hidden"></p>
+            </form>
+          </section>
         </section>
-      </section>
 
-        <section id="teamLinkedAccountsSection" class="team-section" aria-labelledby="teamLinkedAccountsTitle">
+        <section id="discordModulesSection" class="team-section" aria-labelledby="discordModulesTitle">
           <div class="team-section-head">
-            <h4 id="teamLinkedAccountsTitle">Linked accounts</h4>
-            <p class="muted small">Review Discord and Steam links completed by your players.</p>
+            <h4 id="discordModulesTitle">Discord modules</h4>
+            <p class="muted small">Configure ticketing, Ruststates, and authentication tooling for your team.</p>
           </div>
-          <div class="card module-card module-hidden" data-module-card="team-auth-profiles">
+          <div class="card module-card module-hidden" data-module-card="discord-ticketing">
             <div class="card-header">
-              <h3><span data-module-title>Linked Accounts</span></h3>
+              <h3><span data-module-title>Ticket module</span></h3>
               <div class="module-actions" data-module-actions></div>
             </div>
-            <div class="module-body" data-module-slot="team-auth-profiles"></div>
+            <div class="module-body" data-module-slot="discord-ticketing"></div>
           </div>
-        </section>
-
-        <section id="teamDiscordStatusSection" class="team-section" aria-labelledby="teamDiscordStatusTitle">
-          <div class="team-section-head">
-            <h4 id="teamDiscordStatusTitle">Server status embeds</h4>
-            <p class="muted small">Configure how the Discord bot reports each server's status.</p>
+          <div class="card module-card module-hidden" data-module-card="discord-ruststates">
+            <div class="card-header">
+              <h3><span data-module-title>Ruststates module</span></h3>
+              <div class="module-actions" data-module-actions></div>
+            </div>
+            <div class="module-body" data-module-slot="discord-ruststates"></div>
           </div>
-          <div class="team-discord-status">
-            <div class="team-discord-form team-discord-server-select">
-              <label for="discord-status-server">Server
-                <select id="discord-status-server">
-                  <option value="">Select a server…</option>
-                </select>
-              </label>
+          <div class="card module-card module-hidden" data-module-card="discord-auth">
+            <div class="card-header">
+              <h3><span data-module-title>Auth module</span></h3>
+              <div class="module-actions" data-module-actions></div>
             </div>
-            <div id="discord-settings" class="discord-settings-grid" aria-live="polite">
-              <section class="discord-config">
-                <h4 class="discord-section-title">Current configuration</h4>
-                <div class="discord-config-summary" id="discord-config-summary">
-                  <div class="discord-config-group">
-                    <h5 class="discord-config-title">Presence template</h5>
-                    <p id="discord-presence-template" class="discord-config-value muted">—</p>
-                    <dl class="discord-config-list">
-                      <div>
-                        <dt>Online presence</dt>
-                        <dd id="discord-presence-status-online">—</dd>
-                      </div>
-                      <div>
-                        <dt>Offline presence</dt>
-                        <dd id="discord-presence-status-offline">—</dd>
-                      </div>
-                      <div>
-                        <dt>Stale presence</dt>
-                        <dd id="discord-presence-status-stale">—</dd>
-                      </div>
-                      <div>
-                        <dt>Queue presence</dt>
-                        <dd id="discord-presence-status-waiting">—</dd>
-                      </div>
-                    </dl>
-                  </div>
-                  <div class="discord-config-group">
-                    <h5 class="discord-config-title">Displayed stats</h5>
-                    <ul id="discord-enabled-fields" class="discord-config-tags"></ul>
-                    <p id="discord-enabled-fields-empty" class="discord-config-empty muted small hidden">
-                      No stats will be posted.
-                    </p>
-                  </div>
-                </div>
-              </section>
-              <section class="discord-status-editor">
-                <h4 class="discord-section-title">Configure status appearance</h4>
-                <form id="discord-status-form" class="discord-status-form" autocomplete="off">
-                  <label class="field">
-                    <span class="field-label">Presence template</span>
-                    <textarea
-                      id="discord-presence-template-input"
-                      name="presenceTemplate"
-                      rows="2"
-                      spellcheck="false"
-                      autocapitalize="none"
-                      placeholder="e.g. {statusEmoji} {playerCount} on {serverName}"
-                    ></textarea>
-                    <small class="muted">
-                      Use tokens like <code>{serverName}</code>, <code>{playerCount}</code>, and <code>{statusEmoji}</code> to
-                      control the bot's presence message.
-                    </small>
-                  </label>
-                  <fieldset class="field-grid">
-                    <legend class="field-label">Presence states</legend>
-                    <div class="field-grid-row">
-                      <label for="discord-presence-online" class="inline">
-                        Online
-                        <select id="discord-presence-online" name="presenceOnline">
-                          <option value="online">Online</option>
-                          <option value="idle">Idle</option>
-                          <option value="dnd">Do Not Disturb</option>
-                          <option value="invisible">Invisible</option>
-                        </select>
-                      </label>
-                      <label for="discord-presence-offline" class="inline">
-                        Offline
-                        <select id="discord-presence-offline" name="presenceOffline">
-                          <option value="online">Online</option>
-                          <option value="idle">Idle</option>
-                          <option value="dnd">Do Not Disturb</option>
-                          <option value="invisible">Invisible</option>
-                        </select>
-                      </label>
-                    </div>
-                    <div class="field-grid-row">
-                      <label for="discord-presence-stale" class="inline">
-                        Stale data
-                        <select id="discord-presence-stale" name="presenceStale">
-                          <option value="online">Online</option>
-                          <option value="idle">Idle</option>
-                          <option value="dnd">Do Not Disturb</option>
-                          <option value="invisible">Invisible</option>
-                        </select>
-                      </label>
-                      <label for="discord-presence-waiting" class="inline">
-                        Queue detected
-                        <select id="discord-presence-waiting" name="presenceWaiting">
-                          <option value="online">Online</option>
-                          <option value="idle">Idle</option>
-                          <option value="dnd">Do Not Disturb</option>
-                          <option value="invisible">Invisible</option>
-                        </select>
-                      </label>
-                    </div>
-                  </fieldset>
-                  <fieldset class="field-grid">
-                    <legend class="field-label">Displayed statistics</legend>
-                    <div class="field-grid-row checkbox-grid">
-                      <label class="checkbox">
-                        <input type="checkbox" id="discord-field-joining" data-status-field="joining" />
-                        <span>Joining players</span>
-                      </label>
-                      <label class="checkbox">
-                        <input type="checkbox" id="discord-field-queued" data-status-field="queued" />
-                        <span>Queue length</span>
-                      </label>
-                      <label class="checkbox">
-                        <input type="checkbox" id="discord-field-sleepers" data-status-field="sleepers" />
-                        <span>Sleeping players</span>
-                      </label>
-                      <label class="checkbox">
-                        <input type="checkbox" id="discord-field-fps" data-status-field="fps" />
-                        <span>Server FPS</span>
-                      </label>
-                      <label class="checkbox">
-                        <input type="checkbox" id="discord-field-lastUpdate" data-status-field="lastUpdate" />
-                        <span>Last update timestamp</span>
-                      </label>
-                    </div>
-                  </fieldset>
-                  <div class="form-actions">
-                    <button type="submit" class="accent" id="discord-status-save">Save status settings</button>
-                  </div>
-                  <p class="notice hidden discord-notice" id="discord-status-notice"></p>
-                </form>
-              </section>
-            </div>
+            <div class="module-body" data-module-slot="discord-auth"></div>
           </div>
         </section>
       </section>
@@ -640,31 +527,176 @@
                 <div class="card-title-group">
                   <h3>Discord status</h3>
                   <p class="muted small">
-                    Control how this server's Discord bot presents itself. Manage ticketing, authentication, and Ruststatus embeds
-                    from the Team → Discord tab.
+                    Control how this server's Discord bot presents itself and how the status embed appears in Discord.
                   </p>
                 </div>
                 <span id="discord-bot-status" class="status-pill offline bot-status-pill">Do Not Disturb</span>
               </div>
-          <section class="discord-status">
-            <h4 class="discord-section-title">Live status</h4>
-            <div class="discord-status-summary">
-              <article class="discord-stat">
-                <span class="label">Current players</span>
-                <strong class="value" id="discord-current-players">0</strong>
-              </article>
-              <article class="discord-stat">
-                <span class="label">Max players</span>
-                <strong class="value" id="discord-max-players">—</strong>
-              </article>
-              <article class="discord-stat">
-                <span class="label">Joining</span>
-                <strong class="value" id="discord-joining">0</strong>
-              </article>
-            </div>
-            <p class="discord-last-check" id="discord-last-check">Last check: —</p>
-          </section>
-          <p class="muted small">Discord status settings now live under the Team → Discord tab.</p>
+              <section class="discord-status">
+                <h4 class="discord-section-title">Live status</h4>
+                <div class="discord-status-summary">
+                  <article class="discord-stat">
+                    <span class="label">Current players</span>
+                    <strong class="value" id="discord-current-players">0</strong>
+                  </article>
+                  <article class="discord-stat">
+                    <span class="label">Max players</span>
+                    <strong class="value" id="discord-max-players">—</strong>
+                  </article>
+                  <article class="discord-stat">
+                    <span class="label">Joining</span>
+                    <strong class="value" id="discord-joining">0</strong>
+                  </article>
+                </div>
+                <p class="discord-last-check" id="discord-last-check">Last check: —</p>
+              </section>
+              <section
+                id="teamDiscordStatusSection"
+                class="workspace-discord-section"
+                aria-labelledby="teamDiscordStatusTitle"
+              >
+                <div class="team-section-head">
+                  <h4 id="teamDiscordStatusTitle">Status embed configuration</h4>
+                  <p class="muted small">Configure how the Discord bot reports each server's status.</p>
+                </div>
+                <div class="team-discord-status">
+                  <div class="team-discord-form team-discord-server-select">
+                    <label for="discord-status-server">Server
+                      <select id="discord-status-server">
+                        <option value="">Select a server…</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div id="discord-settings" class="discord-settings-grid" aria-live="polite">
+                    <section class="discord-config">
+                      <h4 class="discord-section-title">Current configuration</h4>
+                      <div class="discord-config-summary" id="discord-config-summary">
+                        <div class="discord-config-group">
+                          <h5 class="discord-config-title">Presence template</h5>
+                          <p id="discord-presence-template" class="discord-config-value muted">—</p>
+                          <dl class="discord-config-list">
+                            <div>
+                              <dt>Online presence</dt>
+                              <dd id="discord-presence-status-online">—</dd>
+                            </div>
+                            <div>
+                              <dt>Offline presence</dt>
+                              <dd id="discord-presence-status-offline">—</dd>
+                            </div>
+                            <div>
+                              <dt>Stale presence</dt>
+                              <dd id="discord-presence-status-stale">—</dd>
+                            </div>
+                            <div>
+                              <dt>Queue presence</dt>
+                              <dd id="discord-presence-status-waiting">—</dd>
+                            </div>
+                          </dl>
+                        </div>
+                        <div class="discord-config-group">
+                          <h5 class="discord-config-title">Displayed stats</h5>
+                          <ul id="discord-enabled-fields" class="discord-config-tags"></ul>
+                          <p id="discord-enabled-fields-empty" class="discord-config-empty muted small hidden">
+                            No stats will be posted.
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="discord-status-editor">
+                      <h4 class="discord-section-title">Configure status appearance</h4>
+                      <form id="discord-status-form" class="discord-status-form" autocomplete="off">
+                        <label class="field">
+                          <span class="field-label">Presence template</span>
+                          <textarea
+                            id="discord-presence-template-input"
+                            name="presenceTemplate"
+                            rows="2"
+                            spellcheck="false"
+                            autocapitalize="none"
+                            placeholder="e.g. {statusEmoji} {playerCount} on {serverName}"
+                          ></textarea>
+                          <small class="muted">
+                            Use tokens like <code>{serverName}</code>, <code>{playerCount}</code>, and <code>{statusEmoji}</code> to
+                            control the bot's presence message.
+                          </small>
+                        </label>
+                        <fieldset class="field-grid">
+                          <legend class="field-label">Presence states</legend>
+                          <div class="field-grid-row">
+                            <label for="discord-presence-online" class="inline">
+                              Online
+                              <select id="discord-presence-online" name="presenceOnline">
+                                <option value="online">Online</option>
+                                <option value="idle">Idle</option>
+                                <option value="dnd">Do Not Disturb</option>
+                                <option value="invisible">Invisible</option>
+                              </select>
+                            </label>
+                            <label for="discord-presence-offline" class="inline">
+                              Offline
+                              <select id="discord-presence-offline" name="presenceOffline">
+                                <option value="online">Online</option>
+                                <option value="idle">Idle</option>
+                                <option value="dnd">Do Not Disturb</option>
+                                <option value="invisible">Invisible</option>
+                              </select>
+                            </label>
+                          </div>
+                          <div class="field-grid-row">
+                            <label for="discord-presence-stale" class="inline">
+                              Stale data
+                              <select id="discord-presence-stale" name="presenceStale">
+                                <option value="online">Online</option>
+                                <option value="idle">Idle</option>
+                                <option value="dnd">Do Not Disturb</option>
+                                <option value="invisible">Invisible</option>
+                              </select>
+                            </label>
+                            <label for="discord-presence-waiting" class="inline">
+                              Queue detected
+                              <select id="discord-presence-waiting" name="presenceWaiting">
+                                <option value="online">Online</option>
+                                <option value="idle">Idle</option>
+                                <option value="dnd">Do Not Disturb</option>
+                                <option value="invisible">Invisible</option>
+                              </select>
+                            </label>
+                          </div>
+                        </fieldset>
+                        <fieldset class="field-grid">
+                          <legend class="field-label">Displayed statistics</legend>
+                          <div class="field-grid-row checkbox-grid">
+                            <label class="checkbox">
+                              <input type="checkbox" id="discord-field-joining" data-status-field="joining" />
+                              <span>Joining players</span>
+                            </label>
+                            <label class="checkbox">
+                              <input type="checkbox" id="discord-field-queued" data-status-field="queued" />
+                              <span>Queue length</span>
+                            </label>
+                            <label class="checkbox">
+                              <input type="checkbox" id="discord-field-sleepers" data-status-field="sleepers" />
+                              <span>Sleeping players</span>
+                            </label>
+                            <label class="checkbox">
+                              <input type="checkbox" id="discord-field-fps" data-status-field="fps" />
+                              <span>Server FPS</span>
+                            </label>
+                            <label class="checkbox">
+                              <input type="checkbox" id="discord-field-lastUpdate" data-status-field="lastUpdate" />
+                              <span>Last update timestamp</span>
+                            </label>
+                          </div>
+                        </fieldset>
+                        <div class="form-actions">
+                          <button type="submit" class="accent" id="discord-status-save">Save status settings</button>
+                        </div>
+                        <p class="notice hidden discord-notice" id="discord-status-notice"></p>
+                      </form>
+                    </section>
+                  </div>
+                </div>
+              </section>
         </div>
       </section>
 

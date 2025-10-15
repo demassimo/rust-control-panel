@@ -1042,6 +1042,13 @@ label.inline input[type="checkbox"]:focus-visible,
   gap: 24px;
 }
 
+.workspace-discord-section {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 .team-discord-server-select {
   max-width: 420px;
 }

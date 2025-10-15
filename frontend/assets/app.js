@@ -425,6 +425,9 @@
       section.classList.toggle('active', match);
       section.setAttribute('aria-hidden', match ? 'false' : 'true');
     });
+    if (target === 'settings') {
+      ensureDiscordStatusSelection();
+    }
   }
 
   workspaceViewButtons.forEach((btn) => {
@@ -4789,7 +4792,6 @@
         updateTeamDiscordUi();
       }
       loadTeamAuthSettings({ force: true }).catch(() => {});
-      ensureDiscordStatusSelection();
     }
   }
 
@@ -6597,6 +6599,10 @@
     renderDiscordStatusServerOptions();
     const servers = getManageableDiscordServers();
     const canManage = canManageTeamDiscord();
+    if (teamDiscordStatusSection) {
+      teamDiscordStatusSection.classList.toggle('hidden', !canManage);
+      teamDiscordStatusSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    }
     if (!canManage || servers.length === 0) {
       if (discordStatusServerSelect.value !== '') {
         discordStatusServerSelect.value = '';
@@ -7075,10 +7081,9 @@
   });
 
   moduleBus.on('servers:updated', () => {
-    if (state.activePanel === 'discord') {
+    renderDiscordStatusServerOptions();
+    if (state.activePanel === 'workspace' && activeWorkspaceView === 'settings') {
       ensureDiscordStatusSelection();
-    } else {
-      renderDiscordStatusServerOptions();
     }
   });
 
@@ -7782,10 +7787,6 @@
       } else {
         teamDiscordSummaryToken.textContent = 'Not linked';
       }
-    }
-    if (teamDiscordStatusSection) {
-      teamDiscordStatusSection.classList.toggle('hidden', !canManage);
-      teamDiscordStatusSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
     }
     if (canManage) {
       renderDiscordStatusServerOptions();
