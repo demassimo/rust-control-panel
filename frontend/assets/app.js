@@ -8,6 +8,7 @@
   const userBox = $('#userBox');
   const mainNav = $('#mainNav');
   const navDashboard = $('#navDashboard');
+  const navLinked = $('#navLinked');
   const navTeam = $('#navTeam');
   const navDiscord = $('#navDiscord');
   const navSettings = $('#navSettings');
@@ -15,6 +16,7 @@
   const teamSelect = $('#teamSelect');
   const teamSelectLabel = $('#teamSelectLabel');
   const dashboardPanel = $('#dashboardPanel');
+  const linkedAccountsPanel = $('#linkedAccountsPanel');
   const teamPanel = $('#teamPanel');
   const discordPanel = $('#discordPanel');
   const workspacePanel = $('#workspacePanel');
@@ -4688,6 +4690,7 @@
     const canManageUsers = hasGlobalPermission('manageUsers');
     const canManageRoles = hasGlobalPermission('manageRoles');
     const canAccessTeam = canManageUsers || canManageRoles;
+    const canAccessLinked = canAccessTeam;
     if (userCreateSection) userCreateSection.classList.toggle('hidden', !canManageUsers);
     if (newUserName) newUserName.disabled = !canManageUsers;
     if (newUserPassword) newUserPassword.disabled = !canManageUsers;
@@ -4723,6 +4726,10 @@
       setWorkspaceView(visibleViews[0] || workspaceViewDefault);
     }
 
+    if (!canAccessLinked && state.activePanel === 'linked') {
+      switchPanel('dashboard');
+    }
+
     if (!canAccessTeam && state.activePanel === 'team') {
       switchPanel('dashboard');
     } else {
@@ -4736,9 +4743,14 @@
 
   function switchPanel(panel = 'dashboard') {
     const canAccessTeam = hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
+    const canAccessLinked = canAccessTeam;
     let nextPanel = panel;
     const canAccessDiscord = canManageTeamDiscord();
-    if ((nextPanel === 'team' && !canAccessTeam) || (nextPanel === 'discord' && !canAccessDiscord)) {
+    if (
+      (nextPanel === 'team' && !canAccessTeam)
+      || (nextPanel === 'discord' && !canAccessDiscord)
+      || (nextPanel === 'linked' && !canAccessLinked)
+    ) {
       nextPanel = 'dashboard';
     }
     state.activePanel = nextPanel;
@@ -4747,37 +4759,50 @@
     const isSettings = nextPanel === 'settings';
     const isTeam = nextPanel === 'team';
     const isDiscord = nextPanel === 'discord';
+    const isLinked = nextPanel === 'linked';
 
     if (isSettings) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
+      linkedAccountsPanel?.classList.add('hidden');
       settingsPanel?.classList.remove('hidden');
     } else if (isDiscord) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      linkedAccountsPanel?.classList.add('hidden');
       discordPanel?.classList.remove('hidden');
     } else if (isTeam) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
+      linkedAccountsPanel?.classList.add('hidden');
       teamPanel?.classList.remove('hidden');
+    } else if (isLinked) {
+      dashboardPanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
+      settingsPanel?.classList.add('hidden');
+      teamPanel?.classList.add('hidden');
+      discordPanel?.classList.add('hidden');
+      linkedAccountsPanel?.classList.remove('hidden');
     } else {
       dashboardPanel?.classList.remove('hidden');
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
+      linkedAccountsPanel?.classList.add('hidden');
     }
 
     navDashboard?.classList.toggle('active', isDashboard);
     navSettings?.classList.toggle('active', isSettings);
     navTeam?.classList.toggle('active', isTeam);
     navDiscord?.classList.toggle('active', isDiscord);
+    navLinked?.classList.toggle('active', isLinked);
 
     if (!isSettings) {
       hideNotice(settingsStatus);
@@ -8061,12 +8086,20 @@
     const canRoles = hasGlobalPermission('manageRoles');
     const canAccessTeam = canUsers || canRoles;
     const canManageDiscord = canManageTeamDiscord();
+    const canAccessLinked = canUsers || canRoles;
 
     if (navTeam) {
       navTeam.classList.toggle('hidden', !canAccessTeam);
       navTeam.setAttribute('aria-hidden', canAccessTeam ? 'false' : 'true');
       navTeam.disabled = !canAccessTeam;
       if (!canAccessTeam) navTeam.classList.remove('active');
+    }
+
+    if (navLinked) {
+      navLinked.classList.toggle('hidden', !canAccessLinked);
+      navLinked.setAttribute('aria-hidden', canAccessLinked ? 'false' : 'true');
+      navLinked.disabled = !canAccessLinked;
+      if (!canAccessLinked) navLinked.classList.remove('active');
     }
 
     if (navDiscord) {
@@ -8082,6 +8115,10 @@
       if (!canManageDiscord) {
         if (discordPanel) discordPanel.classList.add('hidden');
         if (state.activePanel === 'discord') switchPanel('dashboard');
+      }
+      if (!canAccessLinked) {
+        linkedAccountsPanel?.classList.add('hidden');
+        if (state.activePanel === 'linked') switchPanel('dashboard');
       }
       if (userCard) userCard.classList.add('hidden');
       if (userList) userList.innerHTML = '';
@@ -8344,6 +8381,12 @@
       if (navTeam.disabled) return;
       hideWorkspace('nav');
       switchPanel('team');
+      closeProfileMenu();
+    });
+    navLinked?.addEventListener('click', () => {
+      if (navLinked.disabled) return;
+      hideWorkspace('nav');
+      switchPanel('linked');
       closeProfileMenu();
     });
     navDiscord?.addEventListener('click', () => {
