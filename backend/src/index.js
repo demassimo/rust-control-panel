@@ -5492,6 +5492,80 @@ function projectTeamAuthProfile(profile, { includeAlts = false } = {}) {
   };
 }
 
+async function lookupTeamAuthCookieMatches(teamId, cookieId, { steamId = null, discordId = null } = {}) {
+  if (typeof db.getTeamAuthCookieHistory !== 'function') return [];
+  const numericTeamId = Number(teamId);
+  if (!Number.isFinite(numericTeamId)) return [];
+  const normalizedCookie = sanitizeCookieId(cookieId || null);
+  if (!normalizedCookie) return [];
+  let history = [];
+  try {
+    history = await db.getTeamAuthCookieHistory(numericTeamId, normalizedCookie);
+  } catch (err) {
+    console.warn('failed to load team auth cookie history', err);
+    return [];
+  }
+  if (!Array.isArray(history) || history.length === 0) return [];
+  const rows = history.filter((entry) => entry && typeof entry === 'object');
+  if (rows.length === 0) return [];
+
+  const steamIds = Array.from(
+    new Set(
+      rows
+        .map((entry) => sanitizeSteamId(entry?.steamid ?? entry?.steamId ?? null))
+        .filter((value) => typeof value === 'string' && value.length > 0)
+    )
+  );
+  const profileMap = new Map();
+  if (steamIds.length > 0 && typeof db.getTeamAuthProfilesBySteamIds === 'function') {
+    try {
+      const rawProfiles = await db.getTeamAuthProfilesBySteamIds(numericTeamId, steamIds);
+      for (const raw of Array.isArray(rawProfiles) ? rawProfiles : []) {
+        const projected = projectTeamAuthProfile(raw, { includeAlts: false });
+        if (projected?.steamId) {
+          profileMap.set(projected.steamId, projected);
+        }
+      }
+    } catch (err) {
+      console.warn('failed to load team auth cookie profile matches', err);
+    }
+  }
+
+  const currentSteam = sanitizeSteamId(steamId);
+  const currentDiscord = sanitizeDiscordSnowflake(discordId);
+
+  return rows
+    .map((entry) => {
+      const entrySteam = sanitizeSteamId(entry?.steamid ?? entry?.steamId ?? null);
+      const entryDiscord = sanitizeDiscordSnowflake(entry?.discord_id ?? entry?.discordId ?? null);
+      const profile = entrySteam ? profileMap.get(entrySteam) : null;
+      const lastSeen = typeof entry?.last_seen_at === 'string'
+        ? entry.last_seen_at
+        : typeof entry?.lastSeenAt === 'string'
+        ? entry.lastSeenAt
+        : null;
+      const createdAt = typeof entry?.created_at === 'string'
+        ? entry.created_at
+        : typeof entry?.createdAt === 'string'
+        ? entry.createdAt
+        : null;
+      const steamMatches = currentSteam && entrySteam && currentSteam === entrySteam;
+      const discordMatches = currentDiscord && entryDiscord ? currentDiscord === entryDiscord : false;
+      return {
+        steamId: entrySteam ?? null,
+        discordId: entryDiscord ?? null,
+        profileId: profile?.profileId ?? null,
+        discordUsername: profile?.discordUsername ?? null,
+        discordDisplayName: profile?.discordDisplayName ?? null,
+        linkedAt: profile?.linkedAt ?? null,
+        lastSeenAt: lastSeen ?? null,
+        firstSeenAt: createdAt ?? null,
+        isCurrentSession: Boolean(steamMatches && (!currentDiscord || discordMatches))
+      };
+    })
+    .filter((match) => match.steamId || match.discordId);
+}
+
 async function fetchTeamAuthProfiles(teamId) {
   if (typeof db.listTeamAuthProfiles !== 'function') return [];
   const numeric = Number(teamId);
@@ -6639,6 +6713,13 @@ app.get('/api/auth/requests/:token', async (req, res) => {
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const discordSession = readTeamAuthDiscordSession(cookieJar, record.state_token);
     const steamSession = readTeamAuthSteamSession(cookieJar, record.state_token);
+    let cookieMatches = [];
+    if (cookieId) {
+      cookieMatches = await lookupTeamAuthCookieMatches(record.team_id, cookieId, {
+        steamId: steamSession?.steamId ?? null,
+        discordId: discordSession?.discordId ?? record.discord_id ?? null
+      });
+    }
     res.json({
       token: record.state_token,
       teamId: record.team_id ?? null,
@@ -6646,6 +6727,8 @@ app.get('/api/auth/requests/:token', async (req, res) => {
       discordId: record.discord_id,
       discordUsername: record.discord_username ?? null,
       expiresAt: expires ? expires.toISOString() : null,
+      cookieId: cookieId ?? null,
+      cookieMatches,
       discordOAuth: discordSession
         ? {
             linked: true,
@@ -6766,6 +6849,13 @@ app.post('/api/auth/requests/:token/complete', async (req, res) => {
         console.warn('failed to record team auth cookie', err);
       }
     }
+    let cookieMatches = [];
+    if (cookieId) {
+      cookieMatches = await lookupTeamAuthCookieMatches(record.team_id, cookieId, {
+        steamId,
+        discordId
+      });
+    }
     let projectedProfile = null;
     try {
       projectedProfile = await loadTeamAuthProfile(record.team_id, steamId, { includeAlts: true });
@@ -6810,6 +6900,7 @@ app.post('/api/auth/requests/:token/complete', async (req, res) => {
       profile: projectedProfile ?? projectTeamAuthProfile(profile, { includeAlts: false }),
       altLinked,
       cookieId: cookieId ?? null,
+      cookieMatches,
       assignedDiscordRoleId: roleAssignment?.assigned ? roleAssignment.roleId ?? null : null
     });
   } catch (err) {
