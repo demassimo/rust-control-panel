@@ -38,6 +38,12 @@ This document summarizes the purpose of the key files and directories that make 
 - `assets/modules/players-graph.js` – Visualises historical player counts for the selected server.
 - `assets/modules/players.js` – Provides searchable player management tools, including moderation actions, player notes, profile metadata, and now surfaced Discord identity/alt signals from the team-auth API.
 - `assets/modules/map.js` – Integrates with RustMaps data to render the live map overlay, monument markers, real-time world-event icons (cargo ship, patrol helicopter), and player positions.
+
+## Documentation (`docs/`)
+- `module-architecture-guide.md` – Guidelines describing how backend and frontend modules should be organised, when to create shared helpers, and where new features belong so the repository stays consistent.【F:docs/module-architecture-guide.md†L1-L120】
+- `module-usage-report.md` – Inventory linking each major source file to its responsibilities, helping maintainers spot unused assets or stale modules quickly.【F:docs/module-usage-report.md†L1-L120】
+- `live-map-icon-gallery.md` – Reference gallery that showcases the available live-map icons and explains when each should be used for in-game events.【F:docs/live-map-icon-gallery.md†L1-L120】
+- `team-auth-oauth.md` – Step-by-step instructions for configuring Discord and Steam OAuth so the `/request.html` team-auth flow can complete successfully, including environment variables and troubleshooting guidance.【F:docs/team-auth-oauth.md†L1-L68】
 - `assets/icons/map/` – Standalone SVG exports of the live map vector icons for documentation and design reviews.
 
 ## Deployment configuration (`deploy/`)

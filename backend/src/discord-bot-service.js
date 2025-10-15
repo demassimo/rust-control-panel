@@ -2580,8 +2580,9 @@ async function handleAuthCommand(state, interaction) {
         return;
       }
       const expiresStamp = `<t:${Math.floor(expiresAt.getTime() / 1000)}:R>`;
+      // Share a one-time link that pairs this Discord account with a Steam profile for alt-account tracking.
       const response = [
-        'Use the link below to connect your Discord and Steam accounts so we can build your player profile:',
+        'Use the link below to connect your Discord and Steam accounts so staff can identify alternate accounts and build your player profile:',
         link,
         `This link expires ${expiresStamp} (about ${ttlLabel}).`
       ];

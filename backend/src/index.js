@@ -6625,6 +6625,8 @@ app.post('/api/auth/requests/:token/complete', async (req, res) => {
     await db.markTeamAuthRequestCompleted(record.id, profile.id ?? null);
     let altLinked = null;
     if (cookieId && typeof db.recordTeamAuthCookie === 'function') {
+      // Record the linking cookie so staff can flag alternate accounts when the same browser links
+      // a different Steam or Discord identity.
       try {
         const cookieResult = await db.recordTeamAuthCookie({
           team_id: record.team_id,
