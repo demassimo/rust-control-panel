@@ -101,6 +101,7 @@ function createApi(dbh, dialect) {
         discord_guild_id TEXT,
         discord_auth_enabled INTEGER NOT NULL DEFAULT 0,
         discord_auth_role_id TEXT,
+        discord_auth_log_channel_id TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(owner_user_id) REFERENCES users(id) ON DELETE CASCADE
       );
@@ -365,6 +366,9 @@ function createApi(dbh, dialect) {
       if (!teamCols.some((c) => c.name === 'discord_auth_role_id')) {
         await dbh.run("ALTER TABLE teams ADD COLUMN discord_auth_role_id TEXT");
       }
+      if (!teamCols.some((c) => c.name === 'discord_auth_log_channel_id')) {
+        await dbh.run("ALTER TABLE teams ADD COLUMN discord_auth_log_channel_id TEXT");
+      }
       const discordCols = await dbh.all("PRAGMA table_info('server_discord_integrations')");
       if (!discordCols.some((c) => c.name === 'command_bot_token')) {
         await dbh.run("ALTER TABLE server_discord_integrations ADD COLUMN command_bot_token TEXT");
@@ -607,10 +611,11 @@ function createApi(dbh, dialect) {
     async getTeamAuthSettings(teamId){
       const numeric = Number(teamId);
       if (!Number.isFinite(numeric)) {
-        return { enabled: false, roleId: null, guildId: null, token: null };
+        return { enabled: false, roleId: null, logChannelId: null, guildId: null, token: null };
       }
       const row = await dbh.get(
-        'SELECT discord_auth_enabled, discord_auth_role_id, discord_token, discord_guild_id FROM teams WHERE id=?',
+        `SELECT discord_auth_enabled, discord_auth_role_id, discord_auth_log_channel_id, discord_token, discord_guild_id
+         FROM teams WHERE id=?`,
         [numeric]
       );
       return {
@@ -618,13 +623,16 @@ function createApi(dbh, dialect) {
         roleId: row?.discord_auth_role_id != null && row.discord_auth_role_id !== ''
           ? String(row.discord_auth_role_id)
           : null,
+        logChannelId: row?.discord_auth_log_channel_id != null && row.discord_auth_log_channel_id !== ''
+          ? String(row.discord_auth_log_channel_id)
+          : null,
         guildId: row?.discord_guild_id != null && row.discord_guild_id !== ''
           ? String(row.discord_guild_id)
           : null,
         token: row?.discord_token != null && row.discord_token !== '' ? String(row.discord_token) : null
       };
     },
-    async setTeamAuthSettings(teamId, { enabled = null, roleId = undefined } = {}){
+    async setTeamAuthSettings(teamId, { enabled = null, roleId = undefined, logChannelId = undefined } = {}){
       const numeric = Number(teamId);
       if (!Number.isFinite(numeric)) return 0;
       const updates = [];
@@ -636,6 +644,11 @@ function createApi(dbh, dialect) {
       if (roleId !== undefined) {
         const value = roleId == null ? null : String(roleId).trim();
         updates.push('discord_auth_role_id=?');
+        params.push(value && value.length ? value : null);
+      }
+      if (logChannelId !== undefined) {
+        const value = logChannelId == null ? null : String(logChannelId).trim();
+        updates.push('discord_auth_log_channel_id=?');
         params.push(value && value.length ? value : null);
       }
       if (!updates.length) return 0;

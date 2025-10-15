@@ -5378,6 +5378,90 @@ async function maybeAssignTeamAuthRole(teamId, discordId) {
   }
 }
 
+async function postTeamAuthLog({
+  teamId,
+  discordId,
+  discordUsername,
+  discordDisplayName,
+  steamId,
+  assignedRoleId,
+  altLinked = null
+}) {
+  if (typeof db.getTeam !== 'function') return;
+  const numericTeam = Number(teamId);
+  if (!Number.isFinite(numericTeam)) return;
+  let team;
+  try {
+    team = await db.getTeam(numericTeam);
+  } catch (err) {
+    console.warn('failed to load team for auth log', err);
+    return;
+  }
+  if (!team) return;
+  const token = sanitizeDiscordToken(team.discord_token);
+  const channelId = sanitizeDiscordSnowflake(team.discord_auth_log_channel_id);
+  if (!token || !channelId) return;
+
+  const sanitizedDiscordId = sanitizeDiscordSnowflake(discordId);
+  const sanitizedRoleId = sanitizeDiscordSnowflake(assignedRoleId);
+  const steam = sanitizeSteamId(steamId);
+  const displayName =
+    sanitizeDiscordUsername(discordDisplayName) || sanitizeDiscordUsername(discordUsername) || null;
+  const usernameFallback = typeof discordUsername === 'string' ? discordUsername.trim() : '';
+
+  const lines = ['✅ **Account linked**'];
+  if (sanitizedDiscordId) {
+    const mention = `<@${sanitizedDiscordId}>`;
+    lines.push(`• Discord: ${mention}${displayName ? ` (${displayName})` : ''}`);
+  } else if (displayName) {
+    lines.push(`• Discord: ${displayName}`);
+  } else if (usernameFallback) {
+    lines.push(`• Discord: ${usernameFallback}`);
+  }
+  if (steam) {
+    const steamUrl = `https://steamcommunity.com/profiles/${encodeURIComponent(steam)}`;
+    lines.push(`• Steam: ${steam} (<${steamUrl}>)`);
+  }
+  const timestamp = Math.floor(Date.now() / 1000);
+  lines.push(`• Linked at: <t:${timestamp}:F>`);
+  if (sanitizedRoleId) {
+    lines.push(`• Granted role: <@&${sanitizedRoleId}>`);
+  }
+  if (altLinked?.primaryProfileId) {
+    const altLabel = Number.isFinite(Number(altLinked.primaryProfileId))
+      ? `profile #${altLinked.primaryProfileId}`
+      : 'another profile';
+    const reason = safeTrimString(altLinked.reason || '');
+    lines.push(`• Marked as alt of ${altLabel}${reason ? ` (${reason})` : ''}.`);
+  }
+
+  let content = lines.join('\n');
+  if (content.length > MAX_DISCORD_MESSAGE_LENGTH) {
+    content = `${content.slice(0, MAX_DISCORD_MESSAGE_LENGTH - 3)}...`;
+  }
+
+  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content })
+    });
+    if (!response.ok && response.status !== 403 && response.status !== 404) {
+      console.warn('failed to post team auth log message', {
+        status: response.status,
+        teamId: numericTeam,
+        channelId
+      });
+    }
+  } catch (err) {
+    console.warn('failed to post team auth log message', err);
+  }
+}
+
 function projectTeamAuthProfile(profile, { includeAlts = false } = {}) {
   if (!profile || typeof profile !== 'object') return null;
   const alts = includeAlts && Array.isArray(profile.alts)
@@ -6140,6 +6224,10 @@ app.get('/api/team/auth/settings', auth, async (req, res) => {
       roleId:
         settings?.roleId != null && settings.roleId !== ''
           ? String(settings.roleId)
+          : null,
+      logChannelId:
+        settings?.logChannelId != null && settings.logChannelId !== ''
+          ? String(settings.logChannelId)
           : null
     });
   } catch (err) {
@@ -6160,12 +6248,23 @@ app.post('/api/team/auth/settings', auth, async (req, res) => {
   const body = req.body || {};
   const enabledRaw = body.enabled ?? body.enable ?? body.active;
   const roleInput = sanitizeDiscordSnowflake(body.roleId ?? body.role_id ?? body.role);
+  const logChannelInput = sanitizeDiscordSnowflake(
+    body.logChannelId ?? body.log_channel_id ?? body.logChannel ?? body.log_channel
+  );
   const updates = {};
   if (enabledRaw != null) {
     updates.enabled = Boolean(enabledRaw);
   }
   if (body.roleId !== undefined || body.role_id !== undefined || body.role !== undefined) {
     updates.roleId = roleInput ?? null;
+  }
+  if (
+    body.logChannelId !== undefined
+    || body.log_channel_id !== undefined
+    || body.logChannel !== undefined
+    || body.log_channel !== undefined
+  ) {
+    updates.logChannelId = logChannelInput ?? null;
   }
   try {
     await db.setTeamAuthSettings(teamId, updates);
@@ -6185,6 +6284,10 @@ app.post('/api/team/auth/settings', auth, async (req, res) => {
           roleId:
             settings?.roleId != null && settings.roleId !== ''
               ? String(settings.roleId)
+              : null,
+          logChannelId:
+            settings?.logChannelId != null && settings.logChannelId !== ''
+              ? String(settings.logChannelId)
               : null
         });
       } catch (err) {
@@ -6193,7 +6296,8 @@ app.post('/api/team/auth/settings', auth, async (req, res) => {
     }
     res.json({
       enabled: updates.enabled != null ? Boolean(updates.enabled) : undefined,
-      roleId: updates.roleId != null ? String(updates.roleId) : null
+      roleId: updates.roleId != null ? String(updates.roleId) : null,
+      logChannelId: updates.logChannelId != null ? String(updates.logChannelId) : null
     });
   } catch (err) {
     console.error('failed to update team auth settings', err);
@@ -6667,6 +6771,19 @@ app.post('/api/auth/requests/:token/complete', async (req, res) => {
       console.warn('failed to reload team auth profile', err);
     }
     const roleAssignment = await maybeAssignTeamAuthRole(record.team_id, discordId);
+    try {
+      await postTeamAuthLog({
+        teamId: record.team_id,
+        discordId,
+        discordUsername: discordUsername ?? record.discord_username ?? null,
+        discordDisplayName,
+        steamId,
+        assignedRoleId: roleAssignment?.assigned ? roleAssignment.roleId ?? null : null,
+        altLinked
+      });
+    } catch (logErr) {
+      console.warn('failed to enqueue team auth log message', logErr);
+    }
     if (cookieId) {
       try {
         res.cookie(TEAM_AUTH_COOKIE_NAME, cookieId, {

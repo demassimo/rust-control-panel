@@ -98,6 +98,7 @@ function createApi(pool, dialect) {
         discord_guild_id TEXT NULL,
         discord_auth_enabled TINYINT(1) NOT NULL DEFAULT 0,
         discord_auth_role_id VARCHAR(64) NULL,
+        discord_auth_log_channel_id VARCHAR(64) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX(owner_user_id),
         CONSTRAINT fk_team_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -177,6 +178,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_guild_id TEXT NULL');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_auth_enabled TINYINT(1) NOT NULL DEFAULT 0');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_auth_role_id VARCHAR(64) NULL');
+      await ensureColumn('ALTER TABLE teams ADD COLUMN discord_auth_log_channel_id VARCHAR(64) NULL');
       await ensureColumn('ALTER TABLE servers ADD COLUMN team_id INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN queued INT NULL');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN sleepers INT NULL');
@@ -515,7 +517,8 @@ function createApi(pool, dialect) {
     },
     async getTeamAuthSettings(teamId){
       const rows = await exec(
-        'SELECT discord_auth_enabled, discord_auth_role_id, discord_token, discord_guild_id FROM teams WHERE id=?',
+        `SELECT discord_auth_enabled, discord_auth_role_id, discord_auth_log_channel_id, discord_token, discord_guild_id
+         FROM teams WHERE id=?`,
         [teamId]
       );
       const row = Array.isArray(rows) && rows.length ? rows[0] : rows || {};
@@ -525,11 +528,15 @@ function createApi(pool, dialect) {
       return {
         enabled: Boolean(row?.discord_auth_enabled),
         roleId: role != null && role !== '' ? String(role) : null,
+        logChannelId:
+          row?.discord_auth_log_channel_id != null && row.discord_auth_log_channel_id !== ''
+            ? String(row.discord_auth_log_channel_id)
+            : null,
         guildId: guild != null && guild !== '' ? String(guild) : null,
         token: token != null && token !== '' ? String(token) : null
       };
     },
-    async setTeamAuthSettings(teamId, { enabled = null, roleId = undefined } = {}){
+    async setTeamAuthSettings(teamId, { enabled = null, roleId = undefined, logChannelId = undefined } = {}){
       const numericTeamId = Number(teamId);
       if (!Number.isFinite(numericTeamId)) return 0;
       const updates = [];
@@ -541,6 +548,11 @@ function createApi(pool, dialect) {
       if (roleId !== undefined) {
         const value = roleId == null ? null : String(roleId).trim();
         updates.push('discord_auth_role_id=?');
+        params.push(value && value.length ? value : null);
+      }
+      if (logChannelId !== undefined) {
+        const value = logChannelId == null ? null : String(logChannelId).trim();
+        updates.push('discord_auth_log_channel_id=?');
         params.push(value && value.length ? value : null);
       }
       if (!updates.length) return 0;

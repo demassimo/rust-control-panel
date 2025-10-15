@@ -92,7 +92,7 @@
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] },
     teamDiscord: { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null },
-    teamAuth: { loading: false, enabled: false, roleId: null, loaded: false, loadedTeamId: null },
+    teamAuth: { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null },
     workspaceDiscord: {
       serverId: null,
       loading: false,
@@ -137,6 +137,7 @@
   const teamAuthForm = $('#teamAuthForm');
   const teamAuthEnabledInput = $('#teamAuthEnabled');
   const teamAuthRoleInput = $('#teamAuthRole');
+  const teamAuthLogChannelInput = $('#teamAuthLogChannel');
   const teamAuthStatus = $('#teamAuthStatus');
   const btnSaveTeamAuth = $('#teamAuthSave');
   const roleSelect = $('#roleSelect');
@@ -3983,7 +3984,60 @@
         }
       }
     }
+    if (state.teamAuth) {
+      let appliedAuthContext = false;
+      if (context.teamAuth && typeof context.teamAuth === 'object') {
+        state.teamAuth.enabled = Boolean(context.teamAuth.enabled);
+        state.teamAuth.roleId =
+          context.teamAuth.roleId != null && context.teamAuth.roleId !== ''
+            ? String(context.teamAuth.roleId)
+            : null;
+        state.teamAuth.logChannelId =
+          context.teamAuth.logChannelId != null && context.teamAuth.logChannelId !== ''
+            ? String(context.teamAuth.logChannelId)
+            : null;
+        state.teamAuth.loaded = true;
+        state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
+        appliedAuthContext = true;
+      } else if (typeof context.activeTeamRequiresDiscordAuth !== 'undefined') {
+        state.teamAuth.enabled = Boolean(context.activeTeamRequiresDiscordAuth);
+        if (typeof context.activeTeamDiscordRoleId !== 'undefined') {
+          state.teamAuth.roleId =
+            context.activeTeamDiscordRoleId != null && context.activeTeamDiscordRoleId !== ''
+              ? String(context.activeTeamDiscordRoleId)
+              : null;
+        }
+        if (typeof context.activeTeamDiscordAuthLogChannelId !== 'undefined') {
+          const channel = context.activeTeamDiscordAuthLogChannelId;
+          state.teamAuth.logChannelId = channel != null && channel !== '' ? String(channel) : null;
+        }
+        state.teamAuth.loaded = true;
+        state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
+        appliedAuthContext = true;
+      }
+      if (state.activeTeamId !== previousTeamId) {
+        if (!appliedAuthContext) {
+          state.teamAuth.loaded = false;
+          state.teamAuth.loadedTeamId = null;
+          state.teamAuth.enabled = false;
+          state.teamAuth.roleId = null;
+          state.teamAuth.logChannelId = null;
+          if (teamAuthEnabledInput && !teamAuthEnabledInput.matches(':focus')) {
+            teamAuthEnabledInput.checked = false;
+          }
+          if (teamAuthRoleInput && document.activeElement !== teamAuthRoleInput) {
+            teamAuthRoleInput.value = '';
+          }
+          if (teamAuthLogChannelInput && document.activeElement !== teamAuthLogChannelInput) {
+            teamAuthLogChannelInput.value = '';
+          }
+        }
+        state.teamAuth.loading = false;
+        hideNotice(teamAuthStatus);
+      }
+    }
     updateTeamDiscordUi();
+    updateTeamAuthUi();
     renderTeamSwitcher();
   }
 
@@ -6517,7 +6571,7 @@
     state.roles = [];
     state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
     state.teamDiscord = { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null };
-    state.teamAuth = { loading: false, enabled: false, roleId: null, loaded: false, loadedTeamId: null };
+    state.teamAuth = { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null };
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
@@ -6527,6 +6581,7 @@
     hideNotice(teamAuthStatus);
     if (teamAuthEnabledInput) teamAuthEnabledInput.checked = false;
     if (teamAuthRoleInput) teamAuthRoleInput.value = '';
+    if (teamAuthLogChannelInput) teamAuthLogChannelInput.value = '';
     updateTeamDiscordUi();
     updateTeamAccessView();
     renderTeamSwitcher();
@@ -7437,6 +7492,13 @@
     return String(value).trim();
   }
 
+  function normalizeTeamAuthLogChannelId(value) {
+    if (value == null) return '';
+    const digits = String(value).replace(/[^0-9]/g, '');
+    if (!digits) return '';
+    return digits.slice(0, 64);
+  }
+
   function updateTeamAuthUi() {
     if (!teamAuthSection) return;
     const canManage = canManageTeamDiscord();
@@ -7470,6 +7532,18 @@
       }
     }
 
+    if (teamAuthLogChannelInput) {
+      const storedLogChannel = normalizeTeamAuthLogChannelId(authState.logChannelId);
+      if (document.activeElement !== teamAuthLogChannelInput) {
+        teamAuthLogChannelInput.value = storedLogChannel;
+      }
+      const checkboxChecked = teamAuthEnabledInput ? !!teamAuthEnabledInput.checked : enabled;
+      teamAuthLogChannelInput.disabled = !canManage || loading || !checkboxChecked;
+      if (teamAuthLogChannelInput.disabled && document.activeElement === teamAuthLogChannelInput) {
+        teamAuthLogChannelInput.blur();
+      }
+    }
+
     if (btnSaveTeamAuth) {
       btnSaveTeamAuth.disabled = !canManage || loading;
     }
@@ -7481,13 +7555,16 @@
 
     const enabled = !!teamAuthEnabledInput?.checked;
     const roleValue = normalizeTeamAuthRoleId(teamAuthRoleInput?.value);
+    const logChannelValue = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput?.value);
     const payload = {
       enabled,
-      roleId: roleValue ? roleValue : null
+      roleId: roleValue ? roleValue : null,
+      logChannelId: logChannelValue ? logChannelValue : null
     };
 
     state.teamAuth.enabled = payload.enabled;
     state.teamAuth.roleId = payload.roleId;
+    state.teamAuth.logChannelId = payload.logChannelId;
     state.teamAuth.loading = true;
     updateTeamAuthUi();
     showNotice(teamAuthStatus, 'Saving authentication settings…', 'info');
@@ -7496,6 +7573,10 @@
       const data = await api('/team/auth/settings', payload, 'POST');
       state.teamAuth.enabled = !!(data?.enabled ?? payload.enabled);
       state.teamAuth.roleId = data?.roleId != null && data.roleId !== '' ? String(data.roleId) : (payload.roleId || null);
+      state.teamAuth.logChannelId =
+        data?.logChannelId != null && data.logChannelId !== ''
+          ? String(data.logChannelId)
+          : (payload.logChannelId || null);
       state.teamAuth.loaded = true;
       state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
       showNotice(teamAuthStatus, 'Authentication settings saved.', 'success');
@@ -7559,6 +7640,7 @@
       state.teamAuth.loading = false;
       state.teamAuth.enabled = false;
       state.teamAuth.roleId = null;
+      state.teamAuth.logChannelId = null;
       state.teamAuth.loaded = false;
       state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
       hideNotice(teamAuthStatus);
@@ -7580,6 +7662,8 @@
       const data = await api('/team/auth/settings');
       state.teamAuth.enabled = Boolean(data?.enabled);
       state.teamAuth.roleId = data?.roleId != null && data.roleId !== '' ? String(data.roleId) : null;
+      state.teamAuth.logChannelId =
+        data?.logChannelId != null && data.logChannelId !== '' ? String(data.logChannelId) : null;
       state.teamAuth.loaded = true;
       state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
     } catch (err) {
@@ -7589,6 +7673,7 @@
       } else {
         state.teamAuth.loaded = false;
         state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
+        state.teamAuth.logChannelId = null;
         showNotice(teamAuthStatus, describeError(err), 'error');
       }
     } finally {
@@ -7611,6 +7696,7 @@
       state.teamAuth.loading = false;
       state.teamAuth.enabled = false;
       state.teamAuth.roleId = null;
+      state.teamAuth.logChannelId = null;
       state.teamAuth.loaded = false;
       state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
       hideNotice(teamAuthStatus);
@@ -7703,12 +7789,16 @@
       if (!state.teamDiscord.hasToken) {
         state.teamDiscord.tokenPreview = null;
     }
-    if (state.teamAuth) {
+  if (state.teamAuth) {
       if (context.teamAuth && typeof context.teamAuth === 'object') {
         state.teamAuth.enabled = Boolean(context.teamAuth.enabled);
         state.teamAuth.roleId =
           context.teamAuth.roleId != null && context.teamAuth.roleId !== ''
             ? String(context.teamAuth.roleId)
+            : null;
+        state.teamAuth.logChannelId =
+          context.teamAuth.logChannelId != null && context.teamAuth.logChannelId !== ''
+            ? String(context.teamAuth.logChannelId)
             : null;
         state.teamAuth.loaded = true;
         state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
@@ -7719,6 +7809,10 @@
             context.activeTeamDiscordRoleId != null && context.activeTeamDiscordRoleId !== ''
               ? String(context.activeTeamDiscordRoleId)
               : null;
+        }
+        if (typeof context.activeTeamDiscordAuthLogChannelId !== 'undefined') {
+          const channel = context.activeTeamDiscordAuthLogChannelId;
+          state.teamAuth.logChannelId = channel != null && channel !== '' ? String(channel) : null;
         }
         state.teamAuth.loaded = true;
         state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
@@ -7732,17 +7826,22 @@
           state.teamAuth.loadedTeamId = null;
           state.teamAuth.enabled = false;
           state.teamAuth.roleId = null;
+          state.teamAuth.logChannelId = null;
           if (teamAuthEnabledInput && !teamAuthEnabledInput.matches(':focus')) {
             teamAuthEnabledInput.checked = false;
           }
           if (teamAuthRoleInput && document.activeElement !== teamAuthRoleInput) {
             teamAuthRoleInput.value = '';
           }
+          if (teamAuthLogChannelInput && document.activeElement !== teamAuthLogChannelInput) {
+            teamAuthLogChannelInput.value = '';
+          }
         }
         hideNotice(teamAuthStatus);
       }
     }
     updateTeamDiscordUi();
+    updateTeamAuthUi();
   }
     if (unauthorized) return;
   }
@@ -8147,6 +8246,11 @@
     teamAuthRoleInput?.addEventListener('input', () => {
       const value = normalizeTeamAuthRoleId(teamAuthRoleInput.value);
       state.teamAuth.roleId = value ? value : null;
+      hideNotice(teamAuthStatus);
+    });
+    teamAuthLogChannelInput?.addEventListener('input', () => {
+      const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput.value);
+      state.teamAuth.logChannelId = value ? value : null;
       hideNotice(teamAuthStatus);
     });
     btnCreateUser?.addEventListener('click', async () => {
