@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="panel-api-base" content="/api" />
-  <title>Link your Steam account</title>
+  <title>Link your Discord and Steam accounts</title>
   <style>
     *, *::before, *::after {
       box-sizing: border-box;
@@ -61,25 +61,7 @@
     form {
       display: flex;
       flex-direction: column;
-      gap: 16px;
-    }
-    label {
-      font-weight: 600;
-      font-size: 0.95rem;
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 12px 14px;
-      border-radius: 10px;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      background: rgba(15, 23, 42, 0.6);
-      color: #f8fafc;
-      font-size: 1rem;
-    }
-    input[type="text"]:focus {
-      outline: none;
-      border-color: #38bdf8;
-      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+      gap: 18px;
     }
     button {
       align-self: flex-start;
@@ -147,6 +129,75 @@
       color: #f8fafc;
       word-break: break-word;
     }
+    .oauth-step {
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 12px;
+      padding: 18px;
+      background: rgba(15, 23, 42, 0.45);
+      display: grid;
+      gap: 10px;
+    }
+    .oauth-step + .oauth-step {
+      margin-top: 6px;
+    }
+    .oauth-step__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .oauth-step__header h3 {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(59, 130, 246, 0.2);
+      color: #bfdbfe;
+    }
+    .status-badge--success {
+      background: rgba(16, 185, 129, 0.25);
+      color: #bbf7d0;
+    }
+    .status-badge--error {
+      background: rgba(220, 38, 38, 0.25);
+      color: #fecaca;
+    }
+    .oauth-button {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .oauth-button--discord {
+      background: linear-gradient(135deg, #5865f2, #7c83ff);
+      color: #eef2ff;
+    }
+    .oauth-button--steam {
+      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+      color: #022c43;
+    }
+    .oauth-button--connected {
+      background: rgba(34, 197, 94, 0.25);
+      color: #bbf7d0;
+      cursor: default;
+    }
+    .oauth-button--connected:hover {
+      transform: none;
+      box-shadow: none;
+    }
     @media (max-width: 520px) {
       body {
         padding: 24px 12px;
@@ -164,22 +215,35 @@
 <body>
   <main>
     <header>
-      <h1>Link your Steam account</h1>
-      <p class="lead">This page links your Steam account to <span data-team-name>our Rust servers</span> so we can build your player profile.</p>
+      <h1>Link your Discord and Steam accounts</h1>
+      <p class="lead">Securely connect both accounts to <span data-team-name>our Rust servers</span> so we can build your player profile and assign the correct Discord role.</p>
     </header>
 
     <section id="status" class="card card--status" aria-live="polite">Checking your request…</section>
 
     <form id="link-form" class="card" hidden>
       <div>
-        <h2 style="margin-top: 0; margin-bottom: 6px; font-size: 1.35rem;">Confirm your Steam ID</h2>
+        <h2 style="margin-top: 0; margin-bottom: 6px; font-size: 1.35rem;">Connect your accounts</h2>
         <p class="hint" id="discord-hint"></p>
         <p class="hint" id="expiry-hint"></p>
       </div>
-      <label for="steam-id">SteamID64</label>
-      <input id="steam-id" name="steam-id" type="text" inputmode="numeric" autocomplete="off" placeholder="7656119XXXXXXXXXX" required />
-      <p class="hint">You can find this 17-digit number on <a href="https://steamid.io/lookup" target="_blank" rel="noopener">steamid.io</a> or from your Steam profile URL.</p>
-      <button id="submit-button" type="submit">Complete linking</button>
+      <section class="oauth-step" id="discord-step">
+        <header class="oauth-step__header">
+          <h3>Step 1 · Discord</h3>
+          <span class="status-badge" id="discord-status-badge">Not connected</span>
+        </header>
+        <p class="hint" id="discord-step-hint">Sign in with the Discord account that requested this link.</p>
+        <button type="button" id="discord-button" class="oauth-button oauth-button--discord">Connect Discord</button>
+      </section>
+      <section class="oauth-step" id="steam-step">
+        <header class="oauth-step__header">
+          <h3>Step 2 · Steam</h3>
+          <span class="status-badge" id="steam-status-badge">Not connected</span>
+        </header>
+        <p class="hint" id="steam-step-hint">Connect your Steam account after Discord is verified.</p>
+        <button type="button" id="steam-button" class="oauth-button oauth-button--steam">Connect Steam</button>
+      </section>
+      <button id="submit-button" type="submit" disabled>Complete linking</button>
       <p id="form-error" class="error-text" role="alert" aria-live="assertive"></p>
     </form>
 
@@ -210,11 +274,16 @@
       const statusCard = document.getElementById('status');
       const form = document.getElementById('link-form');
       const successCard = document.getElementById('success');
-      const steamInput = document.getElementById('steam-id');
       const submitButton = document.getElementById('submit-button');
       const formError = document.getElementById('form-error');
       const discordHint = document.getElementById('discord-hint');
       const expiryHint = document.getElementById('expiry-hint');
+      const discordButton = document.getElementById('discord-button');
+      const steamButton = document.getElementById('steam-button');
+      const discordStatusBadge = document.getElementById('discord-status-badge');
+      const steamStatusBadge = document.getElementById('steam-status-badge');
+      const discordStepHint = document.getElementById('discord-step-hint');
+      const steamStepHint = document.getElementById('steam-step-hint');
       const successMessage = document.getElementById('success-message');
       const successDiscord = document.getElementById('success-discord');
       const successSteam = document.getElementById('success-steamid');
@@ -223,6 +292,9 @@
       const teamNameTargets = document.querySelectorAll('[data-team-name]');
 
       let requestDetails = null;
+      let discordOAuth = { linked: false };
+      let steamOAuth = { linked: false };
+      let oauthStatusNotice = null;
 
       function normaliseToken(raw) {
         if (typeof raw !== 'string') return '';
@@ -250,17 +322,20 @@
           teamNameTargets.forEach((el) => {
             el.textContent = name;
           });
-          document.title = `Link your Steam account · ${name}`;
+          document.title = `Link your Discord and Steam accounts · ${name}`;
         }
       }
 
       function describeDiscordUser(record) {
-        const tag = record?.discordUsername || record?.discordId || '';
-        if (!tag) return 'Discord account';
-        if (record.discordUsername && record.discordId) {
-          return `${record.discordUsername} (${record.discordId})`;
-        }
-        return tag;
+        const display = record?.discordDisplayName || '';
+        const username = record?.discordUsername || '';
+        const id = record?.discordId || '';
+        if (display && id) return `${display} (${id})`;
+        if (display) return display;
+        if (username && id) return `${username} (${id})`;
+        if (username) return username;
+        if (id) return id;
+        return 'Discord account';
       }
 
       function formatExpiry(iso) {
@@ -271,6 +346,130 @@
           dateStyle: 'medium',
           timeStyle: 'short'
         });
+      }
+
+      function mapDiscordOAuthFeedback(code) {
+        switch (code) {
+          case 'not_supported':
+            return 'Account linking is not enabled on this server yet.';
+          case 'discord_unavailable':
+            return 'Discord sign-in is not configured. Ask a server admin to finish linking.';
+          case 'already_completed':
+            return 'This link was already used. Request a fresh link if you still need access.';
+          case 'expired':
+            return 'This link has expired. Generate a new one from the control panel to continue.';
+          case 'discord_mismatch':
+            return 'That Discord account does not match this link. Try again with the correct account.';
+          case 'session_mismatch':
+            return 'Your session changed while connecting to Discord. Start the process again.';
+          case 'not_found':
+            return 'This link could not be found. Ask your admin for a new one.';
+          default:
+            return 'We could not verify Discord. Please try again in a moment.';
+        }
+      }
+
+      function mapSteamOAuthFeedback(code) {
+        switch (code) {
+          case 'not_supported':
+            return 'Account linking is not enabled on this server yet.';
+          case 'already_completed':
+            return 'This link was already used. Request a fresh link if you still need access.';
+          case 'expired':
+            return 'This link has expired. Generate a new one from the control panel to continue.';
+          case 'session_mismatch':
+            return 'Your session changed while connecting to Steam. Start from the Discord step again.';
+          case 'steam_id_missing':
+            return 'Steam did not return an ID. Make sure you approve the login request and try again.';
+          case 'not_found':
+            return 'This link could not be found. Ask your admin for a new one.';
+          default:
+            return 'We could not verify Steam. Please try again in a moment.';
+        }
+      }
+
+      function registerOAuthStatus(message, tone = 'info') {
+        if (!message) return;
+        if (tone === 'error') {
+          oauthStatusNotice = { message, tone };
+        } else if (!oauthStatusNotice) {
+          oauthStatusNotice = { message, tone };
+        }
+      }
+
+      function updateOAuthState() {
+        const discordConnected = Boolean(discordOAuth?.linked && discordOAuth.discordId);
+        discordStatusBadge.classList.remove('status-badge--success', 'status-badge--error');
+        discordButton.classList.remove('oauth-button--connected');
+        if (discordConnected) {
+          discordStatusBadge.textContent = 'Connected';
+          discordStatusBadge.classList.add('status-badge--success');
+          discordButton.disabled = true;
+          discordButton.textContent = 'Discord connected';
+          discordButton.classList.add('oauth-button--connected');
+          const label = describeDiscordUser(discordOAuth);
+          discordStepHint.textContent = `Linked Discord: ${label}.`;
+        } else {
+          discordStatusBadge.textContent = 'Not connected';
+          discordButton.disabled = false;
+          discordButton.textContent = 'Connect Discord';
+          const expectedLabel = describeDiscordUser({
+            discordUsername: requestDetails?.discordUsername,
+            discordId: requestDetails?.discordId
+          });
+          if (requestDetails?.discordUsername || requestDetails?.discordId) {
+            discordStepHint.textContent = `Click Connect Discord and authorise ${expectedLabel}.`;
+          } else {
+            discordStepHint.textContent = 'Sign in with the Discord account that requested this link.';
+          }
+        }
+
+        const steamConnected = Boolean(steamOAuth?.linked && steamOAuth.steamId);
+        steamStatusBadge.classList.remove('status-badge--success', 'status-badge--error');
+        steamButton.classList.remove('oauth-button--connected');
+        if (steamConnected) {
+          steamStatusBadge.textContent = 'Connected';
+          steamStatusBadge.classList.add('status-badge--success');
+          steamButton.disabled = true;
+          steamButton.textContent = 'Steam connected';
+          steamButton.classList.add('oauth-button--connected');
+          steamStepHint.textContent = `Linked Steam ID: ${steamOAuth.steamId}.`;
+        } else {
+          steamStatusBadge.textContent = 'Not connected';
+          steamButton.disabled = false;
+          steamButton.textContent = 'Connect Steam';
+          steamStepHint.textContent = discordConnected
+            ? 'Connect your Steam account to finish.'
+            : 'Connect your Steam account after Discord is verified.';
+        }
+
+        submitButton.disabled = !(discordConnected && steamConnected);
+        if (!submitButton.disabled) {
+          submitButton.textContent = 'Complete linking';
+        }
+      }
+
+      const currentUrl = new URL(window.location.href);
+      const discordStatusParam = currentUrl.searchParams.get('discord_status');
+      const discordErrorParam = currentUrl.searchParams.get('discord_error');
+      const steamStatusParam = currentUrl.searchParams.get('steam_status');
+      const steamErrorParam = currentUrl.searchParams.get('steam_error');
+
+      if (discordErrorParam) {
+        registerOAuthStatus(mapDiscordOAuthFeedback(discordErrorParam), 'error');
+      } else if (discordStatusParam === 'linked') {
+        registerOAuthStatus('Discord account connected. Continue by linking Steam.', 'success');
+      }
+
+      if (steamErrorParam) {
+        registerOAuthStatus(mapSteamOAuthFeedback(steamErrorParam), 'error');
+      } else if (steamStatusParam === 'linked') {
+        registerOAuthStatus('Steam account connected. You can finish linking now.', 'success');
+      }
+
+      if (discordStatusParam || discordErrorParam || steamStatusParam || steamErrorParam) {
+        ['discord_status', 'discord_error', 'steam_status', 'steam_error'].forEach((key) => currentUrl.searchParams.delete(key));
+        window.history.replaceState({}, '', currentUrl.toString());
       }
 
       function extractTokenFromLocation() {
@@ -300,8 +499,12 @@
             return 'The request token is missing or invalid.';
           case 'discord_mismatch':
             return 'The Discord account on this link does not match the one that opened it.';
+          case 'discord_oauth_required':
+            return 'Connect the Discord account using the button above before completing the link.';
           case 'invalid_steam_id':
             return 'That SteamID64 did not look valid. Double-check the number and try again.';
+          case 'steam_oauth_required':
+            return 'Connect your Steam account using the button above before completing the link.';
           case 'profile_upsert_failed':
             return 'We could not save the profile. Please try again in a moment.';
           case 'not_supported':
@@ -331,8 +534,25 @@
           const data = await response.json();
           requestDetails = { ...data, token: data.token || token };
           setTeamName(data.teamName);
-          if (data.discordUsername || data.discordId) {
-            const label = describeDiscordUser(data);
+          discordOAuth = data.discordOAuth && data.discordOAuth.linked
+            ? {
+                linked: true,
+                discordId: data.discordOAuth.discordId || null,
+                discordUsername: data.discordOAuth.discordUsername || null,
+                discordDisplayName: data.discordOAuth.discordDisplayName || null
+              }
+            : { linked: false };
+          steamOAuth = data.steamOAuth && data.steamOAuth.linked
+            ? {
+                linked: true,
+                steamId: data.steamOAuth.steamId || null
+              }
+            : { linked: false };
+          const discordLabelSource = discordOAuth.linked
+            ? discordOAuth
+            : { discordUsername: data.discordUsername, discordId: data.discordId };
+          if (discordLabelSource.discordUsername || discordLabelSource.discordId || discordOAuth.linked) {
+            const label = describeDiscordUser(discordLabelSource);
             discordHint.textContent = `Discord account: ${label}`;
           } else {
             discordHint.textContent = '';
@@ -343,9 +563,14 @@
           } else {
             expiryHint.textContent = '';
           }
-          hideStatus();
+          updateOAuthState();
+          if (oauthStatusNotice) {
+            setStatus(oauthStatusNotice.message, oauthStatusNotice.tone);
+            oauthStatusNotice = null;
+          } else {
+            hideStatus();
+          }
           form.hidden = false;
-          steamInput.focus({ preventScroll: true });
         } catch (err) {
           console.error('Failed to load account link request', err);
           setStatus('We could not reach the server. Please refresh the page and try again.', 'error');
@@ -359,10 +584,14 @@
           form.hidden = true;
           return;
         }
-        const steamId = steamInput.value.trim();
-        if (!/^\d{17}$/.test(steamId)) {
-          formError.textContent = 'Enter the 17-digit SteamID64 linked to your Steam account.';
-          steamInput.focus();
+        if (!discordOAuth.linked) {
+          formError.textContent = mapApiError('discord_oauth_required');
+          setStatus(mapApiError('discord_oauth_required'), 'error');
+          return;
+        }
+        if (!steamOAuth.linked) {
+          formError.textContent = mapApiError('steam_oauth_required');
+          setStatus(mapApiError('steam_oauth_required'), 'error');
           return;
         }
         formError.textContent = '';
@@ -373,7 +602,7 @@
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ steamId })
+            body: JSON.stringify({})
           });
           if (!response.ok) {
             let message = 'Something went wrong while completing the link. Please try again.';
@@ -386,20 +615,22 @@
             formError.textContent = message;
             submitButton.disabled = false;
             submitButton.textContent = 'Complete linking';
+            updateOAuthState();
             return;
           }
           const result = await response.json();
           form.hidden = true;
-          form.reset();
           const linkedTeam = requestDetails.teamName || '';
           successMessage.textContent = linkedTeam
             ? `Your player profile for ${linkedTeam} is now connected. You can return to Discord and continue.`
             : 'Your player profile is now connected. You can return to Discord and continue.';
-          successDiscord.textContent = describeDiscordUser({
-            discordUsername: result.discordUsername || requestDetails.discordUsername,
-            discordId: result.discordId || requestDetails.discordId
-          });
-          successSteam.textContent = result.steamId || steamId;
+          const discordSummary = {
+            discordDisplayName: result.discordDisplayName || discordOAuth.discordDisplayName || null,
+            discordUsername: result.discordUsername || discordOAuth.discordUsername || requestDetails.discordUsername,
+            discordId: result.discordId || discordOAuth.discordId || requestDetails.discordId
+          };
+          successDiscord.textContent = describeDiscordUser(discordSummary);
+          successSteam.textContent = result.steamId || steamOAuth.steamId || '—';
           if (result.assignedDiscordRoleId) {
             successRoleRow.hidden = false;
             successRole.textContent = result.assignedDiscordRoleId;
@@ -415,7 +646,32 @@
           formError.textContent = 'We could not reach the server. Please check your connection and try again.';
           submitButton.disabled = false;
           submitButton.textContent = 'Complete linking';
+          updateOAuthState();
         }
+      }
+
+      function startDiscordOAuth() {
+        if (!requestDetails?.token) {
+          setStatus('This link is no longer valid. Please request a new one.', 'error');
+          return;
+        }
+        formError.textContent = '';
+        discordButton.disabled = true;
+        discordButton.textContent = 'Redirecting…';
+        setStatus('Redirecting to Discord…');
+        window.location.href = `${apiBase}/auth/discord/redirect?token=${encodeURIComponent(requestDetails.token)}`;
+      }
+
+      function startSteamOAuth() {
+        if (!requestDetails?.token) {
+          setStatus('This link is no longer valid. Please request a new one.', 'error');
+          return;
+        }
+        formError.textContent = '';
+        steamButton.disabled = true;
+        steamButton.textContent = 'Redirecting…';
+        setStatus('Redirecting to Steam…');
+        window.location.href = `${apiBase}/auth/steam/redirect?token=${encodeURIComponent(requestDetails.token)}`;
       }
 
       const token = extractTokenFromLocation();
@@ -424,6 +680,8 @@
         return;
       }
       loadRequest(token);
+      discordButton.addEventListener('click', startDiscordOAuth);
+      steamButton.addEventListener('click', startSteamOAuth);
       form.addEventListener('submit', submitForm);
     })();
   </script>

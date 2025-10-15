@@ -125,6 +125,35 @@ const AUTH_COOKIE_SECURE = (() => {
   }
   return (process.env.NODE_ENV || '').toLowerCase() === 'production';
 })();
+const TEAM_AUTH_DISCORD_COOKIE_NAME = `${TEAM_AUTH_COOKIE_NAME}_discord`;
+const TEAM_AUTH_STEAM_COOKIE_NAME = `${TEAM_AUTH_COOKIE_NAME}_steam`;
+const TEAM_AUTH_SESSION_TTL_MS = Math.max(TEAM_AUTH_LINK_TTL_MS, TEAM_AUTH_COOKIE_MAX_AGE_MS);
+const TEAM_AUTH_STATE_SECRET = (() => {
+  if (typeof process.env.TEAM_AUTH_STATE_SECRET === 'string' && process.env.TEAM_AUTH_STATE_SECRET.trim()) {
+    return process.env.TEAM_AUTH_STATE_SECRET.trim();
+  }
+  if (typeof process.env.JWT_SECRET === 'string' && process.env.JWT_SECRET.trim()) {
+    return process.env.JWT_SECRET.trim();
+  }
+  const fallback = crypto.randomBytes(32).toString('hex');
+  console.warn('TEAM_AUTH_STATE_SECRET not configured; using ephemeral secret. Configure TEAM_AUTH_STATE_SECRET for stable OAuth sessions.');
+  return fallback;
+})();
+const DISCORD_OAUTH_CLIENT_ID = typeof process.env.DISCORD_OAUTH_CLIENT_ID === 'string'
+  ? process.env.DISCORD_OAUTH_CLIENT_ID.trim()
+  : '';
+const DISCORD_OAUTH_CLIENT_SECRET = typeof process.env.DISCORD_OAUTH_CLIENT_SECRET === 'string'
+  ? process.env.DISCORD_OAUTH_CLIENT_SECRET.trim()
+  : '';
+const DISCORD_OAUTH_REDIRECT_URI = typeof process.env.DISCORD_OAUTH_REDIRECT_URI === 'string'
+  ? process.env.DISCORD_OAUTH_REDIRECT_URI.trim()
+  : '';
+const STEAM_OPENID_REALM = typeof process.env.STEAM_OPENID_REALM === 'string'
+  ? process.env.STEAM_OPENID_REALM.trim()
+  : '';
+const STEAM_OPENID_RETURN_URL = typeof process.env.STEAM_OPENID_RETURN_URL === 'string'
+  ? process.env.STEAM_OPENID_RETURN_URL.trim()
+  : '';
 
 const ENTITY_SEARCH_DEFINITIONS = [
   {
@@ -5097,6 +5126,183 @@ function generateTeamAuthToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
+function timingSafeEqualString(a, b) {
+  const aBuffer = Buffer.from(String(a ?? ''), 'utf8');
+  const bBuffer = Buffer.from(String(b ?? ''), 'utf8');
+  if (aBuffer.length !== bBuffer.length) return false;
+  return crypto.timingSafeEqual(aBuffer, bBuffer);
+}
+
+function encodeSignedPayload(value) {
+  try {
+    const json = JSON.stringify({ ...value, ts: Date.now() });
+    const payload = Buffer.from(json, 'utf8').toString('base64url');
+    const signature = crypto.createHmac('sha256', TEAM_AUTH_STATE_SECRET).update(payload).digest('base64url');
+    return `${payload}.${signature}`;
+  } catch (err) {
+    console.warn('failed to encode signed payload', err);
+    return null;
+  }
+}
+
+function decodeSignedPayload(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [payload, signature] = token.split('.', 2);
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac('sha256', TEAM_AUTH_STATE_SECRET).update(payload).digest('base64url');
+  if (!timingSafeEqualString(signature, expected)) return null;
+  try {
+    const json = Buffer.from(payload, 'base64url').toString('utf8');
+    const parsed = JSON.parse(json);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const ts = Number(parsed.ts);
+    if (Number.isFinite(ts) && Date.now() - ts > TEAM_AUTH_SESSION_TTL_MS) {
+      return null;
+    }
+    return parsed;
+  } catch (err) {
+    console.warn('failed to decode signed payload', err);
+    return null;
+  }
+}
+
+function ensureTeamAuthCookie(cookieJar, res) {
+  let cookieId = sanitizeCookieId(cookieJar.get(TEAM_AUTH_COOKIE_NAME) || null);
+  if (!cookieId) {
+    cookieId = sanitizeCookieId(crypto.randomBytes(16).toString('hex'));
+    if (cookieId) {
+      try {
+        res.cookie(TEAM_AUTH_COOKIE_NAME, cookieId, {
+          httpOnly: true,
+          sameSite: 'lax',
+          maxAge: TEAM_AUTH_COOKIE_MAX_AGE_MS,
+          secure: AUTH_COOKIE_SECURE
+        });
+      } catch (err) {
+        console.warn('failed to set team auth cookie', err);
+      }
+    }
+  }
+  return cookieId;
+}
+
+function readTeamAuthDiscordSession(cookieJar, token) {
+  const raw = cookieJar.get(TEAM_AUTH_DISCORD_COOKIE_NAME) || null;
+  if (!raw) return null;
+  const decoded = decodeSignedPayload(raw);
+  if (!decoded || decoded.purpose !== 'discord' || decoded.token !== token) return null;
+  const discordId = sanitizeDiscordSnowflake(decoded.discordId ?? decoded.discord_id ?? null);
+  if (!discordId) return null;
+  return {
+    discordId,
+    discordUsername: sanitizeDiscordUsername(decoded.discordUsername ?? decoded.discord_username ?? null),
+    discordDisplayName: sanitizeDiscordUsername(decoded.discordDisplayName ?? decoded.discord_display_name ?? null),
+    cookieId: sanitizeCookieId(decoded.cookieId ?? decoded.cookie_id ?? null) || null
+  };
+}
+
+function readTeamAuthSteamSession(cookieJar, token) {
+  const raw = cookieJar.get(TEAM_AUTH_STEAM_COOKIE_NAME) || null;
+  if (!raw) return null;
+  const decoded = decodeSignedPayload(raw);
+  if (!decoded || decoded.purpose !== 'steam' || decoded.token !== token) return null;
+  const steamId = sanitizeSteamId(decoded.steamId ?? decoded.steam_id ?? null);
+  if (!steamId) return null;
+  return {
+    steamId,
+    cookieId: sanitizeCookieId(decoded.cookieId ?? decoded.cookie_id ?? null) || null
+  };
+}
+
+function storeTeamAuthDiscordSession(res, { token, discordId, discordUsername, discordDisplayName, cookieId }) {
+  const payload = encodeSignedPayload({
+    purpose: 'discord',
+    token,
+    discordId,
+    discordUsername,
+    discordDisplayName,
+    cookieId: cookieId || null
+  });
+  if (!payload) return;
+  try {
+    res.cookie(TEAM_AUTH_DISCORD_COOKIE_NAME, payload, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: TEAM_AUTH_COOKIE_MAX_AGE_MS,
+      secure: AUTH_COOKIE_SECURE,
+      path: '/'
+    });
+  } catch (err) {
+    console.warn('failed to store discord oauth cookie', err);
+  }
+}
+
+function storeTeamAuthSteamSession(res, { token, steamId, cookieId }) {
+  const payload = encodeSignedPayload({
+    purpose: 'steam',
+    token,
+    steamId,
+    cookieId: cookieId || null
+  });
+  if (!payload) return;
+  try {
+    res.cookie(TEAM_AUTH_STEAM_COOKIE_NAME, payload, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: TEAM_AUTH_COOKIE_MAX_AGE_MS,
+      secure: AUTH_COOKIE_SECURE,
+      path: '/'
+    });
+  } catch (err) {
+    console.warn('failed to store steam oauth cookie', err);
+  }
+}
+
+function clearTeamAuthOAuthCookies(res) {
+  try {
+    res.clearCookie(TEAM_AUTH_DISCORD_COOKIE_NAME, { httpOnly: true, sameSite: 'lax', secure: AUTH_COOKIE_SECURE, path: '/' });
+  } catch (err) {
+    console.warn('failed to clear discord oauth cookie', err);
+  }
+  try {
+    res.clearCookie(TEAM_AUTH_STEAM_COOKIE_NAME, { httpOnly: true, sameSite: 'lax', secure: AUTH_COOKIE_SECURE, path: '/' });
+  } catch (err) {
+    console.warn('failed to clear steam oauth cookie', err);
+  }
+}
+
+function buildTeamAuthReturnUrl(token, extraParams = {}) {
+  let link = buildTeamAuthLink(token) || '/request.html';
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(extraParams)) {
+    if (value == null) continue;
+    params.set(key, value);
+  }
+  if ([...params.keys()].length === 0) {
+    return link;
+  }
+  const connector = link.includes('?') ? '&' : '?';
+  return `${link}${connector}${params.toString()}`;
+}
+
+function resolveDiscordRedirectUri(req) {
+  if (DISCORD_OAUTH_REDIRECT_URI) return DISCORD_OAUTH_REDIRECT_URI;
+  const origin = `${req.protocol}://${req.get('host')}`;
+  return `${origin}/api/auth/discord/callback`;
+}
+
+function resolveSteamReturnUrl(req) {
+  if (STEAM_OPENID_RETURN_URL) return STEAM_OPENID_RETURN_URL;
+  const origin = `${req.protocol}://${req.get('host')}`;
+  return `${origin}/api/auth/steam/callback`;
+}
+
+function resolveSteamRealm(req) {
+  if (STEAM_OPENID_REALM) return STEAM_OPENID_REALM;
+  const origin = `${req.protocol}://${req.get('host')}`;
+  return origin;
+}
+
 function buildTeamAuthLink(token) {
   const safe = typeof token === 'string' ? token.trim() : '';
   if (!safe) return null;
@@ -6055,6 +6261,253 @@ app.get('/api/team/auth/profiles', auth, async (req, res) => {
   }
 });
 
+app.get('/api/auth/discord/redirect', async (req, res) => {
+  const requestToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+  const fallbackLink = buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'invalid_token' });
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'discord_unavailable' }));
+  }
+  if (typeof db.getTeamAuthRequestByToken !== 'function') {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'not_supported' }));
+  }
+  if (!requestToken) {
+    return res.redirect(fallbackLink);
+  }
+  try {
+    const record = await db.getTeamAuthRequestByToken(requestToken);
+    if (!record) return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'not_found' }));
+    if (record.completed_at) return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'already_completed' }));
+    const expires = record.expires_at ? new Date(record.expires_at) : null;
+    if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
+      return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'expired' }));
+    }
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    const cookieId = ensureTeamAuthCookie(cookieJar, res);
+    const stateToken = encodeSignedPayload({
+      purpose: 'discord_state',
+      token: record.state_token,
+      cookieId: cookieId || null,
+      nonce: crypto.randomBytes(16).toString('hex')
+    });
+    if (!stateToken) {
+      return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'state_error' }));
+    }
+    const redirectUri = resolveDiscordRedirectUri(req);
+    const authorizeUrl = new URL('https://discord.com/api/oauth2/authorize');
+    authorizeUrl.searchParams.set('client_id', DISCORD_OAUTH_CLIENT_ID);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('response_type', 'code');
+    authorizeUrl.searchParams.set('scope', 'identify');
+    authorizeUrl.searchParams.set('state', stateToken);
+    authorizeUrl.searchParams.set('prompt', 'consent');
+    res.redirect(authorizeUrl.toString());
+  } catch (err) {
+    console.error('failed to start discord oauth', err);
+    res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unreachable' }));
+  }
+});
+
+app.get('/api/auth/discord/callback', async (req, res) => {
+  const { code, state } = req.query || {};
+  const statePayload = decodeSignedPayload(typeof state === 'string' ? state : null);
+  if (!statePayload || statePayload.purpose !== 'discord_state') {
+    return res.redirect(buildTeamAuthReturnUrl('', { discord_error: 'state_invalid' }));
+  }
+  const requestToken = typeof statePayload.token === 'string' ? statePayload.token.trim() : '';
+  if (!requestToken) {
+    return res.redirect(buildTeamAuthReturnUrl('', { discord_error: 'state_invalid' }));
+  }
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unavailable' }));
+  }
+  if (!code) {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'authorization_failed' }));
+  }
+  if (typeof db.getTeamAuthRequestByToken !== 'function') {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'not_supported' }));
+  }
+  try {
+    const record = await db.getTeamAuthRequestByToken(requestToken);
+    if (!record) return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'not_found' }));
+    if (record.completed_at) return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'already_completed' }));
+    const expires = record.expires_at ? new Date(record.expires_at) : null;
+    if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'expired' }));
+    }
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    const cookieId = ensureTeamAuthCookie(cookieJar, res);
+    const expectedCookie = sanitizeCookieId(statePayload.cookieId || null);
+    if (expectedCookie && cookieId && expectedCookie !== cookieId) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'session_mismatch' }));
+    }
+    const redirectUri = resolveDiscordRedirectUri(req);
+    const body = new URLSearchParams();
+    body.set('client_id', DISCORD_OAUTH_CLIENT_ID);
+    body.set('client_secret', DISCORD_OAUTH_CLIENT_SECRET);
+    body.set('grant_type', 'authorization_code');
+    body.set('code', String(code));
+    body.set('redirect_uri', redirectUri);
+    const tokenResponse = await fetch(`${DISCORD_API_BASE}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    });
+    if (!tokenResponse.ok) {
+      console.warn('discord oauth token exchange failed', tokenResponse.status);
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'authorization_failed' }));
+    }
+    const tokenData = await tokenResponse.json().catch(() => null);
+    const accessToken = tokenData?.access_token;
+    if (!accessToken) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'authorization_failed' }));
+    }
+    const profileResponse = await fetch(`${DISCORD_API_BASE}/users/@me`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!profileResponse.ok) {
+      console.warn('discord profile request failed', profileResponse.status);
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'profile_failed' }));
+    }
+    const profile = await profileResponse.json().catch(() => null);
+    const discordId = sanitizeDiscordSnowflake(profile?.id ?? null);
+    if (!discordId) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'profile_failed' }));
+    }
+    if (record.discord_id) {
+      const expected = sanitizeDiscordSnowflake(record.discord_id);
+      if (expected && expected !== discordId) {
+        return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_mismatch' }));
+      }
+    }
+    storeTeamAuthDiscordSession(res, {
+      token: record.state_token,
+      discordId,
+      discordUsername: profile?.username ?? null,
+      discordDisplayName: profile?.global_name ?? null,
+      cookieId: cookieId || null
+    });
+    res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_status: 'linked' }));
+  } catch (err) {
+    console.error('discord oauth callback failed', err);
+    res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unreachable' }));
+  }
+});
+
+app.get('/api/auth/steam/redirect', async (req, res) => {
+  const requestToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+  if (typeof db.getTeamAuthRequestByToken !== 'function') {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { steam_error: 'not_supported' }));
+  }
+  if (!requestToken) {
+    return res.redirect(buildTeamAuthReturnUrl('', { steam_error: 'invalid_token' }));
+  }
+  try {
+    const record = await db.getTeamAuthRequestByToken(requestToken);
+    if (!record) return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'not_found' }));
+    if (record.completed_at) return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'already_completed' }));
+    const expires = record.expires_at ? new Date(record.expires_at) : null;
+    if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
+      return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'expired' }));
+    }
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    const cookieId = ensureTeamAuthCookie(cookieJar, res);
+    const stateToken = encodeSignedPayload({
+      purpose: 'steam_state',
+      token: record.state_token,
+      cookieId: cookieId || null,
+      nonce: crypto.randomBytes(16).toString('hex')
+    });
+    if (!stateToken) {
+      return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'state_error' }));
+    }
+    const returnUrl = new URL(resolveSteamReturnUrl(req));
+    returnUrl.searchParams.set('state', stateToken);
+    const params = new URLSearchParams({
+      'openid.ns': 'http://specs.openid.net/auth/2.0',
+      'openid.mode': 'checkid_setup',
+      'openid.return_to': returnUrl.toString(),
+      'openid.realm': resolveSteamRealm(req),
+      'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
+      'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select'
+    });
+    res.redirect(`https://steamcommunity.com/openid/login?${params.toString()}`);
+  } catch (err) {
+    console.error('failed to start steam oauth', err);
+    res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'steam_unreachable' }));
+  }
+});
+
+app.get('/api/auth/steam/callback', async (req, res) => {
+  const stateRaw = typeof req.query.state === 'string' ? req.query.state : '';
+  const statePayload = decodeSignedPayload(stateRaw);
+  if (!statePayload || statePayload.purpose !== 'steam_state') {
+    return res.redirect(buildTeamAuthReturnUrl('', { steam_error: 'state_invalid' }));
+  }
+  const requestToken = typeof statePayload.token === 'string' ? statePayload.token.trim() : '';
+  if (!requestToken) {
+    return res.redirect(buildTeamAuthReturnUrl('', { steam_error: 'state_invalid' }));
+  }
+  if (typeof db.getTeamAuthRequestByToken !== 'function') {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'not_supported' }));
+  }
+  const openidParams = req.query || {};
+  if (typeof openidParams['openid.claimed_id'] !== 'string') {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'authorization_failed' }));
+  }
+  try {
+    const record = await db.getTeamAuthRequestByToken(requestToken);
+    if (!record) return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'not_found' }));
+    if (record.completed_at) return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'already_completed' }));
+    const expires = record.expires_at ? new Date(record.expires_at) : null;
+    if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'expired' }));
+    }
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    const cookieId = ensureTeamAuthCookie(cookieJar, res);
+    const expectedCookie = sanitizeCookieId(statePayload.cookieId || null);
+    if (expectedCookie && cookieId && expectedCookie !== cookieId) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'session_mismatch' }));
+    }
+    const verification = new URLSearchParams();
+    for (const [key, value] of Object.entries(openidParams)) {
+      if (!key.startsWith('openid.')) continue;
+      if (Array.isArray(value)) {
+        verification.set(key, value[0]);
+      } else if (typeof value === 'string') {
+        verification.set(key, value);
+      }
+    }
+    verification.set('openid.mode', 'check_authentication');
+    const verifyResponse = await fetch('https://steamcommunity.com/openid/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: verification.toString()
+    });
+    const verifyText = await verifyResponse.text();
+    if (!verifyText.includes('is_valid:true')) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'verification_failed' }));
+    }
+    const claimed = String(openidParams['openid.claimed_id']);
+    const match = claimed.match(/\/(\d{16,20})$/);
+    if (!match) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'steam_id_missing' }));
+    }
+    const steamId = sanitizeSteamId(match[1]);
+    if (!steamId) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'steam_id_missing' }));
+    }
+    storeTeamAuthSteamSession(res, {
+      token: record.state_token,
+      steamId,
+      cookieId: cookieId || null
+    });
+    res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_status: 'linked' }));
+  } catch (err) {
+    console.error('steam oauth callback failed', err);
+    res.redirect(buildTeamAuthReturnUrl(requestToken, { steam_error: 'steam_unreachable' }));
+  }
+});
+
 app.get('/api/auth/requests/:token', async (req, res) => {
   if (typeof db.getTeamAuthRequestByToken !== 'function') {
     return res.status(501).json({ error: 'not_supported' });
@@ -6079,29 +6532,30 @@ app.get('/api/auth/requests/:token', async (req, res) => {
       }
     }
     const cookieJar = parseCookies(req.headers.cookie || '');
-    let cookieId = sanitizeCookieId(cookieJar.get(TEAM_AUTH_COOKIE_NAME) || null);
-    if (!cookieId) {
-      cookieId = sanitizeCookieId(crypto.randomBytes(16).toString('hex'));
-      if (cookieId) {
-        try {
-          res.cookie(TEAM_AUTH_COOKIE_NAME, cookieId, {
-            httpOnly: true,
-            sameSite: 'lax',
-            maxAge: TEAM_AUTH_COOKIE_MAX_AGE_MS,
-            secure: AUTH_COOKIE_SECURE
-          });
-        } catch (err) {
-          console.warn('failed to prime team auth cookie', err);
-        }
-      }
-    }
+    const cookieId = ensureTeamAuthCookie(cookieJar, res);
+    const discordSession = readTeamAuthDiscordSession(cookieJar, record.state_token);
+    const steamSession = readTeamAuthSteamSession(cookieJar, record.state_token);
     res.json({
       token: record.state_token,
       teamId: record.team_id ?? null,
       teamName,
       discordId: record.discord_id,
       discordUsername: record.discord_username ?? null,
-      expiresAt: expires ? expires.toISOString() : null
+      expiresAt: expires ? expires.toISOString() : null,
+      discordOAuth: discordSession
+        ? {
+            linked: true,
+            discordId: discordSession.discordId,
+            discordUsername: discordSession.discordUsername ?? null,
+            discordDisplayName: discordSession.discordDisplayName ?? null
+          }
+        : { linked: false },
+      steamOAuth: steamSession
+        ? {
+            linked: true,
+            steamId: steamSession.steamId
+          }
+        : { linked: false }
     });
   } catch (err) {
     console.error('failed to load team auth request', err);
@@ -6123,27 +6577,37 @@ app.post('/api/auth/requests/:token/complete', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.status(410).json({ error: 'expired' });
     }
-    const body = req.body || {};
-    const discordId = sanitizeDiscordSnowflake(
-      body.discordId ?? body.discord_id ?? body.userId ?? body.user_id ?? record.discord_id
-    );
-    if (!discordId || discordId !== sanitizeDiscordSnowflake(record.discord_id)) {
-      return res.status(400).json({ error: 'discord_mismatch' });
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    let cookieId = ensureTeamAuthCookie(cookieJar, res);
+    const discordSession = readTeamAuthDiscordSession(cookieJar, record.state_token);
+    if (!discordSession) {
+      return res.status(400).json({ error: 'discord_oauth_required' });
+    }
+    const steamSession = readTeamAuthSteamSession(cookieJar, record.state_token);
+    if (!steamSession) {
+      return res.status(400).json({ error: 'steam_oauth_required' });
+    }
+    const discordId = sanitizeDiscordSnowflake(discordSession.discordId);
+    if (!discordId) {
+      return res.status(400).json({ error: 'discord_oauth_required' });
+    }
+    if (record.discord_id) {
+      const expected = sanitizeDiscordSnowflake(record.discord_id);
+      if (expected && expected !== discordId) {
+        return res.status(400).json({ error: 'discord_mismatch' });
+      }
     }
     const discordUsername = sanitizeDiscordUsername(
-      body.discordUsername ?? body.discord_username ?? body.username ?? body.displayName ?? body.display_name ?? record.discord_username ?? null
+      discordSession.discordUsername ?? record.discord_username ?? null
     );
     const discordDisplayName = sanitizeDiscordUsername(
-      body.discordDisplayName ?? body.discord_display_name ?? body.globalName ?? body.global_name ?? null
+      discordSession.discordDisplayName ?? null
     );
-    const steamId = sanitizeSteamId(
-      body.steamId ?? body.steamid ?? body.steamID ?? body.steam_id
-    );
+    const steamId = sanitizeSteamId(steamSession.steamId);
     if (!steamId) return res.status(400).json({ error: 'invalid_steam_id' });
-    const cookieJar = parseCookies(req.headers.cookie || '');
-    let cookieId = sanitizeCookieId(
-      cookieJar.get(TEAM_AUTH_COOKIE_NAME) || body.cookieId || body.cookie_id || null
-    );
+    if (!cookieId) {
+      cookieId = sanitizeCookieId(discordSession.cookieId || steamSession.cookieId || null);
+    }
     if (!cookieId) {
       cookieId = sanitizeCookieId(crypto.randomBytes(16).toString('hex'));
     }
@@ -6215,6 +6679,7 @@ app.post('/api/auth/requests/:token/complete', async (req, res) => {
         console.warn('failed to set team auth cookie', err);
       }
     }
+    clearTeamAuthOAuthCookies(res);
     res.json({
       ok: true,
       teamId: record.team_id ?? null,
