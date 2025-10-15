@@ -1036,6 +1036,23 @@ label.inline input[type="checkbox"]:focus-visible,
   font-size: 1rem;
 }
 
+.team-discord-status {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.workspace-discord-section {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.team-discord-server-select {
+  max-width: 420px;
+}
+
 .team-discord-server-body {
   display: flex;
   flex-direction: column;
@@ -4110,7 +4127,8 @@ button.chat-filter-btn:focus-visible {
 }
 
 .discord-status,
-.discord-status-editor {
+.discord-status-editor,
+.discord-config {
   display: flex;
   flex-direction: column;
   gap: 20px;
