@@ -14,7 +14,10 @@ that together provide a management dashboard for Rust game servers.
 ## Documentation expectations
 
 When you add or modify modules, consult `docs/module-architecture-guide.md` for placement rules and update it if you introduce a
-new pattern. Keep `docs/module-usage-report.md` aligned with the current code so that unused files are easy to spot.
+new pattern. Keep `docs/module-usage-report.md` aligned with the current code so that unused files are easy to spot. Note that the
+Rust server status surface lives exclusively under the **Server workspace → Settings** view, while the Discord ticketing and
+authentication tools remain anchored to the main dashboard's **Discord** tab—documentation should reflect those established UI
+locations.
 
 ## Coding conventions
 

@@ -1,6 +1,9 @@
 # Module usage report
 
-This document summarises how the major backend and frontend modules are referenced so we can spot redundant code paths.
+This document summarises how the major backend and frontend modules are referenced so we can spot redundant code paths. Remember
+that the Rust server status interface is intentionally scoped to the **Server workspace → Settings** view, and the Discord ticket
+queue plus linked-account authentication tools are concentrated in the main dashboard's **Discord** tab; keep those placements in
+mind when reviewing module wiring.
 
 ## Backend modules
 
