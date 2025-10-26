@@ -6017,23 +6017,43 @@
     setWorkspaceView(workspaceViewDefault);
   }
 
-  function resolveSocketBase() {
-    const base = state.API || '';
+  function resolveSocketEndpoint() {
+    const DEFAULT_PATH = '/socket.io';
+    const base = String(state.API || '').trim();
+
+    const buildPath = (inputPath) => {
+      const raw = String(inputPath || '');
+      const trimmed = raw.replace(/\/+$/, '');
+      const withLeading = trimmed.startsWith('/') ? trimmed : '/' + trimmed;
+      if (!withLeading || withLeading === '/') return DEFAULT_PATH;
+      if (withLeading.toLowerCase().endsWith('/api')) {
+        const prefix = withLeading.slice(0, -4);
+        return (prefix || '') + DEFAULT_PATH;
+      }
+      return withLeading + DEFAULT_PATH;
+    };
+
+    if (!base) {
+      return { origin: '', path: DEFAULT_PATH };
+    }
+
     if (/^https?:\/\//i.test(base)) {
       try {
         const url = new URL(base);
-        return url.origin;
+        return { origin: url.origin, path: buildPath(url.pathname || '/') };
       } catch {
-        return '';
+        return { origin: '', path: DEFAULT_PATH };
       }
     }
-    return '';
+
+    return { origin: '', path: buildPath(base) };
   }
 
   function ensureSocket() {
     if (socket || !state.API) return socket;
-    const socketBase = resolveSocketBase();
-    socket = io(socketBase || undefined, {
+    const { origin: socketOrigin, path: socketPath } = resolveSocketEndpoint();
+    socket = io(socketOrigin || undefined, {
+      path: socketPath,
       transports: ['websocket'],
       auth: { token: state.TOKEN || undefined }
     });
