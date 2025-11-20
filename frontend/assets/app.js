@@ -4879,7 +4879,7 @@
     const superuser = isSuperuser();
     const canAccessTeam = adminOnlyMode ? false : (hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles'));
     const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
-    const canAccessAdmin = superuser && hasGlobalPermission('manageUsers');
+    const canAccessAdmin = adminOnlyMode ? superuser : (superuser && hasGlobalPermission('manageUsers'));
     const canAccessDiscord = adminOnlyMode ? false : canManageTeamDiscord();
     const canAccessSettings = Boolean(state.currentUser);
     const fallbackPanel = adminOnlyMode
@@ -9104,6 +9104,10 @@
       });
       navAdmin?.addEventListener('click', () => {
         if (navAdmin.disabled) return;
+        if (!state.superuserUi) {
+          window.location.href = '/superuser/ui/';
+          return;
+        }
         hideWorkspace('nav');
         switchPanel('admin');
         closeProfileMenu();
