@@ -12,7 +12,7 @@
     window.DEFAULT_PANEL = 'admin';
   </script>
 </head>
-<body>
+<body class="superuser-ui">
   <div class="app-shell">
     <section id="loginPanel" class="login-layout">
       <div class="login-hero">
@@ -21,6 +21,7 @@
             <img src="/assets/icons/shield.svg" alt="" />
           </span>
           <div>
+            <p class="mode-pill">Superuser access</p>
             <h1>Rust Admin Dashboard</h1>
             <p>Stay on top of every wipe with live server telemetry, team management and rapid response tools.</p>
           </div>
@@ -63,6 +64,7 @@
             <img src="/assets/icons/shield.svg" alt="" />
           </span>
           <div class="brand-meta">
+            <div class="mode-pill subtle">Superuser workspace</div>
             <h1>Rust Admin Dashboard</h1>
             <div class="brand-account">
               <span class="muted">Welcome back,</span>
@@ -379,6 +381,19 @@
             <p class="muted small">Guidance</p>
             <p class="muted">Global changes bypass team restrictions. Use search and filters to stay precise.</p>
           </div>
+        </div>
+
+        <div class="superuser-guide">
+          <div>
+            <p class="muted small">Confidence check</p>
+            <h4>Review before you apply</h4>
+            <p class="muted">Select a user to preview their memberships and role before saving updates across every organization.</p>
+          </div>
+          <ul class="superuser-checklist">
+            <li>Filter by username, role, or organization to stay focused.</li>
+            <li>Toggle the superuser switch to grant or revoke full control.</li>
+            <li>Use the organization list to spot membership gaps quickly.</li>
+          </ul>
         </div>
 
         <div class="admin-overview-grid">
