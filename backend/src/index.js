@@ -249,6 +249,7 @@ async function loadUserContext(userId) {
   if (!Number.isFinite(numeric)) return null;
   const row = await db.getUser(numeric);
   if (!row) return null;
+  const isSuperuser = Boolean(row.superuser) || (row.username && row.username.toLowerCase() === 'admin');
   let teams = [];
   if (typeof db.listUserTeams === 'function') {
     try {
@@ -377,6 +378,7 @@ async function loadUserContext(userId) {
   return {
     id: row.id,
     username: row.username,
+    superuser: isSuperuser,
     role: effectiveRole,
     roleName: activeTeamRoleName || row.role_name || effectiveRole,
     permissions,
@@ -895,6 +897,7 @@ async function assembleTicketDialog(row) {
 
 const ROLE_KEY_PATTERN = /^[a-z0-9_\-]{3,32}$/i;
 const RESERVED_ROLE_KEYS = new Set(['admin', 'user']);
+const USERNAME_PATTERN = /^[a-z0-9_\-.]{3,32}$/i;
 
 function normalizeRoleKey(value) {
   if (typeof value !== 'string') return null;
@@ -5931,6 +5934,7 @@ app.post('/api/login', async (req, res) => {
     res.json({
       token,
       username: context?.username || row.username,
+      superuser: Boolean(context?.superuser ?? row.superuser),
       role: roleForToken,
       roleName: context?.roleName || row.role_name || roleForToken,
       id: row.id,
@@ -5954,7 +5958,7 @@ app.post('/api/register', async (req, res) => {
   const { username, password } = req.body || {};
   const userName = normalizeUsername(username);
   if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
+  if (!USERNAME_PATTERN.test(userName)) return res.status(400).json({ error: 'invalid_username' });
   if (password.length < 8) return res.status(400).json({ error: 'weak_password' });
   try {
     const existing = await findUserCaseInsensitive(userName);
@@ -5974,6 +5978,7 @@ app.get('/api/me', auth, async (req, res) => {
     res.json({
       id: context.id,
       username: context.username,
+      superuser: Boolean(context.superuser),
       role: context.role,
       roleName: context.roleName,
       permissions: context.permissions,
@@ -6961,6 +6966,42 @@ app.post('/api/password', auth, async (req, res) => {
   }
 });
 
+function projectAdminUserPayload(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    superuser: Boolean(user.superuser) || (user.username && user.username.toLowerCase() === 'admin'),
+    role: user.role,
+    roleName: user.role_name || user.role,
+    created_at: user.created_at,
+    teams: Array.isArray(user.teams)
+      ? user.teams.map((team) => ({
+        id: team.id,
+        name: team.name,
+        role: team.role,
+        roleName: team.roleName || team.role
+      }))
+      : []
+  };
+}
+
+async function resetActiveTeamIfRemoved(userId, removedTeamId) {
+  if (
+    typeof db.getUserActiveTeam !== 'function'
+    || typeof db.setUserActiveTeam !== 'function'
+    || typeof db.listUserTeams !== 'function'
+  ) return;
+  try {
+    const activeTeam = await db.getUserActiveTeam(userId);
+    if (activeTeam !== removedTeamId) return;
+    const teams = await db.listUserTeams(userId);
+    const fallback = teams.find((team) => team.id !== removedTeamId) || teams[0] || null;
+    await db.setUserActiveTeam(userId, fallback ? fallback.id : null);
+  } catch (err) {
+    console.warn('Failed to refresh active team after membership removal', err);
+  }
+}
+
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
   try {
     const teamId = req.authUser?.activeTeamId;
@@ -6985,7 +7026,7 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
   const teamId = req.authUser?.activeTeamId;
   if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
   if (!userName) return res.status(400).json({ error: 'missing_fields' });
-  if (!/^[a-z0-9_\-.]{3,32}$/i.test(userName)) return res.status(400).json({ error: 'invalid_username' });
+  if (!USERNAME_PATTERN.test(userName)) return res.status(400).json({ error: 'invalid_username' });
   const roleKey = typeof role === 'string' && role.trim() ? role.trim() : 'user';
   try {
     const roleRecord = await db.getRole(roleKey);
@@ -7065,6 +7106,220 @@ app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
     const removed = await db.removeTeamMember(teamId, id);
     res.json({ deleted: removed });
   } catch {
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+const resolveRole = async (role) => {
+  const roleKey = typeof role === 'string' && role.trim() ? role.trim() : 'user';
+  const roleRecord = await db.getRole(roleKey);
+  if (!roleRecord) return null;
+  return { roleKey, roleRecord };
+};
+
+app.get('/api/admin/users', auth, requireAdmin, async (req, res) => {
+  if (typeof db.listAllUsersDetailed !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const users = await db.listAllUsersDetailed();
+    res.json(users.map((user) => projectAdminUserPayload(user)));
+  } catch (err) {
+    console.error('failed to list admin users', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/admin/teams', auth, requireAdmin, async (req, res) => {
+  if (typeof db.listAllTeamsWithCounts !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const teams = await db.listAllTeamsWithCounts();
+    res.json(teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      owner_user_id: team.owner_user_id,
+      created_at: team.created_at,
+      member_count: Number(team.member_count ?? 0)
+    })));
+  } catch (err) {
+    console.error('failed to list admin teams', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/admin/users', auth, requireAdmin, async (req, res) => {
+  const { username, password, role = 'user', teamId = null, teamRole, superuser = false } = req.body || {};
+  const userName = normalizeUsername(username);
+  if (!userName) return res.status(400).json({ error: 'missing_fields' });
+  if (!USERNAME_PATTERN.test(userName)) return res.status(400).json({ error: 'invalid_username' });
+  if (!password || password.length < 8) return res.status(400).json({ error: 'weak_password' });
+  try {
+    const resolvedRole = await resolveRole(role);
+    if (!resolvedRole) return res.status(400).json({ error: 'invalid_role' });
+    const existing = await findUserCaseInsensitive(userName);
+    if (existing) return res.status(409).json({ error: 'username_taken' });
+    const hash = bcrypt.hashSync(password, 10);
+    const id = await db.createUser({ username: userName, password_hash: hash, role: resolvedRole.roleKey, superuser });
+    const membership = [];
+    if (teamId != null) {
+      const numericTeam = Number(teamId);
+      if (!Number.isFinite(numericTeam)) return res.status(400).json({ error: 'invalid_team' });
+      const team = await db.getTeam(numericTeam);
+      if (!team) return res.status(404).json({ error: 'team_not_found' });
+      const targetRole = await resolveRole(teamRole || role || 'user');
+      if (!targetRole) return res.status(400).json({ error: 'invalid_role' });
+      await db.addTeamMember({ team_id: numericTeam, user_id: id, role: targetRole.roleKey });
+      membership.push({
+        id: numericTeam,
+        name: team.name,
+        role: targetRole.roleKey,
+        roleName: targetRole.roleRecord.name || targetRole.roleKey
+      });
+      if (typeof db.getUserActiveTeam === 'function' && typeof db.setUserActiveTeam === 'function') {
+        const currentActive = await db.getUserActiveTeam(id);
+        if (currentActive == null) await db.setUserActiveTeam(id, numericTeam);
+      }
+    }
+    res.status(201).json({
+      id,
+      username: userName,
+      superuser: Boolean(superuser),
+      role: resolvedRole.roleKey,
+      roleName: resolvedRole.roleRecord.name || resolvedRole.roleKey,
+      teams: membership
+    });
+  } catch (err) {
+    console.error('failed to create admin user', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.patch('/api/admin/users/:id', auth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const { role, superuser } = req.body || {};
+  const resolvedRole = await resolveRole(role);
+  if (!resolvedRole) return res.status(400).json({ error: 'invalid_role' });
+  try {
+    const user = await db.getUser(id);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    await db.updateUserRole(id, resolvedRole.roleKey);
+    if (typeof superuser === 'boolean' && typeof db.updateUserSuperuser === 'function') {
+      await db.updateUserSuperuser(id, superuser);
+    }
+    res.json({
+      ok: true,
+      superuser: typeof superuser === 'boolean' ? superuser : Boolean(user.superuser),
+      role: resolvedRole.roleKey,
+      roleName: resolvedRole.roleRecord.name || resolvedRole.roleKey
+    });
+  } catch (err) {
+    console.error('failed to update admin user role', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/admin/users/:id/password', auth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const { newPassword } = req.body || {};
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: 'weak_password' });
+  const hash = bcrypt.hashSync(newPassword, 10);
+  try {
+    const user = await db.getUser(id);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    await db.updateUserPassword(id, hash);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('failed to update admin user password', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/admin/users/:id', auth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  if (id === req.user.uid) return res.status(400).json({ error: 'cannot_delete_self' });
+  try {
+    const user = await db.getUser(id);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const removed = await db.deleteUser(id);
+    res.json({ deleted: Boolean(removed) });
+  } catch (err) {
+    console.error('failed to delete admin user', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/admin/users/:id/teams', auth, requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const { teamId, role } = req.body || {};
+  if (!Number.isFinite(userId)) return res.status(400).json({ error: 'invalid_id' });
+  const numericTeam = Number(teamId);
+  if (!Number.isFinite(numericTeam)) return res.status(400).json({ error: 'invalid_team' });
+  const resolvedRole = await resolveRole(role || 'user');
+  if (!resolvedRole) return res.status(400).json({ error: 'invalid_role' });
+  try {
+    const user = await db.getUser(userId);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const team = await db.getTeam(numericTeam);
+    if (!team) return res.status(404).json({ error: 'team_not_found' });
+    const existing = await db.getTeamMember(numericTeam, userId);
+    if (existing) return res.status(409).json({ error: 'already_member' });
+    await db.addTeamMember({ team_id: numericTeam, user_id: userId, role: resolvedRole.roleKey });
+    if (typeof db.getUserActiveTeam === 'function' && typeof db.setUserActiveTeam === 'function') {
+      const activeTeam = await db.getUserActiveTeam(userId);
+      if (activeTeam == null) await db.setUserActiveTeam(userId, numericTeam);
+    }
+    res.status(201).json({
+      id: numericTeam,
+      name: team.name,
+      role: resolvedRole.roleKey,
+      roleName: resolvedRole.roleRecord.name || resolvedRole.roleKey
+    });
+  } catch (err) {
+    console.error('failed to add admin team member', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.patch('/api/admin/users/:id/teams/:teamId', auth, requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const teamId = Number(req.params.teamId);
+  const { role } = req.body || {};
+  if (!Number.isFinite(userId) || !Number.isFinite(teamId)) return res.status(400).json({ error: 'invalid_id' });
+  const resolvedRole = await resolveRole(role);
+  if (!resolvedRole) return res.status(400).json({ error: 'invalid_role' });
+  try {
+    const membership = await db.getTeamMember(teamId, userId);
+    if (!membership) return res.status(404).json({ error: 'not_found' });
+    await db.updateTeamMemberRole(teamId, userId, resolvedRole.roleKey);
+    res.json({ ok: true, role: resolvedRole.roleKey, roleName: resolvedRole.roleRecord.name || resolvedRole.roleKey });
+  } catch (err) {
+    console.error('failed to update admin team member', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/admin/users/:id/teams/:teamId', auth, requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const teamId = Number(req.params.teamId);
+  if (!Number.isFinite(userId) || !Number.isFinite(teamId)) return res.status(400).json({ error: 'invalid_id' });
+  try {
+    const membership = await db.getTeamMember(teamId, userId);
+    if (!membership) return res.status(404).json({ error: 'not_found' });
+    if (membership.role === 'admin') {
+      const members = await db.listUsers(teamId);
+      const adminCount = members.filter((member) => member.role === 'admin').length;
+      if (adminCount <= 1) return res.status(400).json({ error: 'last_admin' });
+    }
+    const removed = await db.removeTeamMember(teamId, userId);
+    await resetActiveTeamIfRemoved(userId, teamId);
+    res.json({ deleted: removed });
+  } catch (err) {
+    console.error('failed to remove admin team member', err);
     res.status(500).json({ error: 'db_error' });
   }
 });

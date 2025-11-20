@@ -83,10 +83,16 @@ function createApi(pool, dialect) {
         username VARCHAR(190) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
         role VARCHAR(32) NOT NULL DEFAULT 'user',
+        superuser TINYINT(1) NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB;`);
       try {
         await exec(`ALTER TABLE users ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'user'`);
+      } catch (e) {
+        if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+      }
+      try {
+        await exec(`ALTER TABLE users ADD COLUMN superuser TINYINT(1) NOT NULL DEFAULT 0`);
       } catch (e) {
         if (e.code !== 'ER_DUP_FIELDNAME') throw e;
       }
@@ -397,8 +403,11 @@ function createApi(pool, dialect) {
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async createUser(u){
-      const { username, password_hash, role = 'user' } = u;
-      const r = await exec('INSERT INTO users(username,password_hash,role) VALUES(?,?,?)',[username,password_hash,role]);
+      const { username, password_hash, role = 'user', superuser = 0 } = u;
+      const r = await exec(
+        'INSERT INTO users(username,password_hash,role,superuser) VALUES(?,?,?,?)',
+        [username, password_hash, role, superuser ? 1 : 0]
+      );
       return r.insertId;
     },
     async getUser(id){
@@ -431,7 +440,50 @@ function createApi(pool, dialect) {
       return await this.listUsers(teamId);
     },
     async listAllUsersBasic(){
-      return await exec('SELECT id, username, role, created_at FROM users ORDER BY id ASC');
+      return await exec('SELECT id, username, role, superuser, created_at FROM users ORDER BY id ASC');
+    },
+    async listAllUsersDetailed(){
+      const users = await exec(
+        `SELECT u.id, u.username, u.role, u.superuser, u.created_at, r.name AS role_name
+         FROM users u
+         LEFT JOIN roles r ON r.role_key = u.role
+         ORDER BY LOWER(u.username) ASC`
+      );
+      const teams = await exec(
+        `SELECT tm.team_id, tm.user_id, tm.role, t.name AS team_name, r.name AS role_name
+         FROM team_members tm
+         JOIN teams t ON t.id = tm.team_id
+         LEFT JOIN roles r ON r.role_key = tm.role
+         ORDER BY LOWER(t.name) ASC`
+      );
+      const map = new Map();
+      users.forEach((user) => {
+        map.set(user.id, { ...user, teams: [] });
+      });
+      teams.forEach((team) => {
+        const entry = map.get(team.user_id);
+        if (!entry) return;
+        entry.teams.push({
+          id: team.team_id,
+          name: team.team_name,
+          role: team.role,
+          roleName: team.role_name || team.role
+        });
+      });
+      return Array.from(map.values());
+    },
+    async listAllTeamsWithCounts(){
+      const rows = await exec(
+        `SELECT t.id, t.name, t.owner_user_id, t.created_at, COUNT(tm.user_id) AS member_count
+         FROM teams t
+         LEFT JOIN team_members tm ON tm.team_id = t.id
+         GROUP BY t.id
+         ORDER BY LOWER(t.name) ASC`
+      );
+      return rows.map((row) => ({
+        ...row,
+        member_count: Number(row?.member_count ?? 0)
+      }));
     },
     async getTeam(teamId){
       const rows = await exec('SELECT * FROM teams WHERE id=?', [teamId]);
@@ -575,6 +627,7 @@ function createApi(pool, dialect) {
     async countAdmins(){ const r = await exec("SELECT COUNT(*) c FROM users WHERE role='admin'"); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
     async updateUserPassword(id, hash){ await exec('UPDATE users SET password_hash=? WHERE id=?',[hash,id]); },
     async updateUserRole(id, role){ await exec('UPDATE users SET role=? WHERE id=?',[role,id]); },
+    async updateUserSuperuser(id, flag){ await exec('UPDATE users SET superuser=? WHERE id=?', [flag ? 1 : 0, id]); },
     async deleteUser(id){ const r = await exec('DELETE FROM users WHERE id=?',[id]); return r.affectedRows||0; },
     async listServers(teamId){
       if (typeof teamId === 'undefined' || teamId === null) {
