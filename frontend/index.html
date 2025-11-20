@@ -355,13 +355,54 @@
 
       </section>
 
-      <section id="adminPanel" class="hidden admin-panel" aria-labelledby="adminPanelTitle">
-        <div class="section-head">
+      <section id="adminPanel" class="hidden admin-panel global-admin" aria-labelledby="adminPanelTitle">
+        <div class="section-head global-admin-head">
           <div>
-            <h2 id="adminPanelTitle">Administration</h2>
-            <p class="muted">Review every account and manage organizations from one place.</p>
+            <p class="badge strong">Superuser tools</p>
+            <h2 id="adminPanelTitle">Global administration</h2>
+            <p class="muted">Edit every organization without switching teams. Changes apply everywhere.</p>
+          </div>
+          <div class="admin-scope-pill" id="adminScopeBadge">Global editing enabled</div>
+        </div>
+
+        <div class="admin-global-banner">
+          <div>
+            <p class="muted small">Superuser workspace</p>
+            <h3>System-wide user controls</h3>
+            <p class="muted">Promote, demote, or reset accounts without leaving the global view.</p>
+          </div>
+          <div class="admin-banner-actions">
+            <p class="muted small">Guidance</p>
+            <p class="muted">Global changes bypass team restrictions. Use search and filters to stay precise.</p>
           </div>
         </div>
+
+        <div class="admin-overview-grid">
+          <article class="admin-stat-card">
+            <p class="muted small">Accounts</p>
+            <h3 id="adminUserCount">0</h3>
+            <p class="muted small">Global users</p>
+          </article>
+          <article class="admin-stat-card">
+            <p class="muted small">Superusers</p>
+            <h3 id="adminSuperuserCount">0</h3>
+            <p class="muted small">Full control</p>
+          </article>
+          <article class="admin-stat-card">
+            <p class="muted small">Organizations</p>
+            <h3 id="adminOrgCount">0</h3>
+            <p class="muted small">Managed teams</p>
+          </article>
+        </div>
+
+        <section class="team-section admin-teams">
+          <div class="team-section-head">
+            <h4>Organizations</h4>
+            <p class="muted small">Review every team and their membership counts without switching context.</p>
+          </div>
+          <ul id="adminTeamList" class="admin-team-list plain-list"></ul>
+        </section>
+
         <div id="adminUsersCard" class="team-card">
           <div class="team-card-body">
             <aside class="team-card-sidebar">
@@ -391,9 +432,15 @@
             </aside>
             <div class="team-card-main">
               <section class="team-section">
-                <div class="team-section-head">
-                  <h4>All users</h4>
-                  <p class="muted small">Admins can see every user, regardless of organization.</p>
+                <div class="team-section-head admin-users-head">
+                  <div>
+                    <h4>All users</h4>
+                    <p class="muted small">Admins can see every user, regardless of organization.</p>
+                  </div>
+                  <label class="admin-user-search">
+                    <span class="muted small">Search across orgs</span>
+                    <input id="adminUserSearch" type="search" placeholder="Filter by username, role, or organization" />
+                  </label>
                 </div>
                 <ul id="adminUserList" class="users"></ul>
                 <p id="adminUserEmpty" class="empty-state hidden">No users found.</p>

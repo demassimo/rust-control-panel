@@ -56,6 +56,12 @@
   const adminNewUserSuperuser = $('#adminNewUserSuperuser');
   const btnAdminCreateUser = $('#btnAdminCreateUser');
   const adminUserFeedback = $('#adminUserFeedback');
+  const adminTeamList = $('#adminTeamList');
+  const adminUserSearch = $('#adminUserSearch');
+  const adminUserCount = $('#adminUserCount');
+  const adminSuperuserCount = $('#adminSuperuserCount');
+  const adminOrgCount = $('#adminOrgCount');
+  const adminScopeBadge = $('#adminScopeBadge');
   const btnRefreshServers = $('#btnRefreshServers');
   const btnClearConsole = $('#btnClearConsole');
   const btnAddServer = $('#btnAddServer');
@@ -153,6 +159,7 @@
     },
     superuserUi
   };
+  let adminUserFilter = '';
   const loginUsername = $('#username');
   const loginPassword = $('#password');
   const btnLogin = $('#btnLogin');
@@ -4813,7 +4820,8 @@
       adminAssignTeam,
       adminAssignRole,
       adminUserSuperuser,
-      adminNewUserSuperuser
+      adminNewUserSuperuser,
+      adminUserSearch
     ].forEach((el) => {
       if (el) el.disabled = !canManageUsers;
     });
@@ -7172,9 +7180,16 @@
     state.admin.users = [];
     state.admin.teams = [];
     state.admin.selectedUserId = null;
+    adminUserFilter = '';
+    if (adminUserSearch) adminUserSearch.value = '';
+    if (adminUserCount) adminUserCount.textContent = '0';
+    if (adminSuperuserCount) adminSuperuserCount.textContent = '0';
+    if (adminOrgCount) adminOrgCount.textContent = '0';
+    if (adminScopeBadge) adminScopeBadge.textContent = 'Global scope';
     if (adminUserList) adminUserList.innerHTML = '';
     if (adminUserEmpty) adminUserEmpty.classList.remove('hidden');
     if (adminUserTeams) adminUserTeams.innerHTML = '';
+    if (adminTeamList) adminTeamList.innerHTML = '';
     if (adminDetailUsername) adminDetailUsername.textContent = '—';
     if (adminDetailCreated) adminDetailCreated.textContent = '—';
     if (adminUserRoleSelect) adminUserRoleSelect.value = '';
@@ -7229,16 +7244,76 @@
     populateAdminTeamSelect(adminAssignTeam, { allowEmpty: false, placeholder: '' });
   }
 
+  function renderAdminTeams() {
+    if (!adminTeamList) return;
+    adminTeamList.innerHTML = '';
+    const teams = state.admin.teams || [];
+    if (!teams.length) {
+      const empty = document.createElement('li');
+      empty.className = 'muted small';
+      empty.textContent = 'No organizations have been created yet.';
+      adminTeamList.appendChild(empty);
+      return;
+    }
+    teams.forEach((team) => {
+      const li = document.createElement('li');
+      li.className = 'admin-team-item';
+      const name = document.createElement('div');
+      name.className = 'user-item-name';
+      name.textContent = team.name || `Team #${team.id}`;
+      li.appendChild(name);
+      const meta = document.createElement('div');
+      meta.className = 'admin-team-meta';
+      const members = document.createElement('span');
+      members.textContent = `${Number(team.member_count ?? 0)} member(s)`;
+      meta.appendChild(members);
+      if (team.created_at) {
+        const created = document.createElement('span');
+        created.textContent = formatUserJoined(team.created_at);
+        meta.appendChild(created);
+      }
+      li.appendChild(meta);
+      adminTeamList.appendChild(li);
+    });
+  }
+
+  function renderAdminScopeSummary() {
+    const users = state.admin.users || [];
+    const teams = state.admin.teams || [];
+    const superusers = users.filter((user) => user.superuser).length;
+    if (adminUserCount) adminUserCount.textContent = users.length.toLocaleString();
+    if (adminSuperuserCount) adminSuperuserCount.textContent = superusers.toLocaleString();
+    if (adminOrgCount) adminOrgCount.textContent = teams.length.toLocaleString();
+    if (adminScopeBadge) {
+      adminScopeBadge.textContent = `Global scope • ${teams.length.toLocaleString()} orgs visible`;
+    }
+    renderAdminTeams();
+  }
+
   function renderAdminUsers() {
     if (!adminUserList) return;
     adminUserList.innerHTML = '';
     const users = state.admin.users || [];
-    if (!users.length) {
+    const filter = adminUserFilter.trim().toLowerCase();
+    const filtered = filter
+      ? users.filter((user) => {
+        const username = (user.username || '').toLowerCase();
+        const roleLabel = (formatUserRole(user) || '').toString().toLowerCase();
+        const teamMatch = Array.isArray(user.teams)
+          ? user.teams.some((team) => (team.name || `team #${team.id}`).toLowerCase().includes(filter))
+          : false;
+        return username.includes(filter) || roleLabel.includes(filter) || teamMatch;
+      })
+      : users;
+    if (!filtered.length) {
       if (adminUserEmpty) adminUserEmpty.classList.remove('hidden');
+      if (adminUserEmpty) {
+        adminUserEmpty.textContent = filter ? 'No users match this search.' : 'No users found.';
+      }
       return;
     }
     if (adminUserEmpty) adminUserEmpty.classList.add('hidden');
-    users.forEach((user) => {
+    filtered.forEach((user) => {
       const li = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
@@ -7261,6 +7336,12 @@
         const badge = document.createElement('span');
         badge.className = 'badge';
         badge.textContent = 'You';
+        trailing.appendChild(badge);
+      }
+      if (user.superuser) {
+        const badge = document.createElement('span');
+        badge.className = 'badge strong';
+        badge.textContent = 'Superuser';
         trailing.appendChild(badge);
       }
       const chevron = document.createElement('span');
@@ -7369,6 +7450,7 @@
       state.admin.users = Array.isArray(users) ? users : [];
       state.admin.teams = Array.isArray(teams) ? teams : [];
       renderAdminTeamOptions();
+      renderAdminScopeSummary();
       const desiredId = selectUserId != null
         ? selectUserId
         : preserveSelection
@@ -9110,6 +9192,10 @@
       adminAssignTeam?.addEventListener('change', () => hideNotice(adminAssignStatus));
       adminAssignRole?.addEventListener('change', () => hideNotice(adminAssignStatus));
       adminUserSuperuser?.addEventListener('change', () => hideNotice(adminUserRoleStatus));
+      adminUserSearch?.addEventListener('input', () => {
+        adminUserFilter = adminUserSearch.value || '';
+        renderAdminUsers();
+      });
       adminNewUserName?.addEventListener('input', () => hideNotice(adminUserFeedback));
       adminNewUserPassword?.addEventListener('input', () => hideNotice(adminUserFeedback));
       adminNewUserRole?.addEventListener('change', () => hideNotice(adminUserFeedback));
