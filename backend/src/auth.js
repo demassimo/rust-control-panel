@@ -37,10 +37,9 @@ export function authMiddleware(secret, options = {}) {
 }
 
 export function requireAdmin(req, res, next) {
-  const isAdminUser = typeof req.authUser?.username === 'string' && req.authUser.username.toLowerCase() === 'admin';
   const isSuperuser = Boolean(req.authUser?.superuser);
-  const hasPermission = isSuperuser || req.authUser?.permissions?.global?.manageUsers;
-  if (!(isSuperuser || isAdminUser) || !hasPermission) {
+  const hasManageUsers = Boolean(req.authUser?.permissions?.global?.manageUsers);
+  if (!isSuperuser && !hasManageUsers) {
     return res.status(403).json({ error: 'forbidden' });
   }
   next();
