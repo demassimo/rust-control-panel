@@ -5,8 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="panel-api-base" content="/api" />
   <title>Rust Admin Online — Open Source</title>
-  <link rel="icon" type="image/svg+xml" href="assets/icons/favicon.svg" />
-  <link rel="stylesheet" href="assets/styles.css" />
+  <link rel="icon" type="image/svg+xml" href="/assets/icons/favicon.svg" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <script>
+    window.SUPERUSER_MODE = true;
+    window.DEFAULT_PANEL = 'admin';
+  </script>
 </head>
 <body>
   <div class="app-shell">
@@ -14,7 +18,7 @@
       <div class="login-hero">
         <div class="brand">
           <span class="brand-icon" aria-hidden="true">
-            <img src="assets/icons/shield.svg" alt="" />
+            <img src="/assets/icons/shield.svg" alt="" />
           </span>
           <div>
             <h1>Rust Admin Dashboard</h1>
@@ -56,7 +60,7 @@
       <header class="app-header">
         <div class="brand">
           <span class="brand-icon" aria-hidden="true">
-            <img src="assets/icons/shield.svg" alt="" />
+            <img src="/assets/icons/shield.svg" alt="" />
           </span>
           <div class="brand-meta">
             <h1>Rust Admin Dashboard</h1>
@@ -1252,15 +1256,15 @@
     </section>
   </div>
 
-  <script src="assets/modules/module-loader.js"></script>
-  <script src="assets/modules/players-graph.js"></script>
-  <script src="assets/modules/live-players.js"></script>
-  <script src="assets/modules/players.js"></script>
-  <script src="assets/modules/team-auth.js"></script>
-  <script src="assets/modules/map.js"></script>
-  <script src="assets/modules/discord-modules.js"></script>
+  <script src="/assets/modules/module-loader.js"></script>
+  <script src="/assets/modules/players-graph.js"></script>
+  <script src="/assets/modules/live-players.js"></script>
+  <script src="/assets/modules/players.js"></script>
+  <script src="/assets/modules/team-auth.js"></script>
+  <script src="/assets/modules/map.js"></script>
+  <script src="/assets/modules/discord-modules.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
-  <script src="assets/js/server-settings.js"></script>
-  <script src="assets/app.js"></script>
+  <script src="/assets/js/server-settings.js"></script>
+  <script src="/assets/app.js"></script>
 </body>
 </html>

@@ -4,7 +4,8 @@ export function signToken(user, secret) {
   const payload = {
     uid: user.id,
     role: user.role || 'user',
-    username: user.username
+    username: user.username,
+    superuser: Boolean(user.superuser)
   };
   return jwt.sign(payload, secret, { expiresIn: '7d' });
 }
@@ -36,7 +37,11 @@ export function authMiddleware(secret, options = {}) {
 }
 
 export function requireAdmin(req, res, next) {
-  const hasPermission = req.authUser?.permissions?.global?.manageUsers;
-  if (!hasPermission) return res.status(403).json({ error: 'forbidden' });
+  const isAdminUser = typeof req.authUser?.username === 'string' && req.authUser.username.toLowerCase() === 'admin';
+  const isSuperuser = Boolean(req.authUser?.superuser);
+  const hasPermission = isSuperuser || req.authUser?.permissions?.global?.manageUsers;
+  if (!(isSuperuser || isAdminUser) || !hasPermission) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
   next();
 }

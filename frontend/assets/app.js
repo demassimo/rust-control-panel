@@ -10,6 +10,7 @@
   const navDashboard = $('#navDashboard');
   const navLinked = $('#navLinked');
   const navTeam = $('#navTeam');
+  const navAdmin = $('#navAdmin');
   const navDiscord = $('#navDiscord');
   const navSettings = $('#navSettings');
   const teamSwitcher = $('#teamSwitcher');
@@ -18,6 +19,7 @@
   const dashboardPanel = $('#dashboardPanel');
   const linkedAccountsPanel = $('#linkedAccountsPanel');
   const teamPanel = $('#teamPanel');
+  const adminPanel = $('#adminPanel');
   const discordPanel = $('#discordPanel');
   const workspacePanel = $('#workspacePanel');
   const settingsPanel = $('#settingsPanel');
@@ -30,6 +32,30 @@
   const userCard = $('#userCard');
   const userList = $('#userList');
   const userFeedback = $('#userFeedback');
+  const adminUserList = $('#adminUserList');
+  const adminUserEmpty = $('#adminUserEmpty');
+  const adminUserDetails = $('#adminUserDetails');
+  const adminDetailUsername = $('#adminDetailUsername');
+  const adminDetailCreated = $('#adminDetailCreated');
+  const adminUserRoleSelect = $('#adminUserRoleSelect');
+  const adminUserSaveRole = $('#adminUserSaveRole');
+  const adminUserRoleStatus = $('#adminUserRoleStatus');
+  const adminUserResetPassword = $('#adminUserResetPassword');
+  const adminUserDelete = $('#adminUserDelete');
+  const adminUserDangerStatus = $('#adminUserDangerStatus');
+  const adminUserTeams = $('#adminUserTeams');
+  const adminAssignTeam = $('#adminAssignTeam');
+  const adminAssignRole = $('#adminAssignRole');
+  const adminUserSuperuser = $('#adminUserSuperuser');
+  const btnAdminAssignTeam = $('#btnAdminAssignTeam');
+  const adminAssignStatus = $('#adminAssignStatus');
+  const adminNewUserName = $('#adminNewUserName');
+  const adminNewUserPassword = $('#adminNewUserPassword');
+  const adminNewUserRole = $('#adminNewUserRole');
+  const adminNewUserTeam = $('#adminNewUserTeam');
+  const adminNewUserSuperuser = $('#adminNewUserSuperuser');
+  const btnAdminCreateUser = $('#btnAdminCreateUser');
+  const adminUserFeedback = $('#adminUserFeedback');
   const btnRefreshServers = $('#btnRefreshServers');
   const btnClearConsole = $('#btnClearConsole');
   const btnAddServer = $('#btnAddServer');
@@ -87,6 +113,12 @@
     lastUpdate: 'Last update timestamp'
   };
 
+  const superuserUi = Boolean(typeof window !== 'undefined' && window.SUPERUSER_MODE);
+  const defaultPanel = superuserUi
+    ? 'admin'
+    : (typeof window !== 'undefined' && window.DEFAULT_PANEL)
+      ? String(window.DEFAULT_PANEL)
+      : 'dashboard';
   const state = {
     API: '',
     TOKEN: localStorage.getItem('token') || '',
@@ -96,7 +128,7 @@
     allowRegistration: false,
     statusTimer: null,
     settings: {},
-    activePanel: 'dashboard',
+    activePanel: defaultPanel,
     activeTeamId: null,
     activeTeamName: null,
     teams: [],
@@ -112,7 +144,14 @@
       integration: null,
       status: null,
       config: defaultWorkspaceDiscordConfig()
-    }
+    },
+    admin: {
+      users: [],
+      teams: [],
+      selectedUserId: null,
+      loading: false
+    },
+    superuserUi
   };
   const loginUsername = $('#username');
   const loginPassword = $('#password');
@@ -3880,6 +3919,10 @@
     return !!currentUserPermissions().global?.[permission];
   }
 
+  function isSuperuser() {
+    return Boolean(state.currentUser?.superuser);
+  }
+
   function serverPermissionConfig() {
     return currentUserPermissions().servers || {};
   }
@@ -4192,6 +4235,7 @@
       state.currentUser = {
         id: me.id,
         username: me.username,
+        superuser: Boolean(me.superuser),
         role: me.role,
         roleName: me.roleName || me.role,
         permissions: me.permissions || {},
@@ -4721,7 +4765,8 @@
   }
 
   function applyPermissionGates() {
-    const canManageServers = hasGlobalPermission('manageServers');
+    const adminOnlyMode = state.superuserUi === true;
+    const canManageServers = adminOnlyMode ? false : hasGlobalPermission('manageServers');
     if (addServerPrompt) {
       addServerPrompt.classList.toggle('hidden', !canManageServers);
       addServerPrompt.setAttribute('aria-hidden', canManageServers ? 'false' : 'true');
@@ -4738,10 +4783,11 @@
       if (el) el.disabled = !canManageServers;
     });
 
-    const canManageUsers = hasGlobalPermission('manageUsers');
-    const canManageRoles = hasGlobalPermission('manageRoles');
-    const canAccessTeam = canManageUsers || canManageRoles;
-    const canAccessLinked = canAccessTeam;
+    const superuser = isSuperuser();
+    const canManageUsers = superuser && hasGlobalPermission('manageUsers');
+    const canManageRoles = superuser && hasGlobalPermission('manageRoles');
+    const canAccessTeam = adminOnlyMode ? false : (canManageUsers || canManageRoles);
+    const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
     if (userCreateSection) userCreateSection.classList.toggle('hidden', !canManageUsers);
     if (newUserName) newUserName.disabled = !canManageUsers;
     if (newUserPassword) newUserPassword.disabled = !canManageUsers;
@@ -4753,6 +4799,31 @@
     if (!canManageUsers) {
       hideNotice(userFeedback);
       hideNotice(existingUserFeedback);
+    }
+
+    if (adminPanel) {
+      adminPanel.classList.toggle('hidden', !canManageUsers);
+      adminPanel.setAttribute('aria-hidden', canManageUsers ? 'false' : 'true');
+    }
+    [
+      adminNewUserName,
+      adminNewUserPassword,
+      adminNewUserRole,
+      adminNewUserTeam,
+      adminAssignTeam,
+      adminAssignRole,
+      adminUserSuperuser,
+      adminNewUserSuperuser
+    ].forEach((el) => {
+      if (el) el.disabled = !canManageUsers;
+    });
+    if (btnAdminCreateUser) btnAdminCreateUser.disabled = !canManageUsers;
+    if (btnAdminAssignTeam) btnAdminAssignTeam.disabled = !canManageUsers || !state.admin.teams.length;
+    if (adminUserSaveRole) adminUserSaveRole.disabled = !canManageUsers;
+    if (adminUserResetPassword) adminUserResetPassword.disabled = !canManageUsers;
+    if (adminUserDelete) adminUserDelete.disabled = !canManageUsers;
+    if (!canManageUsers) {
+      resetAdminView();
     }
 
     const hasConsole = hasServerCapability('console');
@@ -4784,7 +4855,10 @@
     if (!canAccessTeam && state.activePanel === 'team') {
       switchPanel('dashboard');
     } else {
-      updateTeamAccessView({ refreshUsers: state.activePanel === 'team' });
+      updateTeamAccessView({
+        refreshUsers: state.activePanel === 'team',
+        refreshAdmin: state.activePanel === 'admin'
+      });
     }
     moduleBus.emit('permissions:updated', {
       permissions: currentUserPermissions(),
@@ -4793,17 +4867,28 @@
   }
 
   function switchPanel(panel = 'dashboard') {
-    const canAccessTeam = hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
-    const canAccessLinked = canAccessTeam;
-    let nextPanel = panel;
-    const canAccessDiscord = canManageTeamDiscord();
+    const adminOnlyMode = state.superuserUi === true;
+    const superuser = isSuperuser();
+    const canAccessTeam = adminOnlyMode ? false : (superuser && (hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles')));
+    const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
+    const canAccessAdmin = superuser && hasGlobalPermission('manageUsers');
+    const canAccessDiscord = adminOnlyMode ? false : canManageTeamDiscord();
+    const canAccessSettings = Boolean(state.currentUser);
+    const fallbackPanel = adminOnlyMode
+      ? (canAccessAdmin ? 'admin' : (canAccessSettings ? 'settings' : 'dashboard'))
+      : 'dashboard';
+    let nextPanel = adminOnlyMode
+      ? (panel === 'settings' ? 'settings' : 'admin')
+      : panel;
     if (
       (nextPanel === 'team' && !canAccessTeam)
       || (nextPanel === 'discord' && !canAccessDiscord)
       || (nextPanel === 'linked' && !canAccessLinked)
+      || (nextPanel === 'admin' && !canAccessAdmin)
     ) {
-      nextPanel = 'dashboard';
+      nextPanel = fallbackPanel;
     }
+    if (nextPanel === 'settings' && !canAccessSettings) nextPanel = fallbackPanel;
     state.activePanel = nextPanel;
 
     const isDashboard = nextPanel === 'dashboard';
@@ -4811,11 +4896,13 @@
     const isTeam = nextPanel === 'team';
     const isDiscord = nextPanel === 'discord';
     const isLinked = nextPanel === 'linked';
+    const isAdmin = nextPanel === 'admin';
 
     if (isSettings) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      adminPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
       linkedAccountsPanel?.classList.add('hidden');
       settingsPanel?.classList.remove('hidden');
@@ -4824,6 +4911,7 @@
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      adminPanel?.classList.add('hidden');
       linkedAccountsPanel?.classList.add('hidden');
       discordPanel?.classList.remove('hidden');
     } else if (isTeam) {
@@ -4831,13 +4919,23 @@
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
+      adminPanel?.classList.add('hidden');
       linkedAccountsPanel?.classList.add('hidden');
       teamPanel?.classList.remove('hidden');
+    } else if (isAdmin) {
+      dashboardPanel?.classList.add('hidden');
+      workspacePanel?.classList.add('hidden');
+      settingsPanel?.classList.add('hidden');
+      discordPanel?.classList.add('hidden');
+      linkedAccountsPanel?.classList.add('hidden');
+      teamPanel?.classList.add('hidden');
+      adminPanel?.classList.remove('hidden');
     } else if (isLinked) {
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      adminPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
       linkedAccountsPanel?.classList.remove('hidden');
     } else {
@@ -4845,6 +4943,7 @@
       workspacePanel?.classList.add('hidden');
       settingsPanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
+      adminPanel?.classList.add('hidden');
       discordPanel?.classList.add('hidden');
       linkedAccountsPanel?.classList.add('hidden');
     }
@@ -4854,13 +4953,14 @@
     navTeam?.classList.toggle('active', isTeam);
     navDiscord?.classList.toggle('active', isDiscord);
     navLinked?.classList.toggle('active', isLinked);
+    navAdmin?.classList.toggle('active', isAdmin);
 
     if (!isSettings) {
       hideNotice(settingsStatus);
       hideNotice(passwordStatus);
     }
 
-    updateTeamAccessView({ refreshUsers: isTeam });
+    updateTeamAccessView({ refreshUsers: isTeam, refreshAdmin: isAdmin });
     if (isDiscord) {
       if (state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
         loadTeamDiscord({ force: true }).catch(() => {});
@@ -6512,6 +6612,12 @@
   }
 
   async function refreshServers() {
+    if (state.superuserUi) {
+      if (serversEl) serversEl.innerHTML = '';
+      if (serversEmpty) serversEmpty.classList.add('hidden');
+      hideAddServerCard({ force: true });
+      return;
+    }
     try {
       const list = await api('/servers');
       syncServerPermissions(list);
@@ -6889,6 +6995,7 @@
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
+    resetAdminView();
     hideNotice(teamDiscordStatus);
     if (teamDiscordToken) teamDiscordToken.value = '';
     if (teamDiscordGuildId) teamDiscordGuildId.value = '';
@@ -7058,6 +7165,357 @@
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else showNotice(userFeedback, describeError(err), 'error');
+    }
+  }
+
+  function resetAdminView() {
+    state.admin.users = [];
+    state.admin.teams = [];
+    state.admin.selectedUserId = null;
+    if (adminUserList) adminUserList.innerHTML = '';
+    if (adminUserEmpty) adminUserEmpty.classList.remove('hidden');
+    if (adminUserTeams) adminUserTeams.innerHTML = '';
+    if (adminDetailUsername) adminDetailUsername.textContent = '—';
+    if (adminDetailCreated) adminDetailCreated.textContent = '—';
+    if (adminUserRoleSelect) adminUserRoleSelect.value = '';
+    if (adminUserSuperuser) adminUserSuperuser.checked = false;
+    hideNotice(adminUserRoleStatus);
+    hideNotice(adminAssignStatus);
+    hideNotice(adminUserDangerStatus);
+    hideNotice(adminUserFeedback);
+  }
+
+  function getAdminSelectedUser() {
+    return state.admin.users.find((user) => user.id === state.admin.selectedUserId) || null;
+  }
+
+  function populateAdminTeamSelect(select, { allowEmpty = false, placeholder = '' } = {}) {
+    if (!select) return;
+    const teams = state.admin.teams || [];
+    const previous = select.value;
+    select.innerHTML = '';
+    if (allowEmpty) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = placeholder || 'Do not assign';
+      select.appendChild(option);
+    }
+    teams.forEach((team) => {
+      const option = document.createElement('option');
+      option.value = team.id != null ? String(team.id) : '';
+      const memberCount = Number.isFinite(team.member_count) ? ` • ${team.member_count} member(s)` : '';
+      option.textContent = team.name ? `${team.name}${memberCount}` : `Team #${team.id}`;
+      select.appendChild(option);
+    });
+    if (!teams.length && !allowEmpty) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No organizations available';
+      select.appendChild(option);
+      select.disabled = true;
+      select.value = '';
+      return;
+    }
+    select.disabled = !teams.length && !allowEmpty;
+    if (previous && Array.from(select.options).some((opt) => opt.value === previous)) {
+      select.value = previous;
+    } else if (select.options.length > 0) {
+      select.value = select.options[0].value;
+    }
+  }
+
+  function renderAdminTeamOptions() {
+    populateAdminTeamSelect(adminNewUserTeam, { allowEmpty: true, placeholder: 'Do not assign' });
+    populateAdminTeamSelect(adminAssignTeam, { allowEmpty: false, placeholder: '' });
+  }
+
+  function renderAdminUsers() {
+    if (!adminUserList) return;
+    adminUserList.innerHTML = '';
+    const users = state.admin.users || [];
+    if (!users.length) {
+      if (adminUserEmpty) adminUserEmpty.classList.remove('hidden');
+      return;
+    }
+    if (adminUserEmpty) adminUserEmpty.classList.add('hidden');
+    users.forEach((user) => {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'user-item';
+      const primary = document.createElement('div');
+      primary.className = 'user-item-primary';
+      const name = document.createElement('span');
+      name.className = 'user-item-name';
+      name.textContent = user.username;
+      primary.appendChild(name);
+      const meta = document.createElement('span');
+      meta.className = 'user-item-meta';
+      const orgCount = Array.isArray(user.teams) ? user.teams.length : 0;
+      meta.textContent = `Role: ${formatUserRole(user)} • Orgs: ${orgCount}`;
+      primary.appendChild(meta);
+      button.appendChild(primary);
+      const trailing = document.createElement('div');
+      trailing.className = 'user-item-trailing';
+      if (user.id === state.currentUser?.id) {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = 'You';
+        trailing.appendChild(badge);
+      }
+      const chevron = document.createElement('span');
+      chevron.className = 'user-item-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      chevron.textContent = '›';
+      trailing.appendChild(chevron);
+      button.appendChild(trailing);
+      if (state.admin.selectedUserId === user.id) {
+        button.classList.add('active');
+      }
+      button.addEventListener('click', () => {
+        state.admin.selectedUserId = user.id;
+        renderAdminUsers();
+        renderAdminUserDetails(user);
+      });
+      li.appendChild(button);
+      adminUserList.appendChild(li);
+    });
+  }
+
+  function renderAdminMemberships(user) {
+    if (!adminUserTeams) return;
+    adminUserTeams.innerHTML = '';
+    if (!user || !Array.isArray(user.teams) || !user.teams.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = 'No organization memberships yet.';
+      adminUserTeams.appendChild(li);
+      return;
+    }
+    user.teams.forEach((team) => {
+      const li = document.createElement('li');
+      li.className = 'admin-membership-item';
+      const label = document.createElement('div');
+      label.className = 'admin-membership-label';
+      const name = document.createElement('span');
+      name.className = 'user-item-name';
+      name.textContent = team.name || `Team #${team.id}`;
+      const meta = document.createElement('span');
+      meta.className = 'muted small';
+      meta.textContent = `Role: ${formatUserRole(team.roleName || team.role)}`;
+      label.appendChild(name);
+      label.appendChild(meta);
+      li.appendChild(label);
+      const actions = document.createElement('div');
+      actions.className = 'admin-membership-actions';
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'ghost danger';
+      removeBtn.textContent = 'Remove';
+      removeBtn.addEventListener('click', () => handleAdminRemoveMembership(user.id, team.id));
+      actions.appendChild(removeBtn);
+      li.appendChild(actions);
+      adminUserTeams.appendChild(li);
+    });
+  }
+
+  function renderAdminUserDetails(user) {
+    const hasUser = Boolean(user);
+    if (adminUserDetails) {
+      adminUserDetails.classList.toggle('muted', !hasUser);
+    }
+    if (!hasUser) {
+      if (adminDetailUsername) adminDetailUsername.textContent = '—';
+      if (adminDetailCreated) adminDetailCreated.textContent = '—';
+      if (adminUserRoleSelect) adminUserRoleSelect.value = '';
+      renderAdminMemberships(null);
+      if (btnAdminAssignTeam) btnAdminAssignTeam.disabled = true;
+      if (adminAssignTeam) adminAssignTeam.disabled = true;
+      if (adminAssignRole) adminAssignRole.disabled = true;
+      if (adminUserSaveRole) adminUserSaveRole.disabled = true;
+      if (adminUserResetPassword) adminUserResetPassword.disabled = true;
+      if (adminUserDelete) adminUserDelete.disabled = true;
+      return;
+    }
+    if (adminDetailUsername) adminDetailUsername.textContent = user.username || '—';
+    if (adminDetailCreated) adminDetailCreated.textContent = formatUserJoined(user.created_at);
+    if (adminUserRoleSelect) adminUserRoleSelect.value = user.role || '';
+    if (adminUserSuperuser) adminUserSuperuser.checked = Boolean(user.superuser);
+    if (btnAdminAssignTeam) btnAdminAssignTeam.disabled = !state.admin.teams.length;
+    if (adminAssignTeam) adminAssignTeam.disabled = !state.admin.teams.length;
+    if (adminAssignRole) adminAssignRole.disabled = !state.roles.length;
+    const isSelf = user.id === state.currentUser?.id;
+    if (adminUserSaveRole) adminUserSaveRole.disabled = !hasGlobalPermission('manageUsers');
+    if (adminUserResetPassword) adminUserResetPassword.disabled = isSelf;
+    if (adminUserDelete) adminUserDelete.disabled = isSelf;
+    renderAdminMemberships(user);
+  }
+
+  async function loadAdminOverview({ preserveSelection = true, selectUserId = null } = {}) {
+    if (!hasGlobalPermission('manageUsers')) {
+      resetAdminView();
+      return;
+    }
+    hideNotice(adminUserFeedback);
+    hideNotice(adminUserRoleStatus);
+    hideNotice(adminAssignStatus);
+    hideNotice(adminUserDangerStatus);
+    state.admin.loading = true;
+    try {
+      const [users, teams] = await Promise.all([
+        api('/admin/users'),
+        api('/admin/teams')
+      ]);
+      state.admin.users = Array.isArray(users) ? users : [];
+      state.admin.teams = Array.isArray(teams) ? teams : [];
+      renderAdminTeamOptions();
+      const desiredId = selectUserId != null
+        ? selectUserId
+        : preserveSelection
+          ? state.admin.selectedUserId
+          : null;
+      if (desiredId && state.admin.users.some((entry) => entry.id === desiredId)) {
+        state.admin.selectedUserId = desiredId;
+      } else {
+        state.admin.selectedUserId = state.admin.users[0]?.id ?? null;
+      }
+      renderAdminUsers();
+      renderAdminUserDetails(getAdminSelectedUser());
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminUserFeedback, describeError(err), 'error');
+    } finally {
+      state.admin.loading = false;
+    }
+  }
+
+  async function handleAdminCreateUser() {
+    if (!hasGlobalPermission('manageUsers')) return;
+    hideNotice(adminUserFeedback);
+    const username = adminNewUserName?.value?.trim();
+    const password = adminNewUserPassword?.value || '';
+    const role = adminNewUserRole?.value || '';
+    const teamIdRaw = adminNewUserTeam?.value || '';
+    const superuser = adminNewUserSuperuser?.checked || false;
+    if (!username || !password) {
+      showNotice(adminUserFeedback, describeError('missing_fields'), 'error');
+      return;
+    }
+    if (password.length < 8) {
+      showNotice(adminUserFeedback, 'Password must be at least 8 characters.', 'error');
+      return;
+    }
+    const payload = { username, password, role, superuser };
+    if (teamIdRaw) payload.teamId = teamIdRaw;
+    try {
+      const created = await api('/admin/users', payload, 'POST');
+      showNotice(adminUserFeedback, 'User created successfully.', 'success');
+      if (adminNewUserPassword) adminNewUserPassword.value = '';
+      if (adminNewUserSuperuser) adminNewUserSuperuser.checked = false;
+      await loadAdminOverview({ preserveSelection: false, selectUserId: created?.id });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminUserFeedback, describeError(err), 'error');
+    }
+  }
+
+  async function handleAdminRoleSave() {
+    const user = getAdminSelectedUser();
+    if (!user || !adminUserRoleSelect) return;
+    const role = adminUserRoleSelect.value;
+    const desiredSuperuser = adminUserSuperuser?.checked ?? user.superuser;
+    const roleChanged = !!role && role !== user.role;
+    const superuserChanged = Boolean(desiredSuperuser) !== Boolean(user.superuser);
+    if (!roleChanged && !superuserChanged) {
+      showNotice(adminUserRoleStatus, 'Select a different role or superuser state before updating.', 'error');
+      return;
+    }
+    try {
+      await api(`/admin/users/${user.id}`, { role, superuser: desiredSuperuser }, 'PATCH');
+      showNotice(adminUserRoleStatus, 'Role updated.', 'success');
+      await loadAdminOverview({ selectUserId: user.id });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminUserRoleStatus, describeError(err), 'error');
+    }
+  }
+
+  async function handleAdminPasswordReset() {
+    const user = getAdminSelectedUser();
+    if (!user) return;
+    const newPass = await promptDialog({
+      title: 'Reset password',
+      message: `Enter a new password for ${user.username}.`,
+      confirmText: 'Update password',
+      label: 'New password',
+      placeholder: 'Minimum 8 characters',
+      required: true,
+      minLength: 8,
+      type: 'password',
+      requiredMessage: 'Password is required.',
+      minMessage: 'Password must be at least 8 characters.'
+    });
+    if (newPass == null) return;
+    try {
+      await api(`/admin/users/${user.id}/password`, { newPassword: newPass }, 'POST');
+      showNotice(adminUserRoleStatus, 'Password updated.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminUserRoleStatus, describeError(err), 'error');
+    }
+  }
+
+  async function handleAdminDeleteUser() {
+    const user = getAdminSelectedUser();
+    if (!user) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete user',
+      message: `Delete ${user.username}? This cannot be undone.`,
+      confirmText: 'Delete user',
+      cancelText: 'Cancel'
+    });
+    if (!confirmed) return;
+    try {
+      await api(`/admin/users/${user.id}`, null, 'DELETE');
+      showNotice(adminUserDangerStatus, 'User deleted.', 'success');
+      await loadAdminOverview({ preserveSelection: false });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminUserDangerStatus, describeError(err), 'error');
+    }
+  }
+
+  async function handleAdminAssignTeam() {
+    const user = getAdminSelectedUser();
+    if (!user || !adminAssignTeam) return;
+    const teamId = adminAssignTeam.value;
+    const role = adminAssignRole?.value || 'user';
+    if (!teamId) {
+      showNotice(adminAssignStatus, 'Select an organization before assigning.', 'error');
+      return;
+    }
+    try {
+      await api(`/admin/users/${user.id}/teams`, { teamId, role }, 'POST');
+      showNotice(adminAssignStatus, 'Added to organization.', 'success');
+      await loadAdminOverview({ selectUserId: user.id });
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminAssignStatus, describeError(err), 'error');
+    }
+  }
+
+  async function handleAdminRemoveMembership(userId, teamId) {
+    if (!Number.isFinite(userId) || !Number.isFinite(teamId)) return;
+    try {
+      await api(`/admin/users/${userId}/teams/${teamId}`, null, 'DELETE');
+      if (state.admin.selectedUserId === userId) {
+        await loadAdminOverview({ selectUserId: userId });
+      } else {
+        await loadAdminOverview();
+      }
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(adminAssignStatus, describeError(err), 'error');
     }
   }
 
@@ -7338,13 +7796,16 @@
     }
   }
 
-  function updateRoleOptions() {
-    const roles = state.roles || [];
-    populateRoleSelectOptions(newUserRole, roles);
-    populateRoleSelectOptions(existingUserRole, roles);
-    populateRoleSelectOptions(userDetailsRoleSelect, roles);
-    populateRoleSelectOptions(roleSelect, roles, false);
-  }
+    function updateRoleOptions() {
+      const roles = state.roles || [];
+      populateRoleSelectOptions(newUserRole, roles);
+      populateRoleSelectOptions(existingUserRole, roles);
+      populateRoleSelectOptions(userDetailsRoleSelect, roles);
+      populateRoleSelectOptions(adminNewUserRole, roles);
+      populateRoleSelectOptions(adminAssignRole, roles);
+      populateRoleSelectOptions(adminUserRoleSelect, roles);
+      populateRoleSelectOptions(roleSelect, roles, false);
+    }
 
   function applyRoleToEditor(role) {
     if (!roleEditor) return;
@@ -7582,8 +8043,9 @@
   }
 
   function toggleUserCard() {
-    const canUsers = hasGlobalPermission('manageUsers');
-    const canRoles = hasGlobalPermission('manageRoles');
+    const superuser = isSuperuser();
+    const canUsers = superuser && hasGlobalPermission('manageUsers');
+    const canRoles = superuser && hasGlobalPermission('manageRoles');
     if (canUsers || canRoles) {
       userCard.classList.remove('hidden');
       if (canUsers) {
@@ -7599,13 +8061,16 @@
     }
   }
 
-  function updateRoleOptions() {
-    const roles = state.roles || [];
-    populateRoleSelectOptions(newUserRole, roles);
-    populateRoleSelectOptions(existingUserRole, roles);
-    populateRoleSelectOptions(userDetailsRoleSelect, roles);
-    populateRoleSelectOptions(roleSelect, roles, false);
-  }
+    function updateRoleOptions() {
+      const roles = state.roles || [];
+      populateRoleSelectOptions(newUserRole, roles);
+      populateRoleSelectOptions(existingUserRole, roles);
+      populateRoleSelectOptions(userDetailsRoleSelect, roles);
+      populateRoleSelectOptions(adminNewUserRole, roles);
+      populateRoleSelectOptions(adminAssignRole, roles);
+      populateRoleSelectOptions(adminUserRoleSelect, roles);
+      populateRoleSelectOptions(roleSelect, roles, false);
+    }
 
   function applyRoleToEditor(role) {
     if (!roleEditor) return;
@@ -8219,12 +8684,21 @@
     if (unauthorized) return;
   }
 
-  function updateTeamAccessView({ refreshUsers = false } = {}) {
+  function updateTeamAccessView({ refreshUsers = false, refreshAdmin = false } = {}) {
+    const adminOnlyMode = state.superuserUi === true;
     const canUsers = hasGlobalPermission('manageUsers');
     const canRoles = hasGlobalPermission('manageRoles');
-    const canAccessTeam = canUsers || canRoles;
-    const canManageDiscord = canManageTeamDiscord();
-    const canAccessLinked = canUsers || canRoles;
+    const canAccessTeam = adminOnlyMode ? false : (canUsers || canRoles);
+    const canManageDiscord = adminOnlyMode ? false : canManageTeamDiscord();
+    const canAccessLinked = adminOnlyMode ? false : (canUsers || canRoles);
+    const canAccessAdmin = canUsers;
+
+    if (navDashboard) {
+      navDashboard.classList.toggle('hidden', adminOnlyMode);
+      navDashboard.setAttribute('aria-hidden', adminOnlyMode ? 'true' : 'false');
+      navDashboard.disabled = adminOnlyMode;
+      if (adminOnlyMode) navDashboard.classList.remove('active');
+    }
 
     if (navTeam) {
       navTeam.classList.toggle('hidden', !canAccessTeam);
@@ -8245,6 +8719,18 @@
       navDiscord.setAttribute('aria-hidden', canManageDiscord ? 'false' : 'true');
       navDiscord.disabled = !canManageDiscord;
       if (!canManageDiscord) navDiscord.classList.remove('active');
+    }
+
+    if (navAdmin) {
+      navAdmin.classList.toggle('hidden', !canAccessAdmin);
+      navAdmin.setAttribute('aria-hidden', canAccessAdmin ? 'false' : 'true');
+      navAdmin.disabled = !canAccessAdmin;
+      if (!canAccessAdmin) navAdmin.classList.remove('active');
+    }
+
+    if (teamSwitcher && adminOnlyMode) {
+      teamSwitcher.classList.add('hidden');
+      teamSwitcher.setAttribute('aria-hidden', 'true');
     }
 
     if (!canAccessTeam) {
@@ -8273,6 +8759,11 @@
         teamDiscordGuildId.value = '';
       }
       updateTeamDiscordUi();
+      if (!canAccessAdmin) {
+        if (adminPanel) adminPanel.classList.add('hidden');
+        if (state.activePanel === 'admin') switchPanel('dashboard');
+        resetAdminView();
+      }
       return;
     }
 
@@ -8294,6 +8785,11 @@
       if (state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
         loadTeamDiscord().catch(() => {});
       }
+    }
+    if (canAccessAdmin && refreshAdmin) {
+      loadAdminOverview().catch(() => {});
+    } else if (!canAccessAdmin) {
+      resetAdminView();
     }
   }
 
@@ -8339,6 +8835,7 @@
       state.currentUser = {
         id: me.id,
         username: me.username,
+        superuser: Boolean(me.superuser),
         role: me.role,
         roleName: me.roleName || me.role,
         permissions: me.permissions || {}
@@ -8384,6 +8881,7 @@
       state.currentUser = {
         id: data.id,
         username: data.username,
+        superuser: Boolean(data.superuser),
         role: data.role,
         roleName: data.roleName || data.role,
         permissions: data.permissions || {}
@@ -8513,19 +9011,25 @@
     }
   }
 
-  function bindEvents() {
-    navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
-    navTeam?.addEventListener('click', () => {
-      if (navTeam.disabled) return;
-      hideWorkspace('nav');
-      switchPanel('team');
-      closeProfileMenu();
-    });
-    navLinked?.addEventListener('click', () => {
-      if (navLinked.disabled) return;
-      hideWorkspace('nav');
-      switchPanel('linked');
-      closeProfileMenu();
+    function bindEvents() {
+      navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
+      navTeam?.addEventListener('click', () => {
+        if (navTeam.disabled) return;
+        hideWorkspace('nav');
+        switchPanel('team');
+        closeProfileMenu();
+      });
+      navAdmin?.addEventListener('click', () => {
+        if (navAdmin.disabled) return;
+        hideWorkspace('nav');
+        switchPanel('admin');
+        closeProfileMenu();
+      });
+      navLinked?.addEventListener('click', () => {
+        if (navLinked.disabled) return;
+        hideWorkspace('nav');
+        switchPanel('linked');
+        closeProfileMenu();
     });
     navDiscord?.addEventListener('click', () => {
       if (navDiscord.disabled) return;
@@ -8593,15 +9097,27 @@
       state.teamAuth.roleId = value ? value : null;
       hideNotice(teamAuthStatus);
     });
-    teamAuthLogChannelInput?.addEventListener('input', () => {
-      const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput.value);
-      state.teamAuth.logChannelId = value ? value : null;
-      hideNotice(teamAuthStatus);
-    });
-    btnCreateUser?.addEventListener('click', async () => {
-      if (!hasGlobalPermission('manageUsers')) return;
-      hideNotice(userFeedback);
-      hideNotice(existingUserFeedback);
+      teamAuthLogChannelInput?.addEventListener('input', () => {
+        const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput.value);
+        state.teamAuth.logChannelId = value ? value : null;
+        hideNotice(teamAuthStatus);
+      });
+      btnAdminCreateUser?.addEventListener('click', (event) => { event.preventDefault(); handleAdminCreateUser(); });
+      adminUserSaveRole?.addEventListener('click', handleAdminRoleSave);
+      adminUserResetPassword?.addEventListener('click', handleAdminPasswordReset);
+      adminUserDelete?.addEventListener('click', handleAdminDeleteUser);
+      btnAdminAssignTeam?.addEventListener('click', (event) => { event.preventDefault(); handleAdminAssignTeam(); });
+      adminAssignTeam?.addEventListener('change', () => hideNotice(adminAssignStatus));
+      adminAssignRole?.addEventListener('change', () => hideNotice(adminAssignStatus));
+      adminUserSuperuser?.addEventListener('change', () => hideNotice(adminUserRoleStatus));
+      adminNewUserName?.addEventListener('input', () => hideNotice(adminUserFeedback));
+      adminNewUserPassword?.addEventListener('input', () => hideNotice(adminUserFeedback));
+      adminNewUserRole?.addEventListener('change', () => hideNotice(adminUserFeedback));
+      adminNewUserSuperuser?.addEventListener('change', () => hideNotice(adminUserFeedback));
+      btnCreateUser?.addEventListener('click', async () => {
+        if (!hasGlobalPermission('manageUsers')) return;
+        hideNotice(userFeedback);
+        hideNotice(existingUserFeedback);
       const username = newUserName?.value.trim();
       const password = newUserPassword?.value || '';
       const role = newUserRole?.value || 'user';
