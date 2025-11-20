@@ -4774,6 +4774,11 @@
   function applyPermissionGates() {
     const adminOnlyMode = state.superuserUi === true;
     const canManageServers = adminOnlyMode ? false : hasGlobalPermission('manageServers');
+    const canManageUsers = adminOnlyMode ? false : hasGlobalPermission('manageUsers');
+    const canManageRoles = adminOnlyMode ? false : hasGlobalPermission('manageRoles');
+    const canAccessTeam = adminOnlyMode ? false : (canManageUsers || canManageRoles);
+    const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
+    const canAccessAdminPanel = isSuperuser() && hasGlobalPermission('manageUsers');
     if (addServerPrompt) {
       addServerPrompt.classList.toggle('hidden', !canManageServers);
       addServerPrompt.setAttribute('aria-hidden', canManageServers ? 'false' : 'true');
@@ -4790,11 +4795,6 @@
       if (el) el.disabled = !canManageServers;
     });
 
-    const superuser = isSuperuser();
-    const canManageUsers = superuser && hasGlobalPermission('manageUsers');
-    const canManageRoles = superuser && hasGlobalPermission('manageRoles');
-    const canAccessTeam = adminOnlyMode ? false : (canManageUsers || canManageRoles);
-    const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
     if (userCreateSection) userCreateSection.classList.toggle('hidden', !canManageUsers);
     if (newUserName) newUserName.disabled = !canManageUsers;
     if (newUserPassword) newUserPassword.disabled = !canManageUsers;
@@ -4809,8 +4809,8 @@
     }
 
     if (adminPanel) {
-      adminPanel.classList.toggle('hidden', !canManageUsers);
-      adminPanel.setAttribute('aria-hidden', canManageUsers ? 'false' : 'true');
+      adminPanel.classList.toggle('hidden', !canAccessAdminPanel);
+      adminPanel.setAttribute('aria-hidden', canAccessAdminPanel ? 'false' : 'true');
     }
     [
       adminNewUserName,
@@ -4823,14 +4823,14 @@
       adminNewUserSuperuser,
       adminUserSearch
     ].forEach((el) => {
-      if (el) el.disabled = !canManageUsers;
+      if (el) el.disabled = !canAccessAdminPanel;
     });
-    if (btnAdminCreateUser) btnAdminCreateUser.disabled = !canManageUsers;
-    if (btnAdminAssignTeam) btnAdminAssignTeam.disabled = !canManageUsers || !state.admin.teams.length;
-    if (adminUserSaveRole) adminUserSaveRole.disabled = !canManageUsers;
-    if (adminUserResetPassword) adminUserResetPassword.disabled = !canManageUsers;
-    if (adminUserDelete) adminUserDelete.disabled = !canManageUsers;
-    if (!canManageUsers) {
+    if (btnAdminCreateUser) btnAdminCreateUser.disabled = !canAccessAdminPanel;
+    if (btnAdminAssignTeam) btnAdminAssignTeam.disabled = !canAccessAdminPanel || !state.admin.teams.length;
+    if (adminUserSaveRole) adminUserSaveRole.disabled = !canAccessAdminPanel;
+    if (adminUserResetPassword) adminUserResetPassword.disabled = !canAccessAdminPanel;
+    if (adminUserDelete) adminUserDelete.disabled = !canAccessAdminPanel;
+    if (!canAccessAdminPanel) {
       resetAdminView();
     }
 
@@ -4877,7 +4877,7 @@
   function switchPanel(panel = 'dashboard') {
     const adminOnlyMode = state.superuserUi === true;
     const superuser = isSuperuser();
-    const canAccessTeam = adminOnlyMode ? false : (superuser && (hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles')));
+    const canAccessTeam = adminOnlyMode ? false : (hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles'));
     const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
     const canAccessAdmin = superuser && hasGlobalPermission('manageUsers');
     const canAccessDiscord = adminOnlyMode ? false : canManageTeamDiscord();
@@ -8125,9 +8125,9 @@
   }
 
   function toggleUserCard() {
-    const superuser = isSuperuser();
-    const canUsers = superuser && hasGlobalPermission('manageUsers');
-    const canRoles = superuser && hasGlobalPermission('manageRoles');
+    const adminOnlyMode = state.superuserUi === true;
+    const canUsers = adminOnlyMode ? false : hasGlobalPermission('manageUsers');
+    const canRoles = adminOnlyMode ? false : hasGlobalPermission('manageRoles');
     if (canUsers || canRoles) {
       userCard.classList.remove('hidden');
       if (canUsers) {
@@ -8768,12 +8768,13 @@
 
   function updateTeamAccessView({ refreshUsers = false, refreshAdmin = false } = {}) {
     const adminOnlyMode = state.superuserUi === true;
-    const canUsers = hasGlobalPermission('manageUsers');
-    const canRoles = hasGlobalPermission('manageRoles');
+    const superuser = isSuperuser();
+    const canUsers = adminOnlyMode ? false : hasGlobalPermission('manageUsers');
+    const canRoles = adminOnlyMode ? false : hasGlobalPermission('manageRoles');
     const canAccessTeam = adminOnlyMode ? false : (canUsers || canRoles);
     const canManageDiscord = adminOnlyMode ? false : canManageTeamDiscord();
     const canAccessLinked = adminOnlyMode ? false : (canUsers || canRoles);
-    const canAccessAdmin = canUsers;
+    const canAccessAdmin = superuser && hasGlobalPermission('manageUsers');
 
     if (navDashboard) {
       navDashboard.classList.toggle('hidden', adminOnlyMode);
