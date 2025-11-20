@@ -4879,7 +4879,7 @@
     const superuser = isSuperuser();
     const canAccessTeam = adminOnlyMode ? false : (superuser && (hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles')));
     const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
-    const canAccessAdmin = superuser && hasGlobalPermission('manageUsers');
+    const canAccessAdmin = adminOnlyMode ? superuser : (superuser && hasGlobalPermission('manageUsers'));
     const canAccessDiscord = adminOnlyMode ? false : canManageTeamDiscord();
     const canAccessSettings = Boolean(state.currentUser);
     const fallbackPanel = adminOnlyMode
@@ -8768,8 +8768,8 @@
 
   function updateTeamAccessView({ refreshUsers = false, refreshAdmin = false } = {}) {
     const adminOnlyMode = state.superuserUi === true;
-    const canUsers = hasGlobalPermission('manageUsers');
-    const canRoles = hasGlobalPermission('manageRoles');
+    const canUsers = adminOnlyMode ? isSuperuser() : hasGlobalPermission('manageUsers');
+    const canRoles = adminOnlyMode ? isSuperuser() : hasGlobalPermission('manageRoles');
     const canAccessTeam = adminOnlyMode ? false : (canUsers || canRoles);
     const canManageDiscord = adminOnlyMode ? false : canManageTeamDiscord();
     const canAccessLinked = adminOnlyMode ? false : (canUsers || canRoles);
@@ -9103,6 +9103,10 @@
       });
       navAdmin?.addEventListener('click', () => {
         if (navAdmin.disabled) return;
+        if (!state.superuserUi) {
+          window.location.href = '/superuser/ui/';
+          return;
+        }
         hideWorkspace('nav');
         switchPanel('admin');
         closeProfileMenu();
