@@ -11,6 +11,13 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import geoip from 'geoip-lite';
 import multer from 'multer';
+import { authenticator } from 'otplib';
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse
+} from '@simplewebauthn/server';
 import { db, initDb } from './db/index.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
@@ -243,6 +250,24 @@ const PORT = parseInt(process.env.PORT || '8787', 10);
 const BIND = process.env.BIND || '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev';
 const ALLOW_REGISTRATION = (process.env.ALLOW_REGISTRATION || '').toLowerCase() === 'true';
+const DEFAULT_PANEL_ORIGIN = (() => {
+  try {
+    const url = PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || TEAM_AUTH_APP_URL;
+    if (url) return new URL(url).origin;
+  } catch {
+    // ignore
+  }
+  return `http://${BIND}:${PORT}`;
+})();
+const PASSKEY_RP_ID = process.env.PASSKEY_RP_ID || (() => {
+  try {
+    return new URL(DEFAULT_PANEL_ORIGIN).hostname;
+  } catch {
+    return 'localhost';
+  }
+})();
+const PASSKEY_ORIGIN = process.env.PASSKEY_ORIGIN || DEFAULT_PANEL_ORIGIN;
+const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Admin Dashboard';
 
 async function loadUserContext(userId) {
   const numeric = Number(userId);
@@ -5913,6 +5938,107 @@ if (mapPurgeHandle.unref) mapPurgeHandle.unref();
 
 await refreshMonitoredServers();
 
+const MFA_TICKET_TTL_MS = 10 * 60 * 1000;
+const pendingMfaTickets = new Map();
+const passkeyRegistrationChallenges = new Map();
+const passkeyLoginChallenges = new Map();
+
+authenticator.options = { window: 1 };
+
+const encodeBase64Url = (input) => Buffer.from(input).toString('base64url');
+const decodeBase64Url = (input) => Buffer.from(input, 'base64url');
+const normaliseTransports = (value) => {
+  if (Array.isArray(value)) return value.map((t) => String(t)).filter(Boolean);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.map((t) => String(t)).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+const serialiseTransports = (value) => {
+  const list = normaliseTransports(value);
+  return list.length ? JSON.stringify(list) : null;
+};
+
+function createMfaTicket(userId) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = Date.now() + MFA_TICKET_TTL_MS;
+  pendingMfaTickets.set(token, { userId, expiresAt });
+  return token;
+}
+
+function getMfaTicket(token) {
+  if (!token) return null;
+  const record = pendingMfaTickets.get(token);
+  if (!record) return null;
+  if (record.expiresAt < Date.now()) {
+    pendingMfaTickets.delete(token);
+    passkeyLoginChallenges.delete(token);
+    return null;
+  }
+  return record;
+}
+
+function clearMfaTicket(token) {
+  pendingMfaTickets.delete(token);
+  passkeyLoginChallenges.delete(token);
+}
+
+async function buildAuthPayload(userRow) {
+  const context = await loadUserContext(userRow.id);
+  const roleForToken = context?.role || userRow.role;
+  const token = signToken({ ...userRow, role: roleForToken }, JWT_SECRET);
+  return {
+    token,
+    username: context?.username || userRow.username,
+    superuser: Boolean(context?.superuser ?? userRow.superuser),
+    role: roleForToken,
+    roleName: context?.roleName || userRow.role_name || roleForToken,
+    id: userRow.id,
+    permissions: context?.permissions || normaliseRolePermissions(userRow.role_permissions, roleForToken),
+    activeTeamId: context?.activeTeamId || null,
+    activeTeamName: context?.activeTeamName || null,
+    activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken || false,
+    activeTeamDiscordGuildId: context?.activeTeamDiscordGuildId || null,
+    activeTeamDiscordTokenPreview: context?.activeTeamDiscordTokenPreview || null,
+    teamDiscord: context?.teamDiscord || { hasToken: false, guildId: null, tokenPreview: null },
+    teams: context?.teams || []
+  };
+}
+
+async function createPasskeyAuthOptions(userId, ticket) {
+  if (typeof db.listUserPasskeys !== 'function') return null;
+  const passkeys = await db.listUserPasskeys(userId);
+  if (!passkeys || passkeys.length === 0) return null;
+  const options = await generateAuthenticationOptions({
+    rpID: PASSKEY_RP_ID,
+    userVerification: 'preferred',
+    allowCredentials: passkeys.map((pk) => ({
+      id: decodeBase64Url(pk.credential_id),
+      type: 'public-key',
+      transports: normaliseTransports(pk.transports)
+    }))
+  });
+  if (ticket) {
+    passkeyLoginChallenges.set(ticket, { userId, challenge: options.challenge });
+  }
+  return options;
+}
+
+const projectPasskey = (pk) => ({
+  id: pk.id,
+  name: pk.friendly_name || 'Passkey',
+  created_at: pk.created_at || null,
+  last_used_at: pk.last_used_at || null,
+  transports: normaliseTransports(pk.transports)
+});
+
 // --- Public metadata
 app.get('/api/public-config', (req, res) => {
   res.json({ allowRegistration: ALLOW_REGISTRATION });
@@ -5928,27 +6054,113 @@ app.post('/api/login', async (req, res) => {
     if (!row) return res.status(401).json({ error: 'invalid_login' });
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid_login' });
-    const context = await loadUserContext(row.id);
-    const roleForToken = context?.role || row.role;
-    const token = signToken({ ...row, role: roleForToken }, JWT_SECRET);
-    res.json({
-      token,
-      username: context?.username || row.username,
-      superuser: Boolean(context?.superuser ?? row.superuser),
-      role: roleForToken,
-      roleName: context?.roleName || row.role_name || roleForToken,
-      id: row.id,
-      permissions: context?.permissions || normaliseRolePermissions(row.role_permissions, row.role),
-      activeTeamId: context?.activeTeamId || null,
-      activeTeamName: context?.activeTeamName || null,
-      activeTeamHasDiscordToken: context?.activeTeamHasDiscordToken || false,
-      activeTeamDiscordGuildId: context?.activeTeamDiscordGuildId || null,
-      activeTeamDiscordTokenPreview: context?.activeTeamDiscordTokenPreview || null,
-      teamDiscord:
-        context?.teamDiscord || { hasToken: false, guildId: null, tokenPreview: null },
-      teams: context?.teams || []
-    });
+    const hasTotp = Boolean(row.mfa_enabled && row.mfa_secret);
+    const passkeyCount = typeof db.countUserPasskeys === 'function'
+      ? await db.countUserPasskeys(row.id)
+      : 0;
+    const requiresMfa = hasTotp || passkeyCount > 0;
+    if (requiresMfa) {
+      const ticket = createMfaTicket(row.id);
+      let passkeyOptions = null;
+      if (passkeyCount > 0) {
+        try {
+          passkeyOptions = await createPasskeyAuthOptions(row.id, ticket);
+        } catch (err) {
+          console.warn('failed to create passkey options', err);
+        }
+      }
+      return res.status(401).json({
+        error: 'mfa_required',
+        mfa_required: true,
+        ticket,
+        methods: { totp: hasTotp, passkey: passkeyCount > 0 },
+        passkeyOptions: passkeyOptions || null
+      });
+    }
+    const payload = await buildAuthPayload(row);
+    res.json(payload);
   } catch (e) {
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/login/mfa/totp', async (req, res) => {
+  const { ticket, code } = req.body || {};
+  if (!ticket || !code) return res.status(400).json({ error: 'missing_fields' });
+  const record = getMfaTicket(ticket);
+  if (!record) return res.status(401).json({ error: 'mfa_expired' });
+  try {
+    const user = await db.getUser(record.userId);
+    if (!user || !user.mfa_secret || !user.mfa_enabled) {
+      clearMfaTicket(ticket);
+      return res.status(400).json({ error: 'mfa_not_enabled' });
+    }
+    const valid = authenticator.check(String(code).trim(), user.mfa_secret);
+    if (!valid) return res.status(401).json({ error: 'invalid_mfa_code' });
+    clearMfaTicket(ticket);
+    const payload = await buildAuthPayload(user);
+    res.json(payload);
+  } catch (err) {
+    console.error('totp verify failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/login/mfa/passkey/options', async (req, res) => {
+  const { ticket } = req.body || {};
+  const record = getMfaTicket(ticket);
+  if (!record) return res.status(401).json({ error: 'mfa_expired' });
+  try {
+    const options = await createPasskeyAuthOptions(record.userId, ticket);
+    if (!options) return res.status(400).json({ error: 'no_passkeys' });
+    res.json({ options });
+  } catch (err) {
+    console.error('passkey options failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/login/mfa/passkey/verify', async (req, res) => {
+  const { ticket, response } = req.body || {};
+  const record = getMfaTicket(ticket);
+  if (!record) return res.status(401).json({ error: 'mfa_expired' });
+  if (!response || typeof response !== 'object') {
+    return res.status(400).json({ error: 'missing_fields' });
+  }
+  try {
+    const expected = passkeyLoginChallenges.get(ticket);
+    if (!expected || expected.userId !== record.userId) {
+      return res.status(401).json({ error: 'mfa_expired' });
+    }
+    const stored = await db.getPasskeyByCredentialId(response.id);
+    if (!stored || stored.user_id !== record.userId) {
+      return res.status(401).json({ error: 'invalid_passkey' });
+    }
+    const verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: expected.challenge,
+      expectedOrigin: PASSKEY_ORIGIN,
+      expectedRPID: PASSKEY_RP_ID,
+      authenticator: {
+        credentialID: decodeBase64Url(stored.credential_id),
+        credentialPublicKey: decodeBase64Url(stored.public_key),
+        counter: Number(stored.counter) || 0,
+        transports: normaliseTransports(stored.transports)
+      },
+      requireUserVerification: true
+    });
+    if (!verification.verified) return res.status(401).json({ error: 'invalid_passkey' });
+    const newCounter = verification.authenticationInfo?.newCounter;
+    if (typeof newCounter === 'number' && Number.isFinite(newCounter)) {
+      await db.updatePasskeyCounter(stored.credential_id, newCounter);
+    }
+    clearMfaTicket(ticket);
+    const user = await db.getUser(record.userId);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const payload = await buildAuthPayload(user);
+    res.json(payload);
+  } catch (err) {
+    console.error('passkey verification failed', err);
     res.status(500).json({ error: 'db_error' });
   }
 });
@@ -6022,6 +6234,141 @@ app.post('/api/me/settings', auth, async (req, res) => {
     res.json(settings);
   } catch (err) {
     console.error('settings update failed', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/me/security', auth, async (req, res) => {
+  try {
+    const user = await db.getUser(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const passkeys = typeof db.listUserPasskeys === 'function'
+      ? await db.listUserPasskeys(user.id)
+      : [];
+    res.json({
+      totpEnabled: Boolean(user.mfa_enabled && user.mfa_secret),
+      passkeys: Array.isArray(passkeys) ? passkeys.map(projectPasskey) : []
+    });
+  } catch (err) {
+    console.error('failed to load security settings', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/security/totp/setup', auth, async (req, res) => {
+  try {
+    const user = await db.getUser(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const secret = authenticator.generateSecret();
+    const label = user.username || 'RustAdmin';
+    const uri = authenticator.keyuri(label, PASSKEY_RP_NAME, secret);
+    res.json({ secret, uri });
+  } catch (err) {
+    console.error('failed to start totp setup', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/security/totp/enable', auth, async (req, res) => {
+  const { code, secret } = req.body || {};
+  if (!code || !secret) return res.status(400).json({ error: 'missing_fields' });
+  try {
+    const isValid = authenticator.verify({ token: String(code).trim(), secret: String(secret).trim() });
+    if (!isValid) return res.status(401).json({ error: 'invalid_mfa_code' });
+    await db.setUserMfaSecret(req.user.uid, String(secret).trim(), true);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('failed to enable totp', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/security/totp/disable', auth, async (req, res) => {
+  const { currentPassword } = req.body || {};
+  if (!currentPassword) return res.status(400).json({ error: 'missing_fields' });
+  try {
+    const user = await db.getUser(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const ok = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'invalid_current_password' });
+    await db.disableUserMfa(user.id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('failed to disable totp', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/passkeys/options', auth, async (req, res) => {
+  if (typeof db.listUserPasskeys !== 'function') return res.status(400).json({ error: 'passkeys_unavailable' });
+  try {
+    const user = await db.getUser(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    const existing = await db.listUserPasskeys(user.id);
+    const options = await generateRegistrationOptions({
+      rpID: PASSKEY_RP_ID,
+      rpName: PASSKEY_RP_NAME,
+      userID: String(user.id),
+      userName: user.username,
+      userDisplayName: user.username,
+      attestationType: 'none',
+      excludeCredentials: (existing || []).map((pk) => ({
+        id: decodeBase64Url(pk.credential_id),
+        type: 'public-key',
+        transports: normaliseTransports(pk.transports)
+      }))
+    });
+    passkeyRegistrationChallenges.set(user.id, options.challenge);
+    res.json({ options });
+  } catch (err) {
+    console.error('failed to start passkey registration', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/passkeys/register', auth, async (req, res) => {
+  const { response, name } = req.body || {};
+  if (!response || typeof response !== 'object') return res.status(400).json({ error: 'missing_fields' });
+  try {
+    const expectedChallenge = passkeyRegistrationChallenges.get(req.user.uid);
+    if (!expectedChallenge) return res.status(400).json({ error: 'registration_expired' });
+    const verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge,
+      expectedOrigin: PASSKEY_ORIGIN,
+      expectedRPID: PASSKEY_RP_ID,
+      requireUserVerification: true
+    });
+    if (!verification.verified) return res.status(400).json({ error: 'invalid_passkey' });
+    const info = verification.registrationInfo;
+    await db.addUserPasskey({
+      userId: req.user.uid,
+      credentialId: encodeBase64Url(info.credentialID),
+      publicKey: encodeBase64Url(info.credentialPublicKey),
+      counter: info.counter || 0,
+      transports: serialiseTransports(response?.response?.transports),
+      friendlyName: typeof name === 'string' && name.trim() ? name.trim() : null
+    });
+    passkeyRegistrationChallenges.delete(req.user.uid);
+    const passkeys = await db.listUserPasskeys(req.user.uid);
+    res.status(201).json({ ok: true, passkeys: passkeys.map(projectPasskey) });
+  } catch (err) {
+    console.error('failed to register passkey', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.delete('/api/me/passkeys/:id', auth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  try {
+    await db.deleteUserPasskey(req.user.uid, id);
+    const passkeys = typeof db.listUserPasskeys === 'function'
+      ? await db.listUserPasskeys(req.user.uid)
+      : [];
+    res.json({ ok: true, passkeys: passkeys.map(projectPasskey) });
+  } catch (err) {
+    console.error('failed to delete passkey', err);
     res.status(500).json({ error: 'db_error' });
   }
 });

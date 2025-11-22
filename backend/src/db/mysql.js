@@ -192,6 +192,21 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN online TINYINT DEFAULT 1');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN fps FLOAT NULL');
       await ensureColumn('ALTER TABLE chat_messages ADD COLUMN color VARCHAR(32) NULL');
+      await ensureColumn('ALTER TABLE users ADD COLUMN mfa_secret TEXT NULL');
+      await ensureColumn('ALTER TABLE users ADD COLUMN mfa_enabled TINYINT(1) NOT NULL DEFAULT 0');
+      await exec(`CREATE TABLE IF NOT EXISTS user_passkeys(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        credential_id VARCHAR(255) UNIQUE NOT NULL,
+        public_key TEXT NOT NULL,
+        counter BIGINT NOT NULL DEFAULT 0,
+        transports TEXT NULL,
+        friendly_name VARCHAR(190) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX(user_id),
+        CONSTRAINT fk_passkey_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -421,6 +436,57 @@ function createApi(pool, dialect) {
     async getUserByUsernameInsensitive(u){
       const rows = await exec(`SELECT u.*, r.name AS role_name, r.permissions AS role_permissions FROM users u LEFT JOIN roles r ON r.role_key = u.role WHERE LOWER(u.username)=LOWER(?)`, [u]);
       return rows[0] || null;
+    },
+
+    async setUserMfaSecret(userId, secret, enabled = true) {
+      await exec('UPDATE users SET mfa_secret=?, mfa_enabled=? WHERE id=?', [secret, enabled ? 1 : 0, userId]);
+    },
+    async disableUserMfa(userId) {
+      await exec('UPDATE users SET mfa_secret=NULL, mfa_enabled=0 WHERE id=?', [userId]);
+    },
+    async listUserPasskeys(userId) {
+      return await exec(
+        `SELECT id, user_id, credential_id, public_key, counter, transports, friendly_name, created_at, last_used_at
+         FROM user_passkeys
+         WHERE user_id=?
+         ORDER BY created_at ASC`,
+        [userId]
+      );
+    },
+    async countUserPasskeys(userId) {
+      const rows = await exec('SELECT COUNT(*) AS c FROM user_passkeys WHERE user_id=?', [userId]);
+      return rows?.[0]?.c || 0;
+    },
+    async getPasskeyByCredentialId(credentialId) {
+      const rows = await exec(
+        `SELECT id, user_id, credential_id, public_key, counter, transports, friendly_name, created_at, last_used_at
+         FROM user_passkeys
+         WHERE credential_id=?
+         LIMIT 1`,
+        [credentialId]
+      );
+      return rows?.[0] || null;
+    },
+    async addUserPasskey(passkey) {
+      const {
+        userId,
+        credentialId,
+        publicKey,
+        counter = 0,
+        transports = null,
+        friendlyName = null
+      } = passkey;
+      const result = await exec(
+        'INSERT INTO user_passkeys(user_id, credential_id, public_key, counter, transports, friendly_name) VALUES(?,?,?,?,?,?)',
+        [userId, credentialId, publicKey, counter, transports, friendlyName]
+      );
+      return result.insertId;
+    },
+    async updatePasskeyCounter(credentialId, counter) {
+      await exec('UPDATE user_passkeys SET counter=?, last_used_at=CURRENT_TIMESTAMP WHERE credential_id=?', [counter, credentialId]);
+    },
+    async deleteUserPasskey(userId, id) {
+      await exec('DELETE FROM user_passkeys WHERE id=? AND user_id=?', [id, userId]);
     },
 
     async listUsers(teamId){

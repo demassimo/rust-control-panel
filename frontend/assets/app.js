@@ -134,6 +134,7 @@
     allowRegistration: false,
     statusTimer: null,
     settings: {},
+    security: { totpEnabled: false, passkeys: [], pendingSecret: null, loaded: false },
     activePanel: defaultPanel,
     activeTeamId: null,
     activeTeamName: null,
@@ -151,6 +152,7 @@
       status: null,
       config: defaultWorkspaceDiscordConfig()
     },
+    pendingMfa: null,
     admin: {
       users: [],
       teams: [],
@@ -162,6 +164,11 @@
   let adminUserFilter = '';
   const loginUsername = $('#username');
   const loginPassword = $('#password');
+  const loginMfaStep = $('#mfaStep');
+  const loginMfaCode = $('#loginMfaCode');
+  const loginMfaStatus = $('#loginMfaStatus');
+  const btnSubmitMfa = $('#btnSubmitMfa');
+  const btnMfaUsePasskey = $('#btnMfaUsePasskey');
   const btnLogin = $('#btnLogin');
   const regUsername = $('#regUsername');
   const regPassword = $('#regPassword');
@@ -221,6 +228,18 @@
   const confirmPasswordInput = $('#confirmPassword');
   const btnChangePassword = $('#btnChangePassword');
   const passwordStatus = $('#passwordStatus');
+  const mfaStatusLabel = $('#mfaStatus');
+  const totpSecretValue = $('#totpSecret');
+  const totpUriValue = $('#totpUri');
+  const totpSetupFields = $('#totpSetupFields');
+  const totpCodeInput = $('#totpCode');
+  const btnStartTotp = $('#btnStartTotp');
+  const btnEnableTotp = $('#btnEnableTotp');
+  const btnDisableTotp = $('#btnDisableTotp');
+  const mfaStatusMessage = $('#mfaStatusMessage');
+  const passkeyList = $('#passkeyList');
+  const btnRegisterPasskey = $('#btnRegisterPasskey');
+  const passkeyStatus = $('#passkeyStatus');
   const serversEmpty = $('#serversEmpty');
   const addServerCard = $('#addServerCard');
   const welcomeName = $('#welcomeName');
@@ -5094,7 +5113,14 @@
     discord_unavailable: 'Discord messaging is not available on this server.',
     discord_post_failed: 'Discord rejected the reply. Check the bot permissions and try again.',
     discord_unreachable: 'Unable to reach Discord right now. Try again shortly.',
-    discord_rate_limited: 'Discord rate limited the bot. Wait a few moments and try again.'
+    discord_rate_limited: 'Discord rate limited the bot. Wait a few moments and try again.',
+    mfa_required: 'Two-factor authentication required. Complete verification to continue.',
+    invalid_mfa_code: 'The verification code was not accepted.',
+    mfa_expired: 'Your verification window expired. Please sign in again.',
+    no_passkeys: 'No passkeys are registered for this account.',
+    passkeys_unavailable: 'Passkeys are not available on this server.',
+    registration_expired: 'The registration request expired. Start again.',
+    invalid_passkey: 'The passkey response could not be validated.'
   };
 
   function errorCode(err) {
@@ -5121,6 +5147,69 @@
     el.classList.add('hidden');
     el.classList.remove('success', 'error');
     el.textContent = '';
+  }
+
+  function bufferFromBase64Url(value) {
+    const base64 = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+    const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
+    const normalized = base64 + pad;
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  function base64UrlFromBuffer(buffer) {
+    const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer || buffer);
+    let binary = '';
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+
+  function preparePublicKeyOptions(options) {
+    if (!options || typeof options !== 'object') return null;
+    const clone = typeof structuredClone === 'function'
+      ? structuredClone(options)
+      : JSON.parse(JSON.stringify(options));
+    if (clone.challenge) clone.challenge = bufferFromBase64Url(clone.challenge);
+    if (clone.user?.id) clone.user.id = bufferFromBase64Url(clone.user.id);
+    const transformDescriptor = (desc) => {
+      const next = { ...desc };
+      if (next.id) next.id = bufferFromBase64Url(next.id);
+      return next;
+    };
+    if (Array.isArray(clone.allowCredentials)) {
+      clone.allowCredentials = clone.allowCredentials.map(transformDescriptor);
+    }
+    if (Array.isArray(clone.excludeCredentials)) {
+      clone.excludeCredentials = clone.excludeCredentials.map(transformDescriptor);
+    }
+    return clone;
+  }
+
+  function credentialToJSON(credential) {
+    if (!credential) return null;
+    const response = credential.response || {};
+    return {
+      id: credential.id,
+      rawId: base64UrlFromBuffer(credential.rawId),
+      type: credential.type,
+      response: {
+        clientDataJSON: response.clientDataJSON ? base64UrlFromBuffer(response.clientDataJSON) : null,
+        authenticatorData: response.authenticatorData ? base64UrlFromBuffer(response.authenticatorData) : null,
+        signature: response.signature ? base64UrlFromBuffer(response.signature) : null,
+        userHandle: response.userHandle ? base64UrlFromBuffer(response.userHandle) : null,
+        attestationObject: response.attestationObject ? base64UrlFromBuffer(response.attestationObject) : null,
+        transports: typeof response.getTransports === 'function' ? response.getTransports() : response.transports || undefined,
+        publicKeyAlgorithm: response.publicKeyAlgorithm,
+        publicKey: response.publicKey ? base64UrlFromBuffer(response.publicKey) : undefined
+      },
+      clientExtensionResults: credential.getClientExtensionResults
+        ? credential.getClientExtensionResults()
+        : undefined
+    };
   }
 
   function clearPasswordInputs() {
@@ -6996,6 +7085,8 @@
     localStorage.removeItem('token');
     state.serverItems.clear();
     state.settings = {};
+    state.security = { totpEnabled: false, passkeys: [], pendingSecret: null, loaded: false };
+    state.pendingMfa = null;
     state.activePanel = 'dashboard';
     state.roles = [];
     state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
@@ -7022,6 +7113,9 @@
     hideNotice(userFeedback);
     hideNotice(settingsStatus);
     hideNotice(passwordStatus);
+    hideNotice(mfaStatusMessage);
+    hideNotice(passkeyStatus);
+    resetLoginMfa();
     clearPasswordInputs();
     if (rustMapsKeyInput) rustMapsKeyInput.value = '';
     chatState.cache.clear();
@@ -7104,6 +7198,7 @@
     if (!res.ok) {
       const err = new Error(data?.error || 'api_error');
       err.status = res.status;
+      err.body = data;
       throw err;
     }
     return data;
@@ -8909,6 +9004,228 @@
     }
   }
 
+  function renderPasskeys() {
+    if (!passkeyList) return;
+    passkeyList.innerHTML = '';
+    const list = Array.isArray(state.security.passkeys) ? state.security.passkeys : [];
+    if (!list.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = 'No passkeys added yet.';
+      passkeyList.appendChild(li);
+      return;
+    }
+    for (const passkey of list) {
+      const li = document.createElement('li');
+      li.className = 'passkey-row';
+      const primary = document.createElement('div');
+      primary.className = 'passkey-name';
+      primary.textContent = passkey.name || 'Passkey';
+      const meta = document.createElement('div');
+      meta.className = 'passkey-meta muted small';
+      const lastUsed = passkey.last_used_at
+        ? new Date(passkey.last_used_at).toLocaleString()
+        : 'Never used';
+      meta.textContent = `Last used: ${lastUsed}`;
+      const transports = Array.isArray(passkey.transports) && passkey.transports.length
+        ? ` · ${passkey.transports.join(', ')}`
+        : '';
+      meta.textContent += transports;
+      const actions = document.createElement('div');
+      actions.className = 'passkey-actions';
+      const btnRemove = document.createElement('button');
+      btnRemove.type = 'button';
+      btnRemove.className = 'ghost danger';
+      btnRemove.textContent = 'Remove';
+      btnRemove.addEventListener('click', () => removePasskey(passkey.id));
+      actions.appendChild(btnRemove);
+      li.appendChild(primary);
+      li.appendChild(meta);
+      li.appendChild(actions);
+      passkeyList.appendChild(li);
+    }
+  }
+
+  function renderSecuritySettings() {
+    const enabled = Boolean(state.security.totpEnabled);
+    if (mfaStatusLabel) {
+      mfaStatusLabel.textContent = enabled ? 'Enabled' : 'Disabled';
+      mfaStatusLabel.classList.toggle('success', enabled);
+    }
+    btnEnableTotp?.classList.toggle('hidden', enabled);
+    btnDisableTotp?.classList.toggle('hidden', !enabled);
+    btnStartTotp?.classList.toggle('hidden', enabled);
+    if (totpSetupFields) {
+      if (state.security.pendingSecret) {
+        totpSetupFields.classList.remove('hidden');
+        if (totpSecretValue) totpSecretValue.textContent = state.security.pendingSecret.secret || '';
+        if (totpUriValue) totpUriValue.textContent = state.security.pendingSecret.uri || '';
+      } else {
+        totpSetupFields.classList.add('hidden');
+      }
+    }
+    if (totpCodeInput) totpCodeInput.value = '';
+    renderPasskeys();
+  }
+
+  async function loadSecuritySettings() {
+    if (!state.TOKEN) return;
+    hideNotice(mfaStatusMessage);
+    hideNotice(passkeyStatus);
+    try {
+      const data = await api('/me/security');
+      state.security = {
+        ...state.security,
+        totpEnabled: Boolean(data?.totpEnabled),
+        passkeys: Array.isArray(data?.passkeys) ? data.passkeys : [],
+        pendingSecret: null,
+        loaded: true
+      };
+      renderSecuritySettings();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else ui.log('Failed to load security info: ' + describeError(err));
+    }
+  }
+
+  async function startTotpSetup() {
+    hideNotice(mfaStatusMessage);
+    try {
+      const data = await api('/me/security/totp/setup', {}, 'POST');
+      state.security.pendingSecret = { secret: data.secret, uri: data.uri };
+      showNotice(mfaStatusMessage, 'Scan the key with your authenticator app and enter the current code.', 'success');
+      renderSecuritySettings();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(mfaStatusMessage, describeError(err), 'error');
+    }
+  }
+
+  async function enableTotp() {
+    hideNotice(mfaStatusMessage);
+    const code = totpCodeInput?.value.trim();
+    if (!code) {
+      showNotice(mfaStatusMessage, describeError('missing_fields'), 'error');
+      return;
+    }
+    if (!state.security.pendingSecret?.secret) {
+      await startTotpSetup();
+      if (!state.security.pendingSecret?.secret) return;
+    }
+    try {
+      await api(
+        '/me/security/totp/enable',
+        { code, secret: state.security.pendingSecret.secret },
+        'POST'
+      );
+      state.security.totpEnabled = true;
+      state.security.pendingSecret = null;
+      renderSecuritySettings();
+      showNotice(mfaStatusMessage, 'Two-factor authentication is enabled.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(mfaStatusMessage, describeError(err), 'error');
+    }
+  }
+
+  async function disableTotp() {
+    hideNotice(mfaStatusMessage);
+    const password = await ui.prompt({
+      title: 'Disable two-factor auth',
+      message: 'Enter your current password to disable 2FA.',
+      confirmText: 'Disable',
+      type: 'password'
+    });
+    if (!password) return;
+    try {
+      await api('/me/security/totp/disable', { currentPassword: password }, 'POST');
+      state.security.totpEnabled = false;
+      state.security.pendingSecret = null;
+      renderSecuritySettings();
+      showNotice(mfaStatusMessage, 'Two-factor authentication has been disabled.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(mfaStatusMessage, describeError(err), 'error');
+    }
+  }
+
+  async function registerPasskey() {
+    hideNotice(passkeyStatus);
+    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
+      showNotice(passkeyStatus, 'Passkeys are not supported in this browser.', 'error');
+      return;
+    }
+    try {
+      const data = await api('/me/passkeys/options', {}, 'POST');
+      const publicKey = preparePublicKeyOptions(data?.options);
+      if (!publicKey) throw new Error('invalid_passkey');
+      const credential = await navigator.credentials.create({ publicKey });
+      const label = await ui.prompt({
+        title: 'Name this passkey',
+        message: 'Give this passkey a label so you can recognise it later (optional).',
+        placeholder: 'Work laptop',
+        allowEmpty: true
+      });
+      const payload = {
+        response: credentialToJSON(credential),
+        name: typeof label === 'string' ? label : ''
+      };
+      const result = await api('/me/passkeys/register', payload, 'POST');
+      state.security.passkeys = Array.isArray(result?.passkeys) ? result.passkeys : [];
+      showNotice(passkeyStatus, 'Passkey added.', 'success');
+      renderPasskeys();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(passkeyStatus, describeError(err), 'error');
+    }
+  }
+
+  async function removePasskey(id) {
+    if (!Number.isFinite(Number(id))) return;
+    const confirmed = await ui.confirm({
+      title: 'Remove passkey',
+      message: 'Remove this passkey from your account?',
+      confirmText: 'Remove'
+    });
+    if (!confirmed) return;
+    try {
+      const result = await api(`/me/passkeys/${id}`, null, 'DELETE');
+      state.security.passkeys = Array.isArray(result?.passkeys) ? result.passkeys : [];
+      renderPasskeys();
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(passkeyStatus, describeError(err), 'error');
+    }
+  }
+
+  async function completeLoginSession(payload, { resume = false } = {}) {
+    if (payload?.token) {
+      state.TOKEN = payload.token;
+      localStorage.setItem('token', state.TOKEN);
+    }
+    if (!state.TOKEN) throw new Error('unauthorized');
+    state.currentUser = {
+      id: payload.id,
+      username: payload.username,
+      superuser: Boolean(payload.superuser),
+      role: payload.role,
+      roleName: payload.roleName || payload.role,
+      permissions: payload.permissions || {}
+    };
+    applyTeamContext(payload);
+    await loadRoles();
+    await loadSettings();
+    await loadSecuritySettings();
+    ui.setUser(state.currentUser);
+    ui.showApp();
+    ensureSocket();
+    await refreshServers();
+    moduleBus.emit('auth:login', { user: state.currentUser, resume });
+    moduleBus.emit('players:refresh', { reason: resume ? 'session-resume' : 'login' });
+    updateTeamAccessView({ refreshUsers: true });
+    startStatusPolling();
+  }
+
   async function attemptSessionResume() {
     if (!state.TOKEN) {
       ui.showLogin();
@@ -8916,25 +9233,7 @@
     }
     try {
       const me = await api('/me');
-      state.currentUser = {
-        id: me.id,
-        username: me.username,
-        superuser: Boolean(me.superuser),
-        role: me.role,
-        roleName: me.roleName || me.role,
-        permissions: me.permissions || {}
-      };
-      applyTeamContext(me);
-      await loadRoles();
-      await loadSettings();
-      ui.setUser(state.currentUser);
-      ui.showApp();
-      ensureSocket();
-      await refreshServers();
-      moduleBus.emit('auth:login', { user: state.currentUser, resume: true });
-      moduleBus.emit('players:refresh', { reason: 'session-resume' });
-      updateTeamAccessView({ refreshUsers: true });
-      startStatusPolling();
+      await completeLoginSession({ ...me, token: state.TOKEN }, { resume: true });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         logout();
@@ -8945,8 +9244,94 @@
     }
   }
 
+  function resetLoginMfa() {
+    state.pendingMfa = null;
+    loginMfaStep?.classList.add('hidden');
+    if (loginMfaCode) loginMfaCode.value = '';
+    hideNotice(loginMfaStatus);
+  }
+
+  function showMfaPrompt() {
+    if (!state.pendingMfa?.ticket) return;
+    hideNotice(loginError);
+    hideNotice(loginMfaStatus);
+    loginMfaStep?.classList.remove('hidden');
+    loginMfaCode?.focus();
+    if (state.pendingMfa.methods?.passkey && state.pendingMfa.passkeyOptions) {
+      startPasskeyMfa(state.pendingMfa.passkeyOptions).catch((err) => {
+        showNotice(loginMfaStatus, describeError(err), 'error');
+      });
+    }
+  }
+
+  async function submitMfaCode() {
+    hideNotice(loginMfaStatus);
+    if (!state.pendingMfa?.ticket) {
+      showNotice(loginError, describeError('mfa_expired'), 'error');
+      return;
+    }
+    const code = loginMfaCode?.value.trim();
+    if (!code) {
+      showNotice(loginMfaStatus, describeError('missing_fields'), 'error');
+      return;
+    }
+    try {
+      const data = await publicJson('/login/mfa/totp', {
+        method: 'POST',
+        body: { ticket: state.pendingMfa.ticket, code }
+      });
+      await completeLoginSession(data, { resume: false });
+      resetLoginMfa();
+    } catch (err) {
+      const codeValue = errorCode(err);
+      if (codeValue === 'mfa_expired') {
+        showNotice(loginError, describeError(err), 'error');
+        resetLoginMfa();
+        return;
+      }
+      showNotice(loginMfaStatus, describeError(err), 'error');
+    }
+  }
+
+  async function startPasskeyMfa(options = null) {
+    hideNotice(loginMfaStatus);
+    if (!state.pendingMfa?.ticket) {
+      showNotice(loginError, describeError('mfa_expired'), 'error');
+      return;
+    }
+    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
+      showNotice(loginMfaStatus, 'Passkeys are not supported in this browser.', 'error');
+      return;
+    }
+    try {
+      const optPayload = options || (await publicJson('/login/mfa/passkey/options', {
+        method: 'POST',
+        body: { ticket: state.pendingMfa.ticket }
+      }))?.options;
+      const publicKey = preparePublicKeyOptions(optPayload);
+      if (!publicKey) throw new Error('invalid_passkey');
+      const assertion = await navigator.credentials.get({ publicKey });
+      const payload = {
+        ticket: state.pendingMfa.ticket,
+        response: credentialToJSON(assertion)
+      };
+      const data = await publicJson('/login/mfa/passkey/verify', { method: 'POST', body: payload });
+      await completeLoginSession(data, { resume: false });
+      resetLoginMfa();
+    } catch (err) {
+      const codeValue = errorCode(err);
+      if (codeValue === 'mfa_expired') {
+        showNotice(loginError, describeError(err), 'error');
+        resetLoginMfa();
+        return;
+      }
+      showNotice(loginMfaStatus, describeError(err), 'error');
+    }
+  }
+
   async function handleLogin() {
     hideNotice(loginError);
+    hideNotice(loginMfaStatus);
     const username = loginUsername?.value.trim();
     const password = loginPassword?.value || '';
     if (!username || !password) {
@@ -8960,31 +9345,21 @@
     }
     try {
       const data = await publicJson('/login', { method: 'POST', body: { username, password } });
-      state.TOKEN = data.token;
-      localStorage.setItem('token', state.TOKEN);
-      state.currentUser = {
-        id: data.id,
-        username: data.username,
-        superuser: Boolean(data.superuser),
-        role: data.role,
-        roleName: data.roleName || data.role,
-        permissions: data.permissions || {}
-      };
-      applyTeamContext(data);
-      await loadRoles();
-      await loadSettings();
-      ui.setUser(state.currentUser);
-      ui.showApp();
-      ensureSocket();
-      await refreshServers();
-      moduleBus.emit('auth:login', { user: state.currentUser, resume: false });
-      moduleBus.emit('players:refresh', { reason: 'login' });
-      updateTeamAccessView({ refreshUsers: true });
-      startStatusPolling();
+      await completeLoginSession(data, { resume: false });
+      resetLoginMfa();
     } catch (err) {
-      showNotice(loginError, describeError(err), 'error');
-      if (loginPassword) loginPassword.value = '';
-      loginPassword?.focus();
+      if (errorCode(err) === 'mfa_required') {
+        state.pendingMfa = {
+          ticket: err.body?.ticket || null,
+          methods: err.body?.methods || {},
+          passkeyOptions: err.body?.passkeyOptions || null
+        };
+        showMfaPrompt();
+      } else {
+        showNotice(loginError, describeError(err), 'error');
+        if (loginPassword) loginPassword.value = '';
+        loginPassword?.focus();
+      }
     } finally {
       if (btnLogin && restore) {
         btnLogin.disabled = restore.disabled;
@@ -9095,29 +9470,29 @@
     }
   }
 
-    function bindEvents() {
-      navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
-      navTeam?.addEventListener('click', () => {
-        if (navTeam.disabled) return;
-        hideWorkspace('nav');
-        switchPanel('team');
-        closeProfileMenu();
-      });
-      navAdmin?.addEventListener('click', () => {
-        if (navAdmin.disabled) return;
-        if (!state.superuserUi) {
-          window.location.href = '/superuser/ui/';
-          return;
-        }
-        hideWorkspace('nav');
-        switchPanel('admin');
-        closeProfileMenu();
-      });
-      navLinked?.addEventListener('click', () => {
-        if (navLinked.disabled) return;
-        hideWorkspace('nav');
-        switchPanel('linked');
-        closeProfileMenu();
+  function bindEvents() {
+    navDashboard?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('dashboard'); closeProfileMenu(); });
+    navTeam?.addEventListener('click', () => {
+      if (navTeam.disabled) return;
+      hideWorkspace('nav');
+      switchPanel('team');
+      closeProfileMenu();
+    });
+    navAdmin?.addEventListener('click', () => {
+      if (navAdmin.disabled) return;
+      if (!state.superuserUi) {
+        window.location.href = '/superuser/ui/';
+        return;
+      }
+      hideWorkspace('nav');
+      switchPanel('admin');
+      closeProfileMenu();
+    });
+    navLinked?.addEventListener('click', () => {
+      if (navLinked.disabled) return;
+      hideWorkspace('nav');
+      switchPanel('linked');
+      closeProfileMenu();
     });
     navDiscord?.addEventListener('click', () => {
       if (navDiscord.disabled) return;
@@ -9125,7 +9500,12 @@
       switchPanel('discord');
       closeProfileMenu();
     });
-    navSettings?.addEventListener('click', () => { hideWorkspace('nav'); switchPanel('settings'); closeProfileMenu(); });
+    navSettings?.addEventListener('click', () => {
+      hideWorkspace('nav');
+      loadSecuritySettings();
+      switchPanel('settings');
+      closeProfileMenu();
+    });
     profileMenuTrigger?.addEventListener('click', (ev) => {
       ev.preventDefault();
       if (!state.currentUser) return;
@@ -9141,6 +9521,18 @@
       if (ev.key === 'Enter') {
         ev.preventDefault();
         changePassword();
+      }
+    });
+    btnStartTotp?.addEventListener('click', (e) => { e.preventDefault(); startTotpSetup(); });
+    btnEnableTotp?.addEventListener('click', (e) => { e.preventDefault(); enableTotp(); });
+    btnDisableTotp?.addEventListener('click', (e) => { e.preventDefault(); disableTotp(); });
+    btnRegisterPasskey?.addEventListener('click', (e) => { e.preventDefault(); registerPasskey(); });
+    btnSubmitMfa?.addEventListener('click', (e) => { e.preventDefault(); submitMfaCode(); });
+    btnMfaUsePasskey?.addEventListener('click', (e) => { e.preventDefault(); startPasskeyMfa(); });
+    loginMfaCode?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        submitMfaCode();
       }
     });
     const triggerLogin = (ev) => {
@@ -9185,31 +9577,31 @@
       state.teamAuth.roleId = value ? value : null;
       hideNotice(teamAuthStatus);
     });
-      teamAuthLogChannelInput?.addEventListener('input', () => {
-        const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput.value);
-        state.teamAuth.logChannelId = value ? value : null;
-        hideNotice(teamAuthStatus);
-      });
-      btnAdminCreateUser?.addEventListener('click', (event) => { event.preventDefault(); handleAdminCreateUser(); });
-      adminUserSaveRole?.addEventListener('click', handleAdminRoleSave);
-      adminUserResetPassword?.addEventListener('click', handleAdminPasswordReset);
-      adminUserDelete?.addEventListener('click', handleAdminDeleteUser);
-      btnAdminAssignTeam?.addEventListener('click', (event) => { event.preventDefault(); handleAdminAssignTeam(); });
-      adminAssignTeam?.addEventListener('change', () => hideNotice(adminAssignStatus));
-      adminAssignRole?.addEventListener('change', () => hideNotice(adminAssignStatus));
-      adminUserSuperuser?.addEventListener('change', () => hideNotice(adminUserRoleStatus));
-      adminUserSearch?.addEventListener('input', () => {
-        adminUserFilter = adminUserSearch.value || '';
-        renderAdminUsers();
-      });
-      adminNewUserName?.addEventListener('input', () => hideNotice(adminUserFeedback));
-      adminNewUserPassword?.addEventListener('input', () => hideNotice(adminUserFeedback));
-      adminNewUserRole?.addEventListener('change', () => hideNotice(adminUserFeedback));
-      adminNewUserSuperuser?.addEventListener('change', () => hideNotice(adminUserFeedback));
-      btnCreateUser?.addEventListener('click', async () => {
-        if (!hasGlobalPermission('manageUsers')) return;
-        hideNotice(userFeedback);
-        hideNotice(existingUserFeedback);
+    teamAuthLogChannelInput?.addEventListener('input', () => {
+      const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput.value);
+      state.teamAuth.logChannelId = value ? value : null;
+      hideNotice(teamAuthStatus);
+    });
+    btnAdminCreateUser?.addEventListener('click', (event) => { event.preventDefault(); handleAdminCreateUser(); });
+    adminUserSaveRole?.addEventListener('click', handleAdminRoleSave);
+    adminUserResetPassword?.addEventListener('click', handleAdminPasswordReset);
+    adminUserDelete?.addEventListener('click', handleAdminDeleteUser);
+    btnAdminAssignTeam?.addEventListener('click', (event) => { event.preventDefault(); handleAdminAssignTeam(); });
+    adminAssignTeam?.addEventListener('change', () => hideNotice(adminAssignStatus));
+    adminAssignRole?.addEventListener('change', () => hideNotice(adminAssignStatus));
+    adminUserSuperuser?.addEventListener('change', () => hideNotice(adminUserRoleStatus));
+    adminUserSearch?.addEventListener('input', () => {
+      adminUserFilter = adminUserSearch.value || '';
+      renderAdminUsers();
+    });
+    adminNewUserName?.addEventListener('input', () => hideNotice(adminUserFeedback));
+    adminNewUserPassword?.addEventListener('input', () => hideNotice(adminUserFeedback));
+    adminNewUserRole?.addEventListener('change', () => hideNotice(adminUserFeedback));
+    adminNewUserSuperuser?.addEventListener('change', () => hideNotice(adminUserFeedback));
+    btnCreateUser?.addEventListener('click', async () => {
+      if (!hasGlobalPermission('manageUsers')) return;
+      hideNotice(userFeedback);
+      hideNotice(existingUserFeedback);
       const username = newUserName?.value.trim();
       const password = newUserPassword?.value || '';
       const role = newUserRole?.value || 'user';

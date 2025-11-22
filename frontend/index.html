@@ -34,6 +34,15 @@
           <label>Username<input id="username" autocomplete="username" placeholder="Username"></label>
           <label>Password<input id="password" type="password" autocomplete="current-password" placeholder="Password"></label>
           <button id="btnLogin" class="accent">Sign in</button>
+          <div id="mfaStep" class="login-mfa hidden">
+            <p class="muted small">Enter a verification code or use a passkey to finish signing in.</p>
+            <label>Authenticator code<input id="loginMfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"></label>
+            <div class="row">
+              <button id="btnSubmitMfa" class="accent">Verify code</button>
+              <button id="btnMfaUsePasskey" class="ghost">Use a passkey</button>
+            </div>
+            <p id="loginMfaStatus" class="notice hidden"></p>
+          </div>
           <p id="loginError" class="notice hidden"></p>
           <p class="muted small">Default credentials are for first boot only — change them once you are inside.</p>
         </div>
@@ -1288,10 +1297,40 @@
             <div class="profile-card-body">
               <div class="profile-field">
                 <span class="label">2FA Status</span>
-                <span class="value muted">Disabled</span>
+                <span id="mfaStatus" class="value muted">Checking…</span>
               </div>
-              <button class="ghost" disabled>Enable 2FA</button>
-              <p class="muted small">Coming soon.</p>
+              <div class="mfa-section">
+                <h4>Authenticator app</h4>
+                <p class="muted small">Use a TOTP app such as Google Authenticator, 1Password, or Authy.</p>
+                <div id="totpSetupFields" class="mfa-setup hidden">
+                  <div class="mfa-field">
+                    <span class="label">Secret</span>
+                    <code id="totpSecret" class="mfa-secret"></code>
+                  </div>
+                  <div class="mfa-field">
+                    <span class="label">Setup link</span>
+                    <span id="totpUri" class="muted small"></span>
+                  </div>
+                </div>
+                <label>Authenticator code<input id="totpCode" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"></label>
+                <div class="row">
+                  <button id="btnStartTotp" class="ghost">Get setup code</button>
+                  <button id="btnEnableTotp" class="accent hidden">Enable 2FA</button>
+                  <button id="btnDisableTotp" class="ghost danger hidden">Disable 2FA</button>
+                </div>
+                <p id="mfaStatusMessage" class="notice hidden"></p>
+              </div>
+              <div class="passkey-section">
+                <div class="passkey-head">
+                  <div>
+                    <h4>Passkeys</h4>
+                    <p class="muted small">Use device-based verification as your second factor.</p>
+                  </div>
+                  <button id="btnRegisterPasskey" class="ghost">Add passkey</button>
+                </div>
+                <ul id="passkeyList" class="passkey-list"></ul>
+                <p id="passkeyStatus" class="notice hidden"></p>
+              </div>
             </div>
           </div>
         </div>

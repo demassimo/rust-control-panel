@@ -393,6 +393,27 @@ function createApi(dbh, dialect) {
       if (!userCols.some((c) => c.name === 'superuser')) {
         await dbh.exec("ALTER TABLE users ADD COLUMN superuser INTEGER NOT NULL DEFAULT 0");
       }
+      if (!userCols.some((c) => c.name === 'mfa_secret')) {
+        await dbh.exec("ALTER TABLE users ADD COLUMN mfa_secret TEXT");
+      }
+      if (!userCols.some((c) => c.name === 'mfa_enabled')) {
+        await dbh.exec("ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0");
+      }
+      await dbh.exec(`
+        CREATE TABLE IF NOT EXISTS user_passkeys(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          credential_id TEXT UNIQUE NOT NULL,
+          public_key TEXT NOT NULL,
+          counter INTEGER NOT NULL DEFAULT 0,
+          transports TEXT,
+          friendly_name TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          last_used_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_passkeys_user ON user_passkeys(user_id);
+      `);
       const chatCols = await dbh.all("PRAGMA table_info('chat_messages')");
       if (!chatCols.some((c) => c.name === 'color')) {
         await dbh.run("ALTER TABLE chat_messages ADD COLUMN color TEXT");
@@ -490,6 +511,60 @@ function createApi(dbh, dialect) {
          WHERE LOWER(u.username)=LOWER(?)`,
         [u]
       );
+    },
+    async setUserMfaSecret(userId, secret, enabled = true) {
+      await dbh.run(
+        'UPDATE users SET mfa_secret=?, mfa_enabled=? WHERE id=?',
+        [secret, enabled ? 1 : 0, userId]
+      );
+    },
+    async disableUserMfa(userId) {
+      await dbh.run('UPDATE users SET mfa_secret=NULL, mfa_enabled=0 WHERE id=?', [userId]);
+    },
+    async listUserPasskeys(userId) {
+      return await dbh.all(
+        `SELECT id, user_id, credential_id, public_key, counter, transports, friendly_name, created_at, last_used_at
+         FROM user_passkeys
+         WHERE user_id=?
+         ORDER BY created_at ASC`,
+        [userId]
+      );
+    },
+    async countUserPasskeys(userId) {
+      const row = await dbh.get('SELECT COUNT(*) AS c FROM user_passkeys WHERE user_id=?', [userId]);
+      return row?.c || 0;
+    },
+    async getPasskeyByCredentialId(credentialId) {
+      return await dbh.get(
+        `SELECT id, user_id, credential_id, public_key, counter, transports, friendly_name, created_at, last_used_at
+         FROM user_passkeys
+         WHERE credential_id=?`,
+        [credentialId]
+      );
+    },
+    async addUserPasskey(passkey) {
+      const {
+        userId,
+        credentialId,
+        publicKey,
+        counter = 0,
+        transports = null,
+        friendlyName = null
+      } = passkey;
+      const r = await dbh.run(
+        'INSERT INTO user_passkeys(user_id, credential_id, public_key, counter, transports, friendly_name) VALUES(?,?,?,?,?,?)',
+        [userId, credentialId, publicKey, counter, transports, friendlyName]
+      );
+      return r.lastID;
+    },
+    async updatePasskeyCounter(credentialId, counter) {
+      await dbh.run(
+        "UPDATE user_passkeys SET counter=?, last_used_at=datetime('now') WHERE credential_id=?",
+        [counter, credentialId]
+      );
+    },
+    async deleteUserPasskey(userId, id) {
+      await dbh.run('DELETE FROM user_passkeys WHERE id=? AND user_id=?', [id, userId]);
     },
     async listUsers(teamId){
       const teamNumeric = Number(teamId);

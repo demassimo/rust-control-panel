@@ -417,6 +417,14 @@ label.inline input[type="checkbox"]:focus-visible,
 
 .login-card h2 { font-size: 1.6rem; }
 .login-card button { margin-top: 18px; width: 100%; }
+.login-mfa {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--card-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+.login-mfa .row { gap: 10px; }
 
 .app-layout {
   display: flex;
@@ -5260,6 +5268,109 @@ pre {
 
 .profile-field .label { color: var(--muted); }
 .profile-field .value { font-weight: 600; color: var(--text); }
+
+.mfa-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mfa-section h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.mfa-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mfa-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.92rem;
+}
+
+.mfa-field .label { color: var(--muted); }
+
+.mfa-secret {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  background: rgba(244, 63, 94, 0.08);
+  color: var(--accent-strong);
+  font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace);
+  letter-spacing: 0.08em;
+}
+
+.passkey-section {
+  margin-top: 4px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.passkey-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.passkey-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.passkey-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.passkey-meta {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.passkey-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 
 .badge {
   display: inline-flex;
