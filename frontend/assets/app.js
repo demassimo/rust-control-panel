@@ -3923,6 +3923,7 @@
   }
 
   function hasGlobalPermission(permission) {
+    if (isSuperuser()) return true;
     return !!currentUserPermissions().global?.[permission];
   }
 
