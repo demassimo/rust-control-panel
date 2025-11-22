@@ -107,6 +107,7 @@ export function serialiseRolePermissions(permissions, roleKey = 'default') {
 
 export function hasGlobalPermission(context, permission) {
   if (!permission) return true;
+  if (context?.superuser) return true;
   return !!context?.permissions?.global?.[permission];
 }
 
