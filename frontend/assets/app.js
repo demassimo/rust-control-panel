@@ -6232,6 +6232,10 @@
 
   function ensureSocket() {
     if (socket || !state.API) return socket;
+    if (typeof io !== 'function') {
+      ui.log('Realtime link unavailable: socket client not loaded (blocked by CSP?).');
+      return null;
+    }
     const socketBase = resolveSocketBase();
     socket = io(socketBase || undefined, {
       transports: ['websocket'],
