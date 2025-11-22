@@ -61,6 +61,17 @@ Set `STEAM_API_KEY=...` for Steam enrichment.
 Set `RUSTMAPS_API_KEY=...` to provide a fallback RustMaps key (optional). Each panel user can store their own key from **Settings → Personal settings** — required for the live map module (see https://api.rustmaps.com for keys).
 Set `PANEL_PUBLIC_URL=https://your-panel.example.com` so ticket preview links shared over Discord resolve to the correct public hostname.
 
+### Two-factor authentication and passkeys
+
+The panel supports both TOTP codes and WebAuthn passkeys for MFA. To keep registration and sign-in working in all browsers:
+
+- Point `PANEL_PUBLIC_URL` at the URL users type into their browser (e.g., `https://panel.example.com`). The installer now prompts for this value and writes it to the backend `.env` alongside `PASSKEY_ORIGIN`.
+- Set `PASSKEY_RP_ID` to the host portion of that URL (no scheme or port, e.g., `panel.example.com`). When omitted, the backend falls back to the request host or `localhost` instead of `0.0.0.0`.
+- Restart the backend after updating the `.env` so new passkey settings take effect.
+- If you run behind a reverse proxy, keep `TRUST_PROXY=true` (default) so the backend reads the forwarded host/protocol for passkey validation.
+
+Admins can enroll MFA from **Settings → Security** in the UI. Enable TOTP by scanning the QR code with an authenticator app, or add a passkey using a supported browser platform authenticator.
+
 ### Discord & Steam account linking
 
 Team authentication links now rely on OAuth flows for both Discord and Steam. Configure these backend environment variables so players can connect their accounts and receive the configured Discord role automatically:

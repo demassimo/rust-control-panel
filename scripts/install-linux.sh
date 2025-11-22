@@ -214,6 +214,16 @@ configure_backend_env() {
   local cors_origin
   cors_origin="$(prompt_with_default "Allowed frontend origins (comma separated, * for any)" "*")"
 
+  local panel_public_url
+  panel_public_url="$(prompt_with_default "Public panel URL (scheme + host used by browsers)" "http://localhost")"
+
+  local passkey_rp_id
+  passkey_rp_id="$(prompt_with_default "Passkey RP ID host (leave blank to derive from panel URL)" "")"
+
+  if [[ -z "$passkey_rp_id" && -n "$panel_public_url" ]]; then
+    passkey_rp_id="$(printf '%s' "$panel_public_url" | sed -E 's#^[a-zA-Z]+://##' | cut -d/ -f1 | cut -d: -f1)"
+  fi
+
   local default_secret
   default_secret="$(generate_secret)"
   local jwt_secret
@@ -237,6 +247,13 @@ configure_backend_env() {
     printf 'PORT=%s\n' "$api_port"
     if [[ -n "$cors_origin" ]]; then
       printf 'CORS_ORIGIN=%s\n' "$cors_origin"
+    fi
+    if [[ -n "$panel_public_url" ]]; then
+      printf 'PANEL_PUBLIC_URL=%s\n' "$panel_public_url"
+      printf 'PASSKEY_ORIGIN=%s\n' "$panel_public_url"
+    fi
+    if [[ -n "$passkey_rp_id" ]]; then
+      printf 'PASSKEY_RP_ID=%s\n' "$passkey_rp_id"
     fi
     printf 'JWT_SECRET=%s\n' "$jwt_secret"
     if [[ -n "$steam_api_key" ]]; then
