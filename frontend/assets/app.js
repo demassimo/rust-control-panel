@@ -5985,7 +5985,7 @@
       setDiscordStatusFormDisabled(true);
       showNotice(
         discordStatusNotice,
-        'Link the server Discord bot in the Team → Discord tab to enable status embeds.',
+        "Link this workspace's Server Bot before enabling status embeds.",
         'warning'
       );
       return;
@@ -6134,7 +6134,7 @@
     if (!state.workspaceDiscord.integration) {
       showNotice(
         discordStatusNotice,
-        'Link the server Discord bot in the Team → Discord tab before updating the status embed.',
+        "Link this workspace's Server Bot before updating the status embed.",
         'warning'
       );
       return;

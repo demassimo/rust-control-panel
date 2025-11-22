@@ -13,6 +13,10 @@
   const statusForm = document.getElementById('discord-status-form');
   const statusNoticeEl = document.getElementById('discord-status-notice');
   const statusTemplateInput = document.getElementById('discord-presence-template-input');
+  const connectionStatusEl = document.getElementById('discord-connection-status');
+  const connectionGuildEl = document.getElementById('discord-connection-guild');
+  const connectionChannelEl = document.getElementById('discord-connection-channel');
+  const connectionTokenEl = document.getElementById('discord-connection-token');
   const presenceSelectEls = {
     online: document.getElementById('discord-presence-online'),
     offline: document.getElementById('discord-presence-offline'),
@@ -284,6 +288,25 @@
     updateEnabledFields(cfg?.fields || null);
   }
 
+  function updateConnectionSummary(integration) {
+    const guildText = integration?.guildId || 'Not set';
+    const channelText = integration?.channelId || 'Not set';
+    const tokenText = integration?.hasToken ? 'Linked' : 'Not linked';
+
+    if (connectionGuildEl) connectionGuildEl.textContent = guildText;
+    if (connectionChannelEl) connectionChannelEl.textContent = channelText;
+    if (connectionTokenEl) connectionTokenEl.textContent = tokenText;
+
+    if (connectionStatusEl) {
+      connectionStatusEl.textContent = integration
+        ? "You are editing this workspace's Server Bot connection."
+        : "Add this workspace's Server Bot token and guild ID to enable status updates.";
+      connectionStatusEl.classList.remove('hidden', 'error', 'success');
+      if (integration) connectionStatusEl.classList.add('success');
+      else connectionStatusEl.classList.add('error');
+    }
+  }
+
   function updateBadge(presenceLabel, presence) {
     if (!badgeEl) return;
     const isOnline = String(presence || '').toLowerCase() === 'online';
@@ -317,6 +340,7 @@
   function applyIntegration(integration, options = {}) {
     const { force = false } = options;
     state.integration = integration;
+    updateConnectionSummary(integration);
     updateConfigSummary(integration?.config || null);
     applyStatusConfig(integration?.config || DEFAULT_STATUS_CONFIG, { force });
   }
@@ -324,10 +348,10 @@
   function describeError(code) {
     switch (code) {
       case 'missing_fields':
-        return 'Complete the Discord bot setup from the Team → Discord tab before editing status.';
+        return "Add this workspace's Server Bot token and guild ID before editing status.";
       case 'missing_bot_token':
       case 'missing_token':
-        return 'Add the Discord bot token from the Team → Discord tab before editing status.';
+        return "Add this workspace's Server Bot token and guild ID before editing status.";
       case 'unauthorized':
         return 'Sign in to configure Discord integration.';
       case 'not_found':
@@ -339,7 +363,7 @@
       case 'db_error':
         return 'The server could not save the Discord settings.';
       case 'missing_server':
-        return 'Select a server to manage the Discord bot.';
+        return 'Select a server to manage its Server Bot.';
       default:
         return 'An unexpected error occurred while updating Discord status settings.';
     }

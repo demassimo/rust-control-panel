@@ -279,13 +279,15 @@
         <div class="section-head">
           <div>
             <h2 id="discordPanelTitle">Discord</h2>
-            <p class="muted">Manage the shared Discord bot connection for your team.</p>
+            <p class="muted">
+              Configure the global Main Bot for shared automation and learn where to manage each workspace's Server Bot.
+            </p>
           </div>
         </div>
         <section id="teamDiscordSection" class="team-section" aria-labelledby="teamDiscordTitle">
           <div class="team-section-head">
-            <h4 id="teamDiscordTitle">Team bot settings</h4>
-            <p class="muted small">Store the bot token and guild ID used by your team automations.</p>
+            <h4 id="teamDiscordTitle">Main Bot settings</h4>
+            <p class="muted small">Store the Main Bot token and guild ID used by tickets, lookup tools, and other global automation.</p>
           </div>
           <form id="teamDiscordForm" class="team-discord-form" autocomplete="off">
             <label for="teamDiscordGuildId">Guild ID
@@ -324,13 +326,16 @@
                 <dd id="teamDiscordSummaryToken">Not linked</dd>
               </div>
             </dl>
-            <div class="row">
-              <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
-              <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
-            </div>
-            <p id="teamDiscordStatus" class="notice hidden"></p>
+          <div class="row">
+            <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
+            <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
+          </div>
+          <p id="teamDiscordStatus" class="notice hidden"></p>
           </form>
-          <p class="muted small">Server-specific Discord features, such as ticketing panels or Ruststatus embeds, are managed from each server workspace.</p>
+          <p class="muted small">
+            Each workspace has its own Server Bot token and guild ID for appearance and embed styling. Open a server workspace to
+            configure its Server Bot.
+          </p>
           <section id="teamAuthSection" class="team-discord-auth">
             <div class="team-section-head">
               <h4 id="teamAuthTitle">Discord authentication</h4>
@@ -661,11 +666,33 @@
                 <div class="card-title-group">
                   <h3>Discord status</h3>
                   <p class="muted small">
-                    Control how this server's Discord bot presents itself and how the status embed appears in Discord.
+                    Configure this workspace's Server Bot presence and how its Discord status embed appears for the linked guild.
                   </p>
                 </div>
                 <span id="discord-bot-status" class="status-pill offline bot-status-pill">Do Not Disturb</span>
               </div>
+              <section class="discord-status">
+                <h4 class="discord-section-title">Server Bot connection</h4>
+                <p class="muted small">
+                  This workspace stores its own Server Bot token and guild ID. You can only edit this workspace's bot configurat
+ion.
+                </p>
+                <dl class="discord-config-list connection-list">
+                  <div>
+                    <dt>Guild ID</dt>
+                    <dd id="discord-connection-guild">Not set</dd>
+                  </div>
+                  <div>
+                    <dt>Status channel ID</dt>
+                    <dd id="discord-connection-channel">Not set</dd>
+                  </div>
+                  <div>
+                    <dt>Bot token</dt>
+                    <dd id="discord-connection-token">Not linked</dd>
+                  </div>
+                </dl>
+                <p id="discord-connection-status" class="notice hidden"></p>
+              </section>
               <section class="discord-status">
                 <h4 class="discord-section-title">Live status</h4>
                 <div class="discord-status-summary">

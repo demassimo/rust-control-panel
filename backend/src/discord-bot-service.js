@@ -1493,6 +1493,7 @@ async function ensureBot(integration) {
       integration,
       teamId: null,
       teamToken: null,
+      teamGuildId: null,
       teamCommandState: null,
       teamServers: null,
       teamServerIds: null,
@@ -1555,15 +1556,18 @@ async function ensureBot(integration) {
   state.teamId = Number.isFinite(teamId) ? teamId : null;
 
   let teamToken = null;
+  let teamGuildId = state.teamGuildId;
   if (Number.isFinite(state.teamId) && typeof db.getTeam === 'function') {
     try {
       const team = await db.getTeam(state.teamId);
       teamToken = sanitizeId(team?.discord_token);
+      teamGuildId = sanitizeId(team?.discord_guild_id ?? team?.discordGuildId);
     } catch (err) {
       console.error(`failed to load team ${state.teamId} discord token for server ${serverId}`, err);
     }
   }
   state.teamToken = teamToken;
+  state.teamGuildId = teamGuildId;
 
   const usingTeamCommand = Boolean(teamToken);
   const allowServerCommands =
@@ -1621,7 +1625,7 @@ async function ensureBot(integration) {
   }
 
   if (usingTeamCommand) {
-    const teamState = await ensureTeamBot(state.teamId, { token: teamToken, guildId, state });
+    const teamState = await ensureTeamBot(state.teamId, { token: teamToken, guildId: teamGuildId, state });
     if (teamState?.client) {
       state.commandClient = teamState.client;
       state.commandReady = Boolean(teamState.ready);
