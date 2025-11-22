@@ -21,11 +21,11 @@ This tutorial bundle walks new administrators through installing the control pan
 - Start services with `systemctl start rustadmin-backend` and (optionally) `systemctl start rustadmin-discord-bot`. Use `systemctl status` on each unit to verify they are running.
 
 ## 2) Configure OAuth for Discord and Steam
-Team authentication links Discord and Steam accounts so staff can see alt history. Set these environment values in `/opt/rustadmin/backend/.env` and restart the backend when finished.
+Team authentication links Discord and Steam accounts so staff can see alt history. Set these environment values in `/opt/rustadmin/backend/.env` (open the file with `sudo nano /opt/rustadmin/backend/.env`) and restart the backend when finished so the panel uses the new URLs.
 
 ### Discord application
 1. Create a Discord application at <https://discord.com/developers/applications>.
-2. Enable **OAuth2 → General** and add a redirect URI pointing to your panel host (for example `https://panel.example.com/api/auth/discord/callback`). Replace `panel.example.com` with the exact URL you use to open the panel (such as `https://panel.yourdomain.com`).
+2. Enable **OAuth2 → General** and add a redirect URI pointing to your panel host (for example `https://panel.example.com/api/auth/discord/callback`). Replace `panel.example.com` with the exact URL you use to open the panel (such as `https://panel.yourdomain.com`). This prevents Discord from blocking the sign-in because of a domain mismatch.
 3. Copy the **Client ID** and **Client Secret** into:
    ```
    DISCORD_OAUTH_CLIENT_ID=...
@@ -35,7 +35,7 @@ Team authentication links Discord and Steam accounts so staff can see alt histor
 4. (Optional) If you use the Discord bot worker, also invite the bot to your guild and configure the ticket panel role settings in the backend `.env`.
 
 ### Steam OpenID
-1. No API key is required for sign-in, but you must declare the callback URLs. Swap `panel.yourdomain.com` for the address where you actually reach the panel:
+1. No API key is required for sign-in, but you must declare the callback URLs. Swap `panel.yourdomain.com` for the address where you actually reach the panel so Steam returns users to your real host instead of the placeholder:
    ```
    STEAM_OPENID_RETURN_URL=https://panel.yourdomain.com/api/auth/steam/callback
    STEAM_OPENID_REALM=https://panel.yourdomain.com
@@ -44,7 +44,7 @@ Team authentication links Discord and Steam accounts so staff can see alt histor
    ```
    TEAM_AUTH_STATE_SECRET=long_random_value
    ```
-3. Restart the backend service (`systemctl restart rustadmin-backend`) so the new settings take effect.
+3. Restart the backend service (`systemctl restart rustadmin-backend`) so the new settings take effect; OAuth changes do not apply until the service is reloaded.
 
 ### Test the linking flow
 - Visit `https://panel.yourdomain.com/request.html` (replace with your panel URL). If you distribute one shared signup URL, send this link directly to staff so they can sign in.
@@ -76,9 +76,9 @@ Team authentication links Discord and Steam accounts so staff can see alt histor
 4. Store exports in your secured team storage; do not share them publicly because they can contain IPs and SteamIDs.
 
 ## 7) Discord bot + ticket panel
-1. Ensure the backend service account can reach Discord (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_TICKET_PANEL_CHANNEL_ID` are set in the backend `.env`).
+1. Ensure the backend service account can reach Discord (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_TICKET_PANEL_CHANNEL_ID` are set in the backend `.env`; edit the file with `sudo nano /opt/rustadmin/backend/.env` if needed). These values only authorize the bot—ticket setup happens inside the panel UI.
 2. Restart the worker or backend service so the bot connects to Discord after configuration changes.
-3. In Discord, create or choose a text channel where you want tickets posted, then run the **Create ticket panel** action in the panel to publish the interactive message.
+3. In Discord, create or choose a text channel where you want tickets posted. Then, in the panel UI, open **Discord tickets** and run the **Create ticket panel** action to publish the interactive message—no backend edits are required beyond the bot credentials.
 4. When players open a ticket, you will see it appear in the configured channel; reply in-thread to keep conversations organized.
 5. Use the **Close ticket** action when resolved to archive the thread and avoid clutter.
 
@@ -110,8 +110,8 @@ Team authentication links Discord and Steam accounts so staff can see alt histor
 ## 12) Change backend settings safely
 These steps keep server operators comfortable even if they are new to Linux or editing configuration files.
 
-1. **Open the settings file.** SSH to the panel server and run `sudo nano /opt/rustadmin/backend/.env`. Press the arrow keys to move around; do not delete lines you do not recognize.
-2. **Update carefully.** Replace placeholder domains (for example, change any `panel.example.com` to your real panel URL like `panel.yourdomain.com`). For secrets, paste the exact values from the provider dashboards without extra spaces.
+1. **Open the settings file.** SSH to the panel server and run `sudo nano /opt/rustadmin/backend/.env`. Press the arrow keys to move around; do not delete lines you do not recognize. Nano writes changes directly to disk so you do not need a separate upload step.
+2. **Update carefully.** Replace placeholder domains (for example, change any `panel.example.com` to your real panel URL like `panel.yourdomain.com`). For secrets, paste the exact values from the provider dashboards without extra spaces—accurate values avoid confusing OAuth failures.
 3. **Save and exit.** Press `Ctrl+O` to save, then `Enter`, then `Ctrl+X` to close Nano.
 4. **Restart the service.** Run `sudo systemctl restart rustadmin-backend` (and `sudo systemctl restart rustadmin-discord-bot` if you use the bot) so the new settings take effect.
 5. **Verify in the UI.** Open the panel in your browser and sign in. Check **Settings → Servers** and the OAuth flows to ensure everything loads without errors.

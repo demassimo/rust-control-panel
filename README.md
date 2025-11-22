@@ -22,7 +22,7 @@ Looking for a step-by-step walkthrough? The [tutorial guides](docs/tutorials.md)
 
 ## Environment configuration
 
-The backend service reads its environment variables from `/opt/rustadmin/backend/.env`. If you deploy to a different base
+The backend service reads its environment variables from `/opt/rustadmin/backend/.env`. Open this file with `sudo nano /opt/rustadmin/backend/.env` to adjust settings without uploading new files. If you deploy to a different base
 directory, update your systemd service or deployment scripts so they point to the actual `.env` location before starting the
 backend.
 
@@ -72,6 +72,8 @@ Team authentication links now rely on OAuth flows for both Discord and Steam. Co
 - `STEAM_OPENID_RETURN_URL` — the callback URL Steam should redirect to (defaults to `https://<host>/api/auth/steam/callback`).
 - `STEAM_OPENID_REALM` — optional OpenID realm sent to Steam (defaults to the request origin).
 - `TEAM_AUTH_STATE_SECRET` — secret used to sign OAuth state and session cookies (falls back to `JWT_SECRET`, but a dedicated value is recommended).
+
+The bot credentials for Discord tickets (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_TICKET_PANEL_CHANNEL_ID`) also live in this file, but the ticket panel itself is created from the web UI—once the bot variables are set, publish the panel from **Discord tickets → Create ticket panel**.
 
 With these values in place the `/request.html` flow prompts users to sign in with both providers before the panel links their Steam ID to their Discord account, assigns the configured team-auth role, and gives staff better visibility into potential alternate accounts.
 
