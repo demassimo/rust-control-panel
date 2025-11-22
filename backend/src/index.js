@@ -134,6 +134,7 @@ const AUTH_COOKIE_SECURE = (() => {
 })();
 const TEAM_AUTH_DISCORD_COOKIE_NAME = `${TEAM_AUTH_COOKIE_NAME}_discord`;
 const TEAM_AUTH_STEAM_COOKIE_NAME = `${TEAM_AUTH_COOKIE_NAME}_steam`;
+const TICKET_DISCORD_COOKIE_NAME = 'ticket_preview_discord';
 const TEAM_AUTH_SESSION_TTL_MS = Math.max(TEAM_AUTH_LINK_TTL_MS, TEAM_AUTH_COOKIE_MAX_AGE_MS);
 const TEAM_AUTH_STATE_SECRET = (() => {
   if (typeof process.env.TEAM_AUTH_STATE_SECRET === 'string' && process.env.TEAM_AUTH_STATE_SECRET.trim()) {
@@ -481,6 +482,24 @@ async function loadUserContext(userId) {
   };
 }
 
+async function loadOptionalAuthContext(req) {
+  const header = req.headers?.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    const context = await loadUserContext(payload.uid);
+    if (context) {
+      req.authUser = context;
+      return context;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function requireGlobalPermissionMiddleware(permission) {
   return (req, res, next) => {
     if (!hasGlobalPermission(req.authUser, permission)) {
@@ -730,6 +749,43 @@ function buildTicketPreviewUrl(teamId, ticket) {
   return resolvePreviewHref(relative);
 }
 
+function buildTicketPreviewReturn(teamId, ticketToken, extraParams = {}) {
+  const link = buildTicketPreviewUrl(teamId, { previewToken: ticketToken });
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(extraParams)) {
+    if (value == null) continue;
+    params.set(key, value);
+  }
+  if ([...params.keys()].length === 0) return link;
+  const connector = link.includes('?') ? '&' : '?';
+  return `${link}${connector}${params.toString()}`;
+}
+
+function buildTicketDiscordLoginUrl(teamId, ticketToken) {
+  const base = `/api/teams/${encodeURIComponent(teamId)}/discord/tickets/${encodeURIComponent(ticketToken)}/discord-login`;
+  const returnTo = buildTicketPreviewUrl(teamId, { previewToken: ticketToken });
+  if (!returnTo) return base;
+  const params = new URLSearchParams({ returnTo });
+  return `${base}?${params.toString()}`;
+}
+
+function sanitizeReturnToUrl(url, fallback) {
+  const safeFallback = typeof fallback === 'string' && fallback ? fallback : '/';
+  if (typeof url !== 'string') return safeFallback;
+  const trimmed = url.trim();
+  if (!trimmed) return safeFallback;
+  if (trimmed.startsWith('/')) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (PANEL_PUBLIC_URL && normalizeBaseUrl(parsed.origin) === PANEL_PUBLIC_URL) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    /* ignore malformed return urls */
+  }
+  return safeFallback;
+}
+
 function slugifyTicketSubject(subject) {
   if (typeof subject !== 'string') return '';
   const trimmed = subject.trim().toLowerCase();
@@ -798,6 +854,30 @@ function buildTicketPreviewPayload({ ticket, dialog, teamName }) {
     },
     messages
   };
+}
+
+async function loadDiscordTicketForTeam(teamId, token) {
+  if (typeof db?.getDiscordTicketForTeam !== 'function') return null;
+  const numericTeamId = Number(teamId);
+  if (!Number.isFinite(numericTeamId)) return null;
+  const trimmedToken = typeof token === 'string' ? token.trim() : '';
+  if (!trimmedToken) return null;
+  if (typeof db?.getDiscordTicketForTeamByPreviewToken === 'function') {
+    try {
+      const byToken = await db.getDiscordTicketForTeamByPreviewToken(numericTeamId, trimmedToken);
+      if (byToken) return byToken;
+    } catch (err) {
+      console.error('failed to load discord ticket by preview token', err);
+    }
+  }
+  if (/^\d+$/.test(trimmedToken)) {
+    try {
+      return await db.getDiscordTicketForTeam(numericTeamId, Number(trimmedToken));
+    } catch (err) {
+      console.error('failed to load discord ticket by id', err);
+    }
+  }
+  return null;
 }
 
 function safeTrimString(value) {
@@ -5345,6 +5425,46 @@ function storeTeamAuthSteamSession(res, { token, steamId, cookieId }) {
   }
 }
 
+function readTicketDiscordSession(cookieJar, { teamId, ticketToken }) {
+  const raw = cookieJar.get(TICKET_DISCORD_COOKIE_NAME) || null;
+  if (!raw) return null;
+  const decoded = decodeSignedPayload(raw);
+  if (!decoded || decoded.purpose !== 'ticket_discord') return null;
+  const decodedTeamId = Number(decoded.teamId ?? decoded.team_id);
+  const decodedToken = typeof decoded.ticketToken === 'string' ? decoded.ticketToken.trim() : '';
+  const targetTeam = Number(teamId);
+  const targetToken = typeof ticketToken === 'string' ? ticketToken.trim() : '';
+  if (!Number.isFinite(decodedTeamId) || !Number.isFinite(targetTeam) || decodedTeamId !== targetTeam) return null;
+  if (!decodedToken || !targetToken || decodedToken !== targetToken) return null;
+  const discordId = sanitizeDiscordSnowflake(decoded.discordId ?? decoded.discord_id ?? null);
+  if (!discordId) return null;
+  return {
+    discordId,
+    discordUsername: sanitizeDiscordUsername(decoded.discordUsername ?? decoded.discord_username ?? null)
+  };
+}
+
+function storeTicketDiscordSession(res, { teamId, ticketToken, discordId, discordUsername }) {
+  const payload = encodeSignedPayload({
+    purpose: 'ticket_discord',
+    teamId,
+    ticketToken,
+    discordId,
+    discordUsername: sanitizeDiscordUsername(discordUsername ?? null) || null
+  });
+  if (!payload) return;
+  try {
+    res.cookie(TICKET_DISCORD_COOKIE_NAME, payload, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: AUTH_COOKIE_SECURE,
+      path: '/'
+    });
+  } catch (err) {
+    console.warn('failed to store ticket discord session', err);
+  }
+}
+
 function clearTeamAuthOAuthCookies(res) {
   try {
     res.clearCookie(TEAM_AUTH_DISCORD_COOKIE_NAME, { httpOnly: true, sameSite: 'lax', secure: AUTH_COOKIE_SECURE, path: '/' });
@@ -5376,6 +5496,10 @@ function resolveDiscordRedirectUri(req) {
   if (DISCORD_OAUTH_REDIRECT_URI) return DISCORD_OAUTH_REDIRECT_URI;
   const origin = `${req.protocol}://${req.get('host')}`;
   return `${origin}/api/auth/discord/callback`;
+}
+
+function resolveTicketDiscordRedirectUri(req) {
+  return resolveDiscordRedirectUri(req);
 }
 
 function resolveSteamReturnUrl(req) {
@@ -5659,9 +5783,27 @@ async function fetchTeamAuthProfiles(teamId) {
   if (!Number.isFinite(numeric)) return [];
   try {
     const rows = await db.listTeamAuthProfiles(numeric);
-    return (Array.isArray(rows) ? rows : [])
+    const profiles = (Array.isArray(rows) ? rows : [])
       .map((row) => projectTeamAuthProfile(row, { includeAlts: true }))
       .filter(Boolean);
+    if (profiles.length === 0 || typeof db.getPlayersBySteamIds !== 'function') return profiles;
+    const steamIds = Array.from(new Set(profiles.map((entry) => entry?.steamId).filter(Boolean)));
+    if (steamIds.length === 0) return profiles;
+    try {
+      const playerRows = await db.getPlayersBySteamIds(steamIds);
+      const playerMap = new Map(
+        (Array.isArray(playerRows) ? playerRows : [])
+          .filter((row) => typeof row === 'object' && row != null)
+          .map((row) => [row.steamid ?? row.steamId, row])
+      );
+      return profiles.map((profile) => ({
+        ...profile,
+        player: playerMap.get(profile.steamId) || null
+      }));
+    } catch (err) {
+      console.warn('failed to load player details for linked accounts', err);
+      return profiles;
+    }
   } catch (err) {
     console.error('failed to list team auth profiles', err);
     return [];
@@ -6896,9 +7038,105 @@ app.get('/api/auth/discord/redirect', async (req, res) => {
   }
 });
 
+async function handleTicketDiscordCallback(req, res, statePayload, code) {
+  const teamId = Number(statePayload.teamId ?? statePayload.team_id);
+  const ticketToken = typeof statePayload.ticketToken === 'string' ? statePayload.ticketToken.trim() : '';
+  const fallback = buildTicketPreviewReturn(teamId, ticketToken || statePayload.token || '', {
+    discord_error: 'authorization_failed'
+  }) || '/ticket-preview.html';
+  if (!Number.isFinite(teamId) || !ticketToken) {
+    res.redirect(fallback);
+    return true;
+  }
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'discord_unavailable' }) || fallback);
+    return true;
+  }
+  if (!code) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'authorization_failed' }) || fallback);
+    return true;
+  }
+  const ticketRow = await loadDiscordTicketForTeam(teamId, ticketToken);
+  if (!ticketRow) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'not_found' }) || fallback);
+    return true;
+  }
+  const ticket = projectDiscordTicket(ticketRow);
+  const ticketClosed = ticket?.status === 'closed' || Boolean(ticket?.closedAt);
+  if (!ticketClosed) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'ticket_open' }) || fallback);
+    return true;
+  }
+  const redirectUri = resolveTicketDiscordRedirectUri(req);
+  const body = new URLSearchParams();
+  body.set('client_id', DISCORD_OAUTH_CLIENT_ID);
+  body.set('client_secret', DISCORD_OAUTH_CLIENT_SECRET);
+  body.set('grant_type', 'authorization_code');
+  body.set('code', String(code));
+  body.set('redirect_uri', redirectUri);
+  const tokenResponse = await fetch(`${DISCORD_API_BASE}/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString()
+  });
+  if (!tokenResponse.ok) {
+    console.warn('discord ticket oauth token exchange failed', tokenResponse.status);
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'authorization_failed' }) || fallback);
+    return true;
+  }
+  const tokenData = await tokenResponse.json().catch(() => null);
+  const accessToken = tokenData?.access_token;
+  if (!accessToken) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'authorization_failed' }) || fallback);
+    return true;
+  }
+  const profileResponse = await fetch(`${DISCORD_API_BASE}/users/@me`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!profileResponse.ok) {
+    console.warn('discord ticket profile request failed', profileResponse.status);
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'profile_failed' }) || fallback);
+    return true;
+  }
+  const profile = await profileResponse.json().catch(() => null);
+  const discordId = sanitizeDiscordSnowflake(profile?.id ?? null);
+  const requesterId = sanitizeDiscordSnowflake(ticket?.createdBy ?? null);
+  if (!discordId) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'profile_failed' }) || fallback);
+    return true;
+  }
+  if (requesterId && requesterId !== discordId) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'discord_mismatch' }) || fallback);
+    return true;
+  }
+  storeTicketDiscordSession(res, {
+    teamId,
+    ticketToken,
+    discordId,
+    discordUsername: profile?.username ?? null
+  });
+  const returnTarget = sanitizeReturnToUrl(statePayload.returnTo, fallback) || fallback;
+  res.redirect(returnTarget);
+  return true;
+}
+
 app.get('/api/auth/discord/callback', async (req, res) => {
   const { code, state } = req.query || {};
   const statePayload = decodeSignedPayload(typeof state === 'string' ? state : null);
+  if (statePayload?.purpose === 'ticket_discord_state') {
+    try {
+      await handleTicketDiscordCallback(req, res, statePayload, code);
+    } catch (err) {
+      console.error('discord ticket oauth callback failed', err);
+      const teamId = Number(statePayload?.teamId ?? statePayload?.team_id);
+      const token = typeof statePayload?.ticketToken === 'string' ? statePayload.ticketToken.trim() : '';
+      const fallback = buildTicketPreviewReturn(teamId, token || statePayload?.token || '', {
+        discord_error: 'discord_unreachable'
+      }) || '/ticket-preview.html';
+      res.redirect(fallback);
+    }
+    return;
+  }
   if (!statePayload || statePayload.purpose !== 'discord_state') {
     return res.redirect(buildTeamAuthReturnUrl('', { discord_error: 'state_invalid' }));
   }
@@ -8093,25 +8331,56 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
   res.json({ ok: true });
 });
 
-app.get('/api/teams/:teamId/discord/tickets/:ticketToken/preview', auth, async (req, res) => {
-  if (typeof db?.getDiscordTicketForTeam !== 'function') {
-    return res.status(404).json({ error: 'not_found' });
+app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (req, res) => {
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    return res.status(503).json({ error: 'discord_unavailable' });
   }
-  const teamId = await ensureTeamAccess(req, res, 'teamId');
-  if (teamId == null) return;
+  const teamId = Number(req.params?.teamId);
+  if (!Number.isFinite(teamId)) return res.status(400).json({ error: 'invalid_team' });
+  const rawToken = typeof req.params?.ticketToken === 'string' ? req.params.ticketToken.trim() : '';
+  if (!rawToken) return res.status(400).json({ error: 'invalid_ticket' });
+  const fallbackReturn = buildTicketPreviewReturn(teamId, rawToken, { discord_error: 'authorization_failed' });
+  try {
+    const row = await loadDiscordTicketForTeam(teamId, rawToken);
+    if (!row) return res.status(404).json({ error: 'not_found' });
+    const ticket = projectDiscordTicket(row);
+    const isClosed = ticket?.status === 'closed' || Boolean(ticket?.closedAt);
+    if (!isClosed) return res.status(409).json({ error: 'ticket_open' });
+    const redirectUri = resolveTicketDiscordRedirectUri(req);
+    const returnToParam = typeof req.query?.returnTo === 'string' ? req.query.returnTo : null;
+    const stateToken = encodeSignedPayload({
+      purpose: 'ticket_discord_state',
+      teamId,
+      ticketToken: rawToken,
+      returnTo: sanitizeReturnToUrl(returnToParam, fallbackReturn),
+      nonce: crypto.randomBytes(16).toString('hex')
+    });
+    if (!stateToken) return res.status(500).json({ error: 'state_error' });
+    const params = new URLSearchParams({
+      client_id: DISCORD_OAUTH_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'identify',
+      state: stateToken
+    });
+    res.redirect(`${DISCORD_API_BASE}/oauth2/authorize?${params.toString()}`);
+  } catch (err) {
+    console.error('failed to start ticket discord oauth', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/teams/:teamId/discord/tickets/:ticketToken/preview', async (req, res) => {
+  await loadOptionalAuthContext(req);
+  const teamId = Number(req.params?.teamId);
+  if (!Number.isFinite(teamId)) return res.status(400).json({ error: 'invalid_team' });
   const rawToken = typeof req.params?.ticketToken === 'string' ? req.params.ticketToken.trim() : '';
   if (!rawToken) {
     res.status(400).json({ error: 'invalid_ticket' });
     return;
   }
   try {
-    let row = null;
-    if (typeof db?.getDiscordTicketForTeamByPreviewToken === 'function') {
-      row = await db.getDiscordTicketForTeamByPreviewToken(teamId, rawToken);
-    }
-    if (!row && /^\d+$/.test(rawToken)) {
-      row = await db.getDiscordTicketForTeam(teamId, Number(rawToken));
-    }
+    const row = await loadDiscordTicketForTeam(teamId, rawToken);
     if (!row) {
       res.status(404).json({ error: 'not_found' });
       return;
@@ -8127,7 +8396,38 @@ app.get('/api/teams/:teamId/discord/tickets/:ticketToken/preview', auth, async (
         console.warn('failed to load team info for ticket preview', err);
       }
     }
+    let panelAccess = false;
+    if (req.authUser) {
+      panelAccess = userHasTeamAccess(req.authUser, teamId);
+      if (!panelAccess && Number.isFinite(Number(req.authUser?.id)) && typeof db?.getTeamMember === 'function') {
+        try {
+          const membership = await db.getTeamMember(teamId, req.authUser.id);
+          panelAccess = Boolean(membership);
+        } catch (err) {
+          console.warn('failed to verify team membership for ticket preview', err);
+        }
+      }
+    }
+    const cookieJar = parseCookies(req.headers.cookie || '');
+    const discordSession = readTicketDiscordSession(cookieJar, { teamId, ticketToken: rawToken });
+    const requesterId = sanitizeDiscordSnowflake(ticket?.createdBy ?? null);
+    const ticketClosed = ticket?.status === 'closed' || Boolean(ticket?.closedAt);
+    const canViewViaDiscord = Boolean(ticketClosed && discordSession && requesterId && requesterId === discordSession.discordId);
+    if (!panelAccess && !canViewViaDiscord) {
+      const payload = { error: discordSession ? 'forbidden' : 'discord_login_required' };
+      if (!discordSession) {
+        payload.loginUrl = buildTicketDiscordLoginUrl(teamId, rawToken);
+      }
+      const statusCode = discordSession ? 403 : 401;
+      res.status(statusCode).json(payload);
+      return;
+    }
     const payload = buildTicketPreviewPayload({ ticket, dialog, teamName });
+    payload.viewer = {
+      mode: panelAccess ? 'panel' : 'discord',
+      discordId: canViewViaDiscord ? discordSession?.discordId ?? null : null,
+      panelUserId: panelAccess ? req.authUser?.id ?? null : null
+    };
     res.json(payload);
   } catch (err) {
     console.error('failed to build ticket preview', err);

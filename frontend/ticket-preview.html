@@ -197,9 +197,16 @@
         return normalizeApiBase('/api');
       }
 
-      function showNotice(text, { allowLoginLink = false } = {}) {
-        const message = allowLoginLink
-          ? `${text} <br><br><a href="./">Return to the control panel</a>`
+      function showNotice(text, { allowLoginLink = false, discordLoginUrl = null } = {}) {
+        const extras = [];
+        if (discordLoginUrl) {
+          extras.push(`<a class="oauth-button oauth-button--discord" href="${escapeHtml(discordLoginUrl)}">Sign in with Discord</a>`);
+        }
+        if (allowLoginLink) {
+          extras.push('<a href="./">Return to the control panel</a>');
+        }
+        const message = extras.length > 0
+          ? `${text} <br><br>${extras.join('<br><br>')}`
           : text;
         if (statusNotice) {
           statusNotice.innerHTML = message;
@@ -352,8 +359,18 @@
           showNotice('Unable to reach the control panel API. Please check your connection.');
           return;
         }
+        let data = null;
+        if (!response.ok) {
+          try { data = await response.json(); }
+          catch { /* ignore */ }
+        }
         if (response.status === 401) {
-          showNotice('You need to sign in to view this ticket.', { allowLoginLink: true });
+          const loginUrl = data?.loginUrl;
+          if (data?.error === 'discord_login_required' && loginUrl) {
+            showNotice('Sign in with Discord to view your closed ticket.', { discordLoginUrl: loginUrl });
+          } else {
+            showNotice('You need to sign in to view this ticket.', { allowLoginLink: true });
+          }
           return;
         }
         if (response.status === 403) {
@@ -368,13 +385,14 @@
           showNotice('Failed to load the ticket preview.');
           return;
         }
-        let data = null;
-        try {
-          data = await response.json();
-        } catch (err) {
-          console.error('invalid preview payload', err);
-          showNotice('Received an unexpected response from the server.');
-          return;
+        if (!data) {
+          try {
+            data = await response.json();
+          } catch (err) {
+            console.error('invalid preview payload', err);
+            showNotice('Received an unexpected response from the server.');
+            return;
+          }
         }
         if (data?.pageTitle) document.title = data.pageTitle;
         if (channelTitle && data?.channelTitle) channelTitle.textContent = data.channelTitle;
