@@ -24,3 +24,5 @@ new pattern. Keep `docs/module-usage-report.md` aligned with the current code so
   delete modules.
 
 Following these notes ensures the repository stays easy to navigate for future contributors.
+
+ANY NEW CONVARS OR ENV NEED TO BE ADDED TO THE INSTALLER AND THE README
