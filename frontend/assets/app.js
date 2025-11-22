@@ -3943,7 +3943,9 @@
 
   function hasGlobalPermission(permission) {
     if (isSuperuser()) return true;
-    return !!currentUserPermissions().global?.[permission];
+    const globalPerms = currentUserPermissions().global || {};
+    if (globalPerms['*'] || globalPerms.all) return true;
+    return !!globalPerms[permission];
   }
 
   function isSuperuser() {
