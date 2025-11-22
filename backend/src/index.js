@@ -283,9 +283,11 @@ io.use(async (socket, next) => {
 });
 
 const extractForwardedHost = (req) => {
-  const xfHost = req?.get?.('x-forwarded-host');
-  if (typeof xfHost === 'string' && xfHost.trim()) {
-    return xfHost.split(',')[0].trim();
+  if (TRUST_PROXY) {
+    const xfHost = req?.get?.('x-forwarded-host');
+    if (typeof xfHost === 'string' && xfHost.trim()) {
+      return xfHost.split(',')[0].trim();
+    }
   }
   const host = req?.get?.('host');
   if (typeof host === 'string' && host.trim()) return host.trim();
@@ -293,9 +295,11 @@ const extractForwardedHost = (req) => {
 };
 
 const extractProtocol = (req) => {
-  const xfProto = req?.get?.('x-forwarded-proto');
-  if (typeof xfProto === 'string' && xfProto.trim()) {
-    return xfProto.split(',')[0].trim();
+  if (TRUST_PROXY) {
+    const xfProto = req?.get?.('x-forwarded-proto');
+    if (typeof xfProto === 'string' && xfProto.trim()) {
+      return xfProto.split(',')[0].trim();
+    }
   }
   if (typeof req?.protocol === 'string' && req.protocol) return req.protocol;
   return 'http';
