@@ -228,7 +228,43 @@ function resolveIpCountry(ip) {
   };
 }
 
+const PORT = parseInt(process.env.PORT || '8787', 10);
+const BIND = process.env.BIND || '0.0.0.0';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev';
+const ALLOW_REGISTRATION = (process.env.ALLOW_REGISTRATION || '').toLowerCase() === 'true';
+const DEFAULT_PANEL_ORIGIN = (() => {
+  try {
+    const url = PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || TEAM_AUTH_APP_URL;
+    if (url) return new URL(url).origin;
+  } catch {
+    // ignore
+  }
+  const host = BIND === '0.0.0.0' ? 'localhost' : BIND;
+  return `http://${host}:${PORT}`;
+})();
+const CONFIGURED_PASSKEY_RP_ID = process.env.PASSKEY_RP_ID || null;
+const PASSKEY_RP_ID = CONFIGURED_PASSKEY_RP_ID || (() => {
+  try {
+    return new URL(DEFAULT_PANEL_ORIGIN).hostname;
+  } catch {
+    return 'localhost';
+  }
+})();
+const CONFIGURED_PASSKEY_ORIGIN = process.env.PASSKEY_ORIGIN || null;
+const PASSKEY_ORIGIN = CONFIGURED_PASSKEY_ORIGIN || DEFAULT_PANEL_ORIGIN;
+const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Admin Dashboard';
+
+const TRUST_PROXY = (() => {
+  const raw = typeof process.env.TRUST_PROXY === 'string' ? process.env.TRUST_PROXY.trim().toLowerCase() : '';
+  if (raw === 'false' || raw === '0' || raw === 'off') return false;
+  if (raw === 'true' || raw === '1' || raw === 'on') return true;
+  return true;
+})();
+
 const app = express();
+if (TRUST_PROXY) {
+  app.set('trust proxy', true);
+}
 const server = http.createServer(app);
 const io = new IOServer(server, { cors: { origin: process.env.CORS_ORIGIN?.split(',') || '*' } });
 
@@ -246,28 +282,47 @@ io.use(async (socket, next) => {
   }
 });
 
-const PORT = parseInt(process.env.PORT || '8787', 10);
-const BIND = process.env.BIND || '0.0.0.0';
-const JWT_SECRET = process.env.JWT_SECRET || 'dev';
-const ALLOW_REGISTRATION = (process.env.ALLOW_REGISTRATION || '').toLowerCase() === 'true';
-const DEFAULT_PANEL_ORIGIN = (() => {
-  try {
-    const url = PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || TEAM_AUTH_APP_URL;
-    if (url) return new URL(url).origin;
-  } catch {
-    // ignore
+const extractForwardedHost = (req) => {
+  const xfHost = req?.get?.('x-forwarded-host');
+  if (typeof xfHost === 'string' && xfHost.trim()) {
+    return xfHost.split(',')[0].trim();
   }
-  return `http://${BIND}:${PORT}`;
-})();
-const PASSKEY_RP_ID = process.env.PASSKEY_RP_ID || (() => {
-  try {
-    return new URL(DEFAULT_PANEL_ORIGIN).hostname;
-  } catch {
-    return 'localhost';
+  const host = req?.get?.('host');
+  if (typeof host === 'string' && host.trim()) return host.trim();
+  return req?.hostname || null;
+};
+
+const extractProtocol = (req) => {
+  const xfProto = req?.get?.('x-forwarded-proto');
+  if (typeof xfProto === 'string' && xfProto.trim()) {
+    return xfProto.split(',')[0].trim();
   }
-})();
-const PASSKEY_ORIGIN = process.env.PASSKEY_ORIGIN || DEFAULT_PANEL_ORIGIN;
-const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Admin Dashboard';
+  if (typeof req?.protocol === 'string' && req.protocol) return req.protocol;
+  return 'http';
+};
+
+const extractHost = (req) => {
+  const host = extractForwardedHost(req);
+  if (!host) return null;
+  return host.split(':')[0];
+};
+
+const getPasskeyRpId = (req) => {
+  if (CONFIGURED_PASSKEY_RP_ID) return CONFIGURED_PASSKEY_RP_ID;
+  const host = extractHost(req);
+  if (host) return host;
+  return PASSKEY_RP_ID;
+};
+
+const getPasskeyOrigin = (req) => {
+  if (CONFIGURED_PASSKEY_ORIGIN) return CONFIGURED_PASSKEY_ORIGIN;
+  const host = extractForwardedHost(req);
+  if (host) {
+    const protocol = extractProtocol(req);
+    return `${protocol}://${host}`;
+  }
+  return PASSKEY_ORIGIN;
+};
 
 async function loadUserContext(userId) {
   const numeric = Number(userId);
@@ -6012,12 +6067,12 @@ async function buildAuthPayload(userRow) {
   };
 }
 
-async function createPasskeyAuthOptions(userId, ticket) {
+async function createPasskeyAuthOptions(req, userId, ticket) {
   if (typeof db.listUserPasskeys !== 'function') return null;
   const passkeys = await db.listUserPasskeys(userId);
   if (!passkeys || passkeys.length === 0) return null;
   const options = await generateAuthenticationOptions({
-    rpID: PASSKEY_RP_ID,
+    rpID: getPasskeyRpId(req),
     userVerification: 'preferred',
     allowCredentials: passkeys.map((pk) => ({
       id: decodeBase64Url(pk.credential_id),
@@ -6064,7 +6119,7 @@ app.post('/api/login', async (req, res) => {
       let passkeyOptions = null;
       if (passkeyCount > 0) {
         try {
-          passkeyOptions = await createPasskeyAuthOptions(row.id, ticket);
+          passkeyOptions = await createPasskeyAuthOptions(req, row.id, ticket);
         } catch (err) {
           console.warn('failed to create passkey options', err);
         }
@@ -6111,7 +6166,7 @@ app.post('/api/login/mfa/passkey/options', async (req, res) => {
   const record = getMfaTicket(ticket);
   if (!record) return res.status(401).json({ error: 'mfa_expired' });
   try {
-    const options = await createPasskeyAuthOptions(record.userId, ticket);
+    const options = await createPasskeyAuthOptions(req, record.userId, ticket);
     if (!options) return res.status(400).json({ error: 'no_passkeys' });
     res.json({ options });
   } catch (err) {
@@ -6139,8 +6194,8 @@ app.post('/api/login/mfa/passkey/verify', async (req, res) => {
     const verification = await verifyAuthenticationResponse({
       response,
       expectedChallenge: expected.challenge,
-      expectedOrigin: PASSKEY_ORIGIN,
-      expectedRPID: PASSKEY_RP_ID,
+      expectedOrigin: getPasskeyOrigin(req),
+      expectedRPID: getPasskeyRpId(req),
       authenticator: {
         credentialID: decodeBase64Url(stored.credential_id),
         credentialPublicKey: decodeBase64Url(stored.public_key),
@@ -6306,7 +6361,7 @@ app.post('/api/me/passkeys/options', auth, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'not_found' });
     const existing = await db.listUserPasskeys(user.id);
     const options = await generateRegistrationOptions({
-      rpID: PASSKEY_RP_ID,
+      rpID: getPasskeyRpId(req),
       rpName: PASSKEY_RP_NAME,
       userID: String(user.id),
       userName: user.username,
@@ -6335,8 +6390,8 @@ app.post('/api/me/passkeys/register', auth, async (req, res) => {
     const verification = await verifyRegistrationResponse({
       response,
       expectedChallenge,
-      expectedOrigin: PASSKEY_ORIGIN,
-      expectedRPID: PASSKEY_RP_ID,
+      expectedOrigin: getPasskeyOrigin(req),
+      expectedRPID: getPasskeyRpId(req),
       requireUserVerification: true
     });
     if (!verification.verified) return res.status(400).json({ error: 'invalid_passkey' });
