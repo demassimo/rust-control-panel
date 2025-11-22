@@ -18,6 +18,8 @@ sudo bash scripts/install-linux.sh
 
 Need a tour of the codebase? Check out [`FILES.md`](FILES.md) for a high-level description of each file and directory.
 
+Looking for a step-by-step walkthrough? The [tutorial guides](docs/tutorials.md) cover installation, OAuth setup, server connections, moderation, Discord tickets, announcements, maps/wipes, and backup/upgrade routines with non-technical explanations for backend settings.
+
 ## Environment configuration
 
 The backend service reads its environment variables from `/opt/rustadmin/backend/.env`. If you deploy to a different base
@@ -78,7 +80,7 @@ See [docs/team-auth-oauth.md](docs/team-auth-oauth.md) for a full walkthrough th
 ## Access control
 
 - On first boot the panel seeds an `admin / admin123` account; sign in and change it immediately.
-- Admins can invite teammates from the **Team access** card in the UI — accounts can be promoted or removed at any time.
+- Team invites are not available in this build yet; create staff accounts manually from **Users → New user** and adjust their role after they sign in.
 - To allow public self-registration set `ALLOW_REGISTRATION=true` in the backend environment (defaults to disabled).
 - Set `JWT_SECRET` to a long random value to secure issued session tokens.
 
