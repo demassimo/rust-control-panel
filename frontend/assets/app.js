@@ -8933,7 +8933,10 @@
       await refreshServers();
       moduleBus.emit('auth:login', { user: state.currentUser, resume: true });
       moduleBus.emit('players:refresh', { reason: 'session-resume' });
-      updateTeamAccessView({ refreshUsers: true });
+      updateTeamAccessView({
+        refreshUsers: true,
+        refreshAdmin: state.activePanel === 'admin'
+      });
       startStatusPolling();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
@@ -8979,7 +8982,10 @@
       await refreshServers();
       moduleBus.emit('auth:login', { user: state.currentUser, resume: false });
       moduleBus.emit('players:refresh', { reason: 'login' });
-      updateTeamAccessView({ refreshUsers: true });
+      updateTeamAccessView({
+        refreshUsers: true,
+        refreshAdmin: state.activePanel === 'admin'
+      });
       startStatusPolling();
     } catch (err) {
       showNotice(loginError, describeError(err), 'error');
