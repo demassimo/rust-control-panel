@@ -1,119 +1,264 @@
-# Tutorial guides
+# Rust Control Panel – Beginner-Friendly Tutorials
 
-This tutorial bundle walks new administrators through installing the control panel, configuring Discord + Steam OAuth, connecting a Rust server, and performing common moderation actions like banning a disruptive player. The steps are written for non-technical operators, with plain-language notes about where to click and what to copy so you can succeed even if you have never edited a backend file before. Use the indexed sections below to jump to the workflow you need.
+These guides show **non-technical staff** how to install the panel, link Discord/Steam, connect Rust servers, run moderation actions, manage tickets, post announcements, and perform everyday tasks confidently. Instructions are written in **plain language**, with clear notes on *where to click* and *what to copy*, and no programming knowledge required.
 
-1. [Install the panel](#1-install-the-panel)
-2. [Configure OAuth for Discord and Steam](#2-configure-oauth-for-discord-and-steam)
-3. [Create admin accounts and roles (no invites yet)](#3-create-admin-accounts-and-roles-no-invites-yet)
-4. [Connect a Rust server](#4-connect-a-rust-server)
-5. [Ban or unban a player](#5-ban-or-unban-a-player)
-6. [Audit logs and exports](#6-audit-logs-and-exports)
-7. [Discord bot + ticket panel](#7-discord-bot--ticket-panel)
-8. [Maps and wipes](#8-maps-and-wipes)
-9. [Server announcements](#9-server-announcements)
-10. [Backups and updates](#10-backups-and-updates)
-11. [Troubleshooting tips](#11-troubleshooting-tips)
-12. [Change backend settings safely](#12-change-backend-settings-safely)
+Use the table of contents to jump directly to what you need:
 
-## 1) Install the panel
-- Follow the Linux installer in [`scripts/install-linux.sh`](../scripts/install-linux.sh) or deploy with Docker Compose from `docker-compose.yml`.
-- After installation the backend `.env` lives at `/opt/rustadmin/backend/.env`. Keep this file private and back it up securely.
-- Start services with `systemctl start rustadmin-backend` and (optionally) `systemctl start rustadmin-discord-bot`. Use `systemctl status` on each unit to verify they are running.
+1. [Install the panel](#1-install-the-panel)  
+2. [Configure OAuth for Discord and Steam](#2-configure-oauth-for-discord-and-steam)  
+3. [Create admin accounts and assign roles](#3-create-admin-accounts-and-roles)  
+4. [Connect a Rust server](#4-connect-a-rust-server)  
+5. [Ban or unban a player](#5-ban-or-unban-a-player)  
+6. [Audit logs and exports](#6-audit-logs-and-exports)  
+7. [Discord bot + ticket panel](#7-discord-bot--ticket-panel)  
+8. [Maps and wipes](#8-maps-and-wipes)  
+9. [Server announcements](#9-server-announcements)  
+10. [Backups and updates](#10-backups-and-updates)  
+11. [Troubleshooting (simple checks)](#11-troubleshooting-tips)  
+12. [Changing backend settings safely](#12-change-backend-settings-safely)
 
-## 2) Configure OAuth for Discord and Steam
-Team authentication links Discord and Steam accounts so staff can see alt history. Set these environment values in `/opt/rustadmin/backend/.env` (open the file with `sudo nano /opt/rustadmin/backend/.env`) and restart the backend when finished so the panel uses the new URLs.
+---
 
-### Discord application
-1. Create a Discord application at <https://discord.com/developers/applications>.
-2. Enable **OAuth2 → General** and add a redirect URI pointing to your panel host (for example `https://panel.example.com/api/auth/discord/callback`). Replace `panel.example.com` with the exact URL you use to open the panel (such as `https://panel.yourdomain.com`). This prevents Discord from blocking the sign-in because of a domain mismatch.
-3. Copy the **Client ID** and **Client Secret** into:
-   ```
-   DISCORD_OAUTH_CLIENT_ID=...
-   DISCORD_OAUTH_CLIENT_SECRET=...
-   DISCORD_OAUTH_REDIRECT_URI=https://panel.yourdomain.com/api/auth/discord/callback
-   ```
-4. (Optional) If you use the Discord bot worker, also invite the bot to your guild and configure the ticket panel role settings in the backend `.env`.
+# 1) Install the panel
 
-### Steam OpenID
-1. No API key is required for sign-in, but you must declare the callback URLs. Swap `panel.yourdomain.com` for the address where you actually reach the panel so Steam returns users to your real host instead of the placeholder:
-   ```
-   STEAM_OPENID_RETURN_URL=https://panel.yourdomain.com/api/auth/steam/callback
-   STEAM_OPENID_REALM=https://panel.yourdomain.com
-   ```
-2. Set a dedicated secret for OAuth state cookies:
-   ```
-   TEAM_AUTH_STATE_SECRET=long_random_value
-   ```
-3. Restart the backend service (`systemctl restart rustadmin-backend`) so the new settings take effect; OAuth changes do not apply until the service is reloaded.
+If you are not technical, get your server host to complete the install steps. After installation, *you do not need to touch Linux again*—everything is done through the web panel.
 
-### Test the linking flow
-- Visit `https://panel.yourdomain.com/request.html` (replace with your panel URL). If you distribute one shared signup URL, send this link directly to staff so they can sign in.
-- Sign in with Discord when prompted, then sign in with Steam. A success page confirms the accounts were linked and the configured role is applied.
-- If Discord or Steam rejects the callback, double-check the redirect URLs and secrets above.
+## Option A – Linux Installer
 
-## 3) Create admin accounts and roles (no invites yet)
-- Sign in with the seeded `admin / admin123` credentials, then change the password immediately from **Profile → Change password**.
-- Because this build does **not** include a team invite system yet, create any new staff accounts manually: go to **Users** in the sidebar, click **New user**, and fill in a username, email, and temporary password. Share the password with the staff member and ask them to change it after logging in.
-- Use the built-in role presets (Admin/Moderator/Viewer) as a starting point, or open the role editor to customize what each role can see or change.
-- If you allow public self-registration, set `ALLOW_REGISTRATION=true` in the `.env`, but still review every new user in **Users** before granting higher permissions.
+```
+bash scripts/install-linux.sh
+```
 
-## 4) Connect a Rust server
-1. Navigate to **Settings → Servers** and click **Add server**.
-2. Enter the server name, IP/host, RCON port, and RCON password. Save to establish the connection.
-3. Watch the **Server status** widget or the live player list to confirm the panel is receiving updates. Adjust `MONITOR_INTERVAL_MS` in the `.env` if you need a faster poll cadence.
+## Option B – Docker Compose
 
-## 5) Ban or unban a player
-1. Open the **Players** module from the dashboard.
-2. Search for the player by SteamID, display name, or linked Discord account.
-3. Click the player row to open the profile; use **Ban** to issue a ban with an optional reason. The action is sent over RCON to the connected server.
-4. To lift the restriction later, return to the profile and select **Unban**.
-5. Keep moderation notes in the player profile so future staff can see prior actions and context.
+```
+docker-compose up -d
+```
 
-## 6) Audit logs and exports
-1. Open **Audit log** from the sidebar to review sign-ins, bans, kicks, and server configuration changes.
-2. Filter by user, action type, or timeframe to isolate incidents quickly.
-3. Use **Export CSV** to download filtered events for incident reviews or sharing with other admins.
-4. Store exports in your secured team storage; do not share them publicly because they can contain IPs and SteamIDs.
+### Important files
 
-## 7) Discord bot + ticket panel
-1. Ensure the backend service account can reach Discord (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_TICKET_PANEL_CHANNEL_ID` are set in the backend `.env`; edit the file with `sudo nano /opt/rustadmin/backend/.env` if needed). These values only authorize the bot—ticket setup happens inside the panel UI.
-2. Restart the worker or backend service so the bot connects to Discord after configuration changes.
-3. In Discord, create or choose a text channel where you want tickets posted. Then, in the panel UI, open **Discord tickets** and run the **Create ticket panel** action to publish the interactive message—no backend edits are required beyond the bot credentials.
-4. When players open a ticket, you will see it appear in the configured channel; reply in-thread to keep conversations organized.
-5. Use the **Close ticket** action when resolved to archive the thread and avoid clutter.
+- Main settings file: `/opt/rustadmin/backend/.env`
 
-## 8) Maps and wipes
-1. Go to **Maps** to upload a new map image. Use a square PNG and keep the file size under the backend's `MAX_MAP_IMAGE_BYTES` value.
-2. Use **Assign map** to link the upload to a specific server so live positions display correctly.
-3. Before a scheduled wipe, duplicate the existing map entry and mark the new one with the wipe date; this keeps historical data intact.
-4. After wiping the game server, update the active map in **Maps → Active map** so players see the new terrain immediately.
+### Start & check services
 
-## 9) Server announcements
-1. Navigate to **Announcements** in the panel.
-2. Create a new announcement with start/end times to control visibility.
-3. Choose target servers if you manage multiple instances so the message appears only where relevant.
-4. Save and confirm the announcement appears on the dashboard for connected players.
+```
+sudo systemctl start rustadmin-backend
+sudo systemctl start rustadmin-discord-bot
+sudo systemctl status rustadmin-backend
+```
 
-## 10) Backups and updates
-1. Back up `/opt/rustadmin/backend/.env` and your database (check `docker-compose.yml` or your service unit for the data directory) before upgrades.
-2. When using Docker, pull the latest images and run `docker-compose up -d` to deploy updates.
-3. For bare-metal installs, rerun `scripts/install-linux.sh` to fetch the latest release, then restart services with `systemctl restart rustadmin-backend rustadmin-discord-bot`.
-4. After updating, verify the dashboard loads, RCON connects, OAuth works, and audit logging still records events.
+---
 
-## 11) Troubleshooting tips
-- If the live map or player list does not update, verify the server's RCON password and that your firewall allows RCON traffic from the panel host.
-- For OAuth errors, use browser dev tools to confirm the callback URL and check backend logs (`journalctl -u rustadmin-backend -f`).
-- When uploading large map images, ensure your reverse proxy body size limit matches or exceeds the backend's `MAX_MAP_IMAGE_BYTES` setting.
-- If the Discord bot stays offline, confirm the token and guild ID, and that outbound HTTPS traffic to Discord is allowed from the host.
-- If staff cannot sign in after you add them manually, reset their password from **Users** and confirm they are assigned to the right role.
+# 2) Configure OAuth for Discord and Steam
 
-## 12) Change backend settings safely
-These steps keep server operators comfortable even if they are new to Linux or editing configuration files.
+## Discord Setup
 
-1. **Open the settings file.** SSH to the panel server and run `sudo nano /opt/rustadmin/backend/.env`. Press the arrow keys to move around; do not delete lines you do not recognize. Nano writes changes directly to disk so you do not need a separate upload step.
-2. **Update carefully.** Replace placeholder domains (for example, change any `panel.example.com` to your real panel URL like `panel.yourdomain.com`). For secrets, paste the exact values from the provider dashboards without extra spaces—accurate values avoid confusing OAuth failures.
-3. **Save and exit.** Press `Ctrl+O` to save, then `Enter`, then `Ctrl+X` to close Nano.
-4. **Restart the service.** Run `sudo systemctl restart rustadmin-backend` (and `sudo systemctl restart rustadmin-discord-bot` if you use the bot) so the new settings take effect.
-5. **Verify in the UI.** Open the panel in your browser and sign in. Check **Settings → Servers** and the OAuth flows to ensure everything loads without errors.
+1. Go to: https://discord.com/developers/applications  
+2. Create app → OAuth2 → Add redirect:
 
-Use these tutorials as a starting point and expand them with team-specific workflows as your panel deployment evolves.
+```
+https://panel.yourdomain.com/api/auth/discord/callback
+```
+
+3. Add to `.env`:
+
+```
+DISCORD_OAUTH_CLIENT_ID=xxxx
+DISCORD_OAUTH_CLIENT_SECRET=xxxx
+DISCORD_OAUTH_REDIRECT_URI=https://panel.yourdomain.com/api/auth/discord/callback
+```
+
+4. Restart backend.
+
+```
+sudo systemctl restart rustadmin-backend
+```
+
+## Steam Setup
+
+```
+STEAM_OPENID_RETURN_URL=https://panel.yourdomain.com/api/auth/steam/callback
+STEAM_OPENID_REALM=https://panel.yourdomain.com
+TEAM_AUTH_STATE_SECRET=long_random_secret
+```
+
+Restart again.
+
+## Test Login
+
+Visit:
+
+```
+https://panel.yourdomain.com/request.html
+```
+
+Login with Discord → Steam.
+
+---
+
+# 3) Create admin accounts and roles
+
+Login with:
+
+```
+admin / admin123
+```
+
+Change password immediately.
+
+## Add staff manually
+
+1. Go to **Users**  
+2. Click **New User**  
+3. Enter username, email, temp password  
+4. Assign a role (Admin / Moderator / Viewer)
+
+---
+
+# 4) Connect a Rust server
+
+1. Go to: **Settings → Servers**  
+2. Click **Add Server**  
+3. Enter server name, IP, RCON port, RCON password  
+4. Save  
+
+Panel shows:
+- Online status  
+- Player list  
+- Map data (once uploaded)
+
+---
+
+# 5) Ban or unban a player
+
+## Ban
+
+1. Open **Players**  
+2. Search  
+3. Click the player  
+4. Click **Ban**  
+5. Add reason  
+6. Confirm  
+
+## Unban
+
+Open profile → **Unban**
+
+---
+
+# 6) Audit logs and exports
+
+1. Open **Audit Log**  
+2. Filter by user/action/date  
+3. Export CSV for reports
+
+---
+
+# 7) Discord Bot + Ticket Panel
+
+## .env entries
+
+```
+DISCORD_BOT_TOKEN=xxxx
+DISCORD_GUILD_ID=xxxx
+DISCORD_TICKET_PANEL_CHANNEL_ID=xxxx
+```
+
+Restart bot:
+
+```
+sudo systemctl restart rustadmin-discord-bot
+```
+
+## Create panel in Discord
+
+In panel → **Discord Tickets → Create Ticket Panel**
+
+Players click → thread opens → staff reply → close when done.
+
+---
+
+# 8) Maps and wipes
+
+## Upload map
+
+1. Go to **Maps**  
+2. Upload PNG (square)  
+3. Assign to server  
+
+## Before wipe
+Duplicate map → name it with wipe date.
+
+## After wipe
+Set new active map.
+
+---
+
+# 9) Server announcements
+
+1. Go to **Announcements**  
+2. Click **New Announcement**  
+3. Enter schedule + message  
+4. Select target servers  
+5. Save  
+
+---
+
+# 10) Backups and updates
+
+## Back up before updating:
+
+- `.env`
+- Database directory
+
+## Update (Docker)
+
+```
+docker-compose pull
+docker-compose up -d
+```
+
+## Update (Linux)
+
+```
+bash scripts/install-linux.sh
+sudo systemctl restart rustadmin-backend
+sudo systemctl restart rustadmin-discord-bot
+```
+
+---
+
+# 11) Troubleshooting Tips
+
+- Live map not updating → wrong RCON password/port or firewall  
+- OAuth failing → check redirect URLs  
+- Map upload failing → reverse proxy too small body limit  
+- Discord bot offline → wrong token or firewall  
+- Staff can't log in → wrong role/password  
+
+---
+
+# 12) Change backend settings safely
+
+## Edit settings
+
+```
+sudo nano /opt/rustadmin/backend/.env
+```
+
+## Save
+
+- `Ctrl+O` → Enter  
+- `Ctrl+X`
+
+## Restart
+
+```
+sudo systemctl restart rustadmin-backend
+sudo systemctl restart rustadmin-discord-bot
+```
+
+## Verify
+
+Open the panel → log in → check servers + bot.
+
