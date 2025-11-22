@@ -45,6 +45,7 @@ This document summarizes the purpose of the key files and directories that make 
 - `module-usage-report.md` – Inventory linking each major source file to its responsibilities, helping maintainers spot unused assets or stale modules quickly.【F:docs/module-usage-report.md†L1-L120】
 - `live-map-icon-gallery.md` – Reference gallery that showcases the available live-map icons and explains when each should be used for in-game events.【F:docs/live-map-icon-gallery.md†L1-L120】
 - `team-auth-oauth.md` – Step-by-step instructions for configuring Discord and Steam OAuth so the `/request.html` team-auth flow can complete successfully, including environment variables and troubleshooting guidance.【F:docs/team-auth-oauth.md†L1-L68】
+- `tutorials.md` – Tutorial section with end-to-end setup guidance, OAuth configuration steps, server connection tips, and walkthroughs for common moderation flows like banning players.【F:docs/tutorials.md†L1-L74】
 - `assets/icons/map/` – Standalone SVG exports of the live map vector icons for documentation and design reviews.
 
 ## Deployment configuration (`deploy/`)

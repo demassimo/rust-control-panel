@@ -18,9 +18,11 @@ sudo bash scripts/install-linux.sh
 
 Need a tour of the codebase? Check out [`FILES.md`](FILES.md) for a high-level description of each file and directory.
 
+Looking for a step-by-step walkthrough? The [tutorial guides](docs/tutorials.md) cover installation, OAuth setup, server connections, moderation, Discord tickets, announcements, maps/wipes, and backup/upgrade routines with non-technical explanations for backend settings.
+
 ## Environment configuration
 
-The backend service reads its environment variables from `/opt/rustadmin/backend/.env`. If you deploy to a different base
+The backend service reads its environment variables from `/opt/rustadmin/backend/.env`. Open this file with `sudo nano /opt/rustadmin/backend/.env` to adjust settings without uploading new files. If you deploy to a different base
 directory, update your systemd service or deployment scripts so they point to the actual `.env` location before starting the
 backend.
 
@@ -82,6 +84,8 @@ Team authentication links now rely on OAuth flows for both Discord and Steam. Co
 - `STEAM_OPENID_REALM` — optional OpenID realm sent to Steam (defaults to the request origin).
 - `TEAM_AUTH_STATE_SECRET` — secret used to sign OAuth state and session cookies (falls back to `JWT_SECRET`, but a dedicated value is recommended).
 
+The bot credentials for Discord tickets (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_TICKET_PANEL_CHANNEL_ID`) also live in this file, but the ticket panel itself is created from the web UI—once the bot variables are set, publish the panel from **Discord tickets → Create ticket panel**.
+
 With these values in place the `/request.html` flow prompts users to sign in with both providers before the panel links their Steam ID to their Discord account, assigns the configured team-auth role, and gives staff better visibility into potential alternate accounts.
 
 See [docs/team-auth-oauth.md](docs/team-auth-oauth.md) for a full walkthrough that covers provider setup, required environment variables, and troubleshooting tips for the linking flow.
@@ -89,7 +93,7 @@ See [docs/team-auth-oauth.md](docs/team-auth-oauth.md) for a full walkthrough th
 ## Access control
 
 - On first boot the panel seeds an `admin / admin123` account; sign in and change it immediately.
-- Admins can invite teammates from the **Team access** card in the UI — accounts can be promoted or removed at any time.
+- Team invites are not available in this build yet; create staff accounts manually from **Users → New user** and adjust their role after they sign in.
 - To allow public self-registration set `ALLOW_REGISTRATION=true` in the backend environment (defaults to disabled).
 - Set `JWT_SECRET` to a long random value to secure issued session tokens.
 
