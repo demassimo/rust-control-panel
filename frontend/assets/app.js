@@ -119,12 +119,10 @@
     lastUpdate: 'Last update timestamp'
   };
 
-  const superuserUi = Boolean(typeof window !== 'undefined' && window.SUPERUSER_MODE);
-  const defaultPanel = superuserUi
-    ? 'admin'
-    : (typeof window !== 'undefined' && window.DEFAULT_PANEL)
-      ? String(window.DEFAULT_PANEL)
-      : 'dashboard';
+  const superuserUi = false;
+  const defaultPanel = (typeof window !== 'undefined' && window.DEFAULT_PANEL)
+    ? String(window.DEFAULT_PANEL)
+    : 'dashboard';
   const state = {
     API: '',
     TOKEN: localStorage.getItem('token') || '',
@@ -4794,13 +4792,13 @@
   }
 
   function applyPermissionGates() {
-    const adminOnlyMode = state.superuserUi === true;
+    const adminOnlyMode = false;
     const canManageServers = adminOnlyMode ? false : hasGlobalPermission('manageServers');
     const canManageUsers = adminOnlyMode ? false : hasGlobalPermission('manageUsers');
     const canManageRoles = adminOnlyMode ? false : hasGlobalPermission('manageRoles');
     const canAccessTeam = adminOnlyMode ? false : (canManageUsers || canManageRoles);
     const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
-    const canAccessAdminPanel = isSuperuser() && hasGlobalPermission('manageUsers');
+    const canAccessAdminPanel = isSuperuser();
     if (addServerPrompt) {
       addServerPrompt.classList.toggle('hidden', !canManageServers);
       addServerPrompt.setAttribute('aria-hidden', canManageServers ? 'false' : 'true');
@@ -4897,11 +4895,11 @@
   }
 
   function switchPanel(panel = 'dashboard') {
-    const adminOnlyMode = state.superuserUi === true;
+    const adminOnlyMode = false;
     const superuser = isSuperuser();
     const canAccessTeam = adminOnlyMode ? false : (hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles'));
     const canAccessLinked = adminOnlyMode ? false : canAccessTeam;
-    const canAccessAdmin = adminOnlyMode ? superuser : (superuser && hasGlobalPermission('manageUsers'));
+    const canAccessAdmin = superuser;
     const canAccessDiscord = adminOnlyMode ? false : canManageTeamDiscord();
     const canAccessSettings = Boolean(state.currentUser);
     const fallbackPanel = adminOnlyMode
@@ -8869,14 +8867,14 @@
   }
 
   function updateTeamAccessView({ refreshUsers = false, refreshAdmin = false } = {}) {
-    const adminOnlyMode = state.superuserUi === true;
+    const adminOnlyMode = false;
     const superuser = isSuperuser();
     const canUsers = adminOnlyMode ? false : hasGlobalPermission('manageUsers');
     const canRoles = adminOnlyMode ? false : hasGlobalPermission('manageRoles');
     const canAccessTeam = adminOnlyMode ? false : (canUsers || canRoles);
     const canManageDiscord = adminOnlyMode ? false : canManageTeamDiscord();
     const canAccessLinked = adminOnlyMode ? false : (canUsers || canRoles);
-    const canAccessAdmin = superuser && hasGlobalPermission('manageUsers');
+    const canAccessAdmin = superuser;
 
     if (navDashboard) {
       navDashboard.classList.toggle('hidden', adminOnlyMode);
@@ -9486,10 +9484,6 @@
     });
     navAdmin?.addEventListener('click', () => {
       if (navAdmin.disabled) return;
-      if (!state.superuserUi) {
-        window.location.href = '/superuser/ui/';
-        return;
-      }
       hideWorkspace('nav');
       switchPanel('admin');
       closeProfileMenu();
