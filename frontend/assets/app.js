@@ -149,7 +149,15 @@
     allowRegistration: false,
     statusTimer: null,
     settings: {},
-    security: { totpEnabled: false, passkeys: [], pendingSecret: null, backupCodes: [], backupCodesRemaining: 0, loaded: false },
+    security: {
+      totpEnabled: false,
+      passkeys: [],
+      pendingSecret: null,
+      backupCodes: [],
+      backupCodesRemaining: 0,
+      loaded: false,
+      lastLoadedAt: null
+    },
     activePanel: defaultPanel,
     activeTeamId: null,
     activeTeamName: null,
@@ -4948,6 +4956,35 @@
     const isAdmin = nextPanel === 'admin';
 
     if (isSettings) {
+      const apiBase = state.API || '(unset)';
+      const storedApiBase = (() => {
+        try { return normalizeApiBase(localStorage.getItem('apiBase')); } catch { return ''; }
+      })();
+      const locationHref = typeof window !== 'undefined' ? window.location?.href : '(no-window)';
+      const securityLoaded = Boolean(state.security.loaded);
+      const securityLastLoadedAt = state.security.lastLoadedAt || null;
+      logMfa('opening settings panel', {
+        api: apiBase,
+        storedApiBase,
+        location: locationHref,
+        tokenPresent: Boolean(state.TOKEN),
+        securityLoaded,
+        securityLastLoadedAt
+      });
+      const shouldReloadSecurity = !securityLoaded;
+      if (shouldReloadSecurity) {
+        loadSecuritySettings().catch((err) => {
+          const detail = describeError(err);
+          logMfa('settings panel security reload failed', { api: apiBase, error: detail });
+        });
+      } else {
+        logMfa('settings panel using cached security', {
+          totpEnabled: state.security.totpEnabled,
+          passkeys: Array.isArray(state.security.passkeys) ? state.security.passkeys.length : 0,
+          backupCodesRemaining: state.security.backupCodesRemaining,
+          lastLoadedAt: securityLastLoadedAt
+        });
+      }
       dashboardPanel?.classList.add('hidden');
       workspacePanel?.classList.add('hidden');
       teamPanel?.classList.add('hidden');
@@ -5321,6 +5358,18 @@
   function detectDefaultApiBase() {
     const hasWindow = typeof window !== 'undefined' && window?.location;
     const stored = normalizeApiBase(localStorage.getItem('apiBase'));
+    const query = (() => {
+      if (!hasWindow) return '';
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        const raw = params.get('api') || params.get('apiBase') || params.get('api_base');
+        const normalized = normalizeApiBase(raw);
+        if (normalized) logMfa('api base override detected from query', { base: normalized });
+        return normalized;
+      } catch {
+        return '';
+      }
+    })();
 
     const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
     if (metaContent) {
@@ -5342,6 +5391,8 @@
         if (normalizedMeta) return normalizedMeta;
       }
     }
+
+    if (query) return query;
 
     if (stored) return stored;
 
@@ -5367,8 +5418,11 @@
 
   async function resolveApiBase() {
     const candidates = [];
+
     const detected = detectDefaultApiBase();
-    if (detected) candidates.push({ base: detected, source: 'detected' });
+    if (detected && !candidates.some((c) => c.base === detected)) {
+      candidates.push({ base: detected, source: 'detected' });
+    }
 
     const relative = normalizeApiBase('./api');
     if (relative && !candidates.some((c) => c.base === relative)) {
@@ -7168,7 +7222,15 @@
     localStorage.removeItem('token');
     state.serverItems.clear();
     state.settings = {};
-    state.security = { totpEnabled: false, passkeys: [], pendingSecret: null, backupCodes: [], backupCodesRemaining: 0, loaded: false };
+    state.security = {
+      totpEnabled: false,
+      passkeys: [],
+      pendingSecret: null,
+      backupCodes: [],
+      backupCodesRemaining: 0,
+      loaded: false,
+      lastLoadedAt: null
+    };
     state.pendingMfa = null;
     state.activePanel = 'dashboard';
     state.roles = [];
@@ -9200,8 +9262,19 @@
       logMfa('skipping security load, no token present');
       return;
     }
-    if (!state.TOKEN) return;
-    logMfa('loading security settings', { api: state.API || '(unset)', tokenPresent: Boolean(state.TOKEN) });
+    const apiBase = state.API || '(unset)';
+    const endpoint = `${apiBase}/me/security`;
+    const locationHref = typeof window !== 'undefined' ? window.location?.href : '(no-window)';
+    const storedApiBase = (() => {
+      try { return normalizeApiBase(localStorage.getItem('apiBase')); } catch { return ''; }
+    })();
+    logMfa('loading security settings', {
+      api: apiBase,
+      endpoint,
+      tokenPresent: Boolean(state.TOKEN),
+      location: locationHref,
+      storedApiBase
+    });
     hideNotice(mfaStatusMessage);
     hideNotice(passkeyStatus);
     try {
@@ -9213,29 +9286,36 @@
         pendingSecret: null,
         backupCodes: [],
         backupCodesRemaining: Number(data?.backupCodesRemaining) || 0,
-        loaded: true
+        loaded: true,
+        lastLoadedAt: Date.now()
       };
       logMfa('security settings loaded', {
-        api: state.API || '(unset)',
+        api: apiBase,
         totpEnabled: state.security.totpEnabled,
         passkeys: Array.isArray(state.security.passkeys) ? state.security.passkeys.length : 0,
-        backupCodesRemaining: state.security.backupCodesRemaining
+        backupCodesRemaining: state.security.backupCodesRemaining,
+        lastLoadedAt: state.security.lastLoadedAt
       });
       renderSecuritySettings();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else {
         const detail = describeError(err);
-        const base = state.API || '(unset)';
-        logMfa('failed to load security settings', { api: base, error: detail });
-        ui.log(`Failed to load security info from ${base}: ${detail}`);
+        logMfa('failed to load security settings', {
+          api: apiBase,
+          endpoint,
+          error: detail,
+          status: err?.status || null,
+          code: errorCode(err)
+        });
+        ui.log(`Failed to load security info from ${apiBase}: ${detail}`);
         if (mfaStatusLabel) {
           mfaStatusLabel.textContent = 'Unavailable';
           mfaStatusLabel.classList.remove('success');
         }
         showNotice(
           mfaStatusMessage,
-          `Unable to check 2FA status at ${base}. Check the browser console for details.`,
+          `Unable to check 2FA status at ${apiBase}. Check the browser console for details.`,
           'error'
         );
       }
@@ -9739,8 +9819,13 @@
       closeProfileMenu();
     });
     navSettings?.addEventListener('click', () => {
+      logMfa('nav settings clicked', {
+        api: state.API || '(unset)',
+        tokenPresent: Boolean(state.TOKEN),
+        securityLoaded: Boolean(state.security.loaded),
+        securityLastLoadedAt: state.security.lastLoadedAt || null
+      });
       hideWorkspace('nav');
-      loadSecuritySettings();
       switchPanel('settings');
       closeProfileMenu();
     });
