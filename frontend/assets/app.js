@@ -132,6 +132,10 @@
     }
   };
 
+  logMfa('browser logger ready', {
+    page: typeof window !== 'undefined' ? window.location?.href : '(no-window)'
+  });
+
   const superuserUi = false;
   const defaultPanel = (typeof window !== 'undefined' && window.DEFAULT_PANEL)
     ? String(window.DEFAULT_PANEL)
@@ -5309,6 +5313,7 @@
     if (typeof window !== 'undefined') {
       window.API_BASE = normalized;
     }
+    logMfa('api base set', { base: normalized });
     emitWorkspaceEvent('workspace:api-base', { base: normalized });
     loadPublicConfig();
   }
@@ -5370,10 +5375,17 @@
       candidates.push({ base: relative, source: 'relative' });
     }
 
+    logMfa('probing api base', { candidates: candidates.map((c) => c.base) });
+
     for (const { base, source } of candidates) {
       const probe = await probeApiBase(base);
       if (probe.ok) {
         ui.log(`Connected to API at ${base} (${source}).`);
+        logMfa('api base reachable', { base, source });
+        return base;
+      }
+      ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
+      logMfa('api base probe failed', { base, source, error: probe.error || 'unknown error' });
         return base;
       }
       ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
@@ -5381,10 +5393,12 @@
 
     if (candidates[0]?.base) {
       ui.log(`Falling back to API base ${candidates[0].base} without connectivity verification.`);
+      logMfa('api base fallback without verification', { base: candidates[0].base });
       return candidates[0].base;
     }
 
     ui.log('No API base detected; defaulting to ./api.');
+    logMfa('api base defaulted', { base: './api' });
     return './api';
   }
 
@@ -9181,6 +9195,10 @@
   }
 
   async function loadSecuritySettings() {
+    if (!state.TOKEN) {
+      logMfa('skipping security load, no token present');
+      return;
+    }
     if (!state.TOKEN) return;
     logMfa('loading security settings', { api: state.API || '(unset)', tokenPresent: Boolean(state.TOKEN) });
     hideNotice(mfaStatusMessage);
