@@ -119,6 +119,19 @@
     lastUpdate: 'Last update timestamp'
   };
 
+  const logMfa = (message, details = {}) => {
+    try {
+      const safeDetails = { ...details };
+      if (safeDetails.secret) delete safeDetails.secret;
+      if (Array.isArray(safeDetails.backupCodes)) {
+        safeDetails.backupCodes = `(${safeDetails.backupCodes.length} codes hidden)`;
+      }
+      console.info('[mfa]', message, safeDetails);
+    } catch (err) {
+      console.warn('[mfa] log failed', err);
+    }
+  };
+
   const superuserUi = false;
   const defaultPanel = (typeof window !== 'undefined' && window.DEFAULT_PANEL)
     ? String(window.DEFAULT_PANEL)
@@ -5335,6 +5348,46 @@
     return normalizeApiBase('http://localhost');
   }
 
+  async function probeApiBase(base) {
+    const target = `${base}/public-config`;
+    try {
+      const res = await fetch(target, { cache: 'no-store' });
+      if (res.ok) return { ok: true };
+      return { ok: false, error: `status ${res.status}` };
+    } catch (err) {
+      const message = err?.message || String(err);
+      return { ok: false, error: message };
+    }
+  }
+
+  async function resolveApiBase() {
+    const candidates = [];
+    const detected = detectDefaultApiBase();
+    if (detected) candidates.push({ base: detected, source: 'detected' });
+
+    const relative = normalizeApiBase('./api');
+    if (relative && !candidates.some((c) => c.base === relative)) {
+      candidates.push({ base: relative, source: 'relative' });
+    }
+
+    for (const { base, source } of candidates) {
+      const probe = await probeApiBase(base);
+      if (probe.ok) {
+        ui.log(`Connected to API at ${base} (${source}).`);
+        return base;
+      }
+      ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
+    }
+
+    if (candidates[0]?.base) {
+      ui.log(`Falling back to API base ${candidates[0].base} without connectivity verification.`);
+      return candidates[0].base;
+    }
+
+    ui.log('No API base detected; defaulting to ./api.');
+    return './api';
+  }
+
   async function loadPublicConfig() {
     if (!state.API) return;
     try {
@@ -5346,6 +5399,8 @@
     } catch {
       state.allowRegistration = false;
       updateRegisterUi('Unable to reach the server for registration info.');
+      const base = state.API || '(unset)';
+      ui.log(`Public config fetch failed at ${base}.`);
     }
   }
 
@@ -9127,6 +9182,7 @@
 
   async function loadSecuritySettings() {
     if (!state.TOKEN) return;
+    logMfa('loading security settings', { api: state.API || '(unset)', tokenPresent: Boolean(state.TOKEN) });
     hideNotice(mfaStatusMessage);
     hideNotice(passkeyStatus);
     try {
@@ -9140,15 +9196,36 @@
         backupCodesRemaining: Number(data?.backupCodesRemaining) || 0,
         loaded: true
       };
+      logMfa('security settings loaded', {
+        api: state.API || '(unset)',
+        totpEnabled: state.security.totpEnabled,
+        passkeys: Array.isArray(state.security.passkeys) ? state.security.passkeys.length : 0,
+        backupCodesRemaining: state.security.backupCodesRemaining
+      });
       renderSecuritySettings();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else ui.log('Failed to load security info: ' + describeError(err));
+      else {
+        const detail = describeError(err);
+        const base = state.API || '(unset)';
+        logMfa('failed to load security settings', { api: base, error: detail });
+        ui.log(`Failed to load security info from ${base}: ${detail}`);
+        if (mfaStatusLabel) {
+          mfaStatusLabel.textContent = 'Unavailable';
+          mfaStatusLabel.classList.remove('success');
+        }
+        showNotice(
+          mfaStatusMessage,
+          `Unable to check 2FA status at ${base}. Check the browser console for details.`,
+          'error'
+        );
+      }
     }
   }
 
   async function startTotpSetup() {
     hideNotice(mfaStatusMessage);
+    logMfa('starting totp setup', { api: state.API || '(unset)' });
     try {
       const data = await api('/me/security/totp/setup', {}, 'POST');
       state.security.pendingSecret = { secret: data.secret, uri: data.uri, qr: data.qr };
@@ -9157,15 +9234,21 @@
         'Scan the QR code with Google Authenticator, Bitwarden, or another TOTP app, then enter the current code.',
         'success'
       );
+      logMfa('totp setup secret received', { api: state.API || '(unset)', qr: Boolean(data?.qr) });
       renderSecuritySettings();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else showNotice(mfaStatusMessage, describeError(err), 'error');
+      else {
+        const detail = describeError(err);
+        logMfa('totp setup failed', { api: state.API || '(unset)', error: detail });
+        showNotice(mfaStatusMessage, detail, 'error');
+      }
     }
   }
 
   async function enableTotp() {
     hideNotice(mfaStatusMessage);
+    logMfa('enabling totp', { api: state.API || '(unset)' });
     const code = totpCodeInput?.value.trim();
     if (!code) {
       showNotice(mfaStatusMessage, describeError('missing_fields'), 'error');
@@ -9187,14 +9270,24 @@
       state.security.backupCodesRemaining = state.security.backupCodes.length || 0;
       renderSecuritySettings();
       showNotice(mfaStatusMessage, 'Two-factor authentication is enabled. Save your backup codes now.', 'success');
+      logMfa('totp enabled', {
+        api: state.API || '(unset)',
+        backupCodes: state.security.backupCodes,
+        backupCodesRemaining: state.security.backupCodesRemaining
+      });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else showNotice(mfaStatusMessage, describeError(err), 'error');
+      else {
+        const detail = describeError(err);
+        logMfa('totp enable failed', { api: state.API || '(unset)', error: detail });
+        showNotice(mfaStatusMessage, detail, 'error');
+      }
     }
   }
 
   async function disableTotp() {
     hideNotice(mfaStatusMessage);
+    logMfa('disabling totp', { api: state.API || '(unset)' });
     const password = await ui.prompt({
       title: 'Disable two-factor auth',
       message: 'Enter your current password to disable 2FA.',
@@ -9210,14 +9303,20 @@
       state.security.backupCodesRemaining = 0;
       renderSecuritySettings();
       showNotice(mfaStatusMessage, 'Two-factor authentication has been disabled.', 'success');
+      logMfa('totp disabled', { api: state.API || '(unset)' });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else showNotice(mfaStatusMessage, describeError(err), 'error');
+      else {
+        const detail = describeError(err);
+        logMfa('totp disable failed', { api: state.API || '(unset)', error: detail });
+        showNotice(mfaStatusMessage, detail, 'error');
+      }
     }
   }
 
   async function generateBackupCodes() {
     hideNotice(mfaStatusMessage);
+    logMfa('generating backup codes', { api: state.API || '(unset)' });
     if (!state.security.totpEnabled) {
       showNotice(mfaStatusMessage, 'Enable two-factor authentication before generating backup codes.', 'error');
       return;
@@ -9228,9 +9327,14 @@
       state.security.backupCodesRemaining = state.security.backupCodes.length || 0;
       renderSecuritySettings();
       showNotice(mfaStatusMessage, 'New backup codes generated. Store them safely.', 'success');
+      logMfa('backup codes generated', { api: state.API || '(unset)', backupCodes: state.security.backupCodes });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
-      else showNotice(mfaStatusMessage, describeError(err), 'error');
+      else {
+        const detail = describeError(err);
+        logMfa('backup code generation failed', { api: state.API || '(unset)', error: detail });
+        showNotice(mfaStatusMessage, detail, 'error');
+      }
     }
   }
 
@@ -9468,6 +9572,11 @@
           methods: err.body?.methods || {},
           passkeyOptions: err.body?.passkeyOptions || null
         };
+        logMfa('login mfa required', {
+          ticket: state.pendingMfa.ticket ? 'present' : 'missing',
+          methods: state.pendingMfa.methods,
+          hasPasskeyOptions: Boolean(state.pendingMfa.passkeyOptions)
+        });
         showMfaPrompt();
       } else {
         showNotice(loginError, describeError(err), 'error');
@@ -9797,7 +9906,8 @@
   }
 
   async function init() {
-    setApiBase(detectDefaultApiBase());
+    const resolvedBase = await resolveApiBase();
+    setApiBase(resolvedBase);
     bindEvents();
     applyPermissionGates();
     if (state.TOKEN) {
