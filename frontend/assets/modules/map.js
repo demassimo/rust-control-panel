@@ -24,6 +24,19 @@
 
   const markerAnimationStates = new Map();
 
+  function closeFullscreenWindow() {
+    const activeFullscreen = document?.fullscreenElement;
+    if (activeFullscreen && typeof document.exitFullscreen === 'function') {
+      document.exitFullscreen().catch(() => {});
+    }
+
+    const popup = window.__mapFullscreenWindow;
+    if (popup && typeof popup.close === 'function') {
+      try { popup.close(); } catch { /* ignore */ }
+    }
+    window.__mapFullscreenWindow = null;
+  }
+
   function svgDataUri(svg) {
     const source = typeof svg === 'string' ? svg.trim() : '';
     return `url("data:image/svg+xml,${encodeURIComponent(source)}")`;
