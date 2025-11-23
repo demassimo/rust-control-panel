@@ -267,11 +267,22 @@ configure_backend_env() {
 }
 
 run_backend_migrations() {
-  log "Ensuring database schema is up to date"
+  log "Database migration step"
   if [ ! -f "$INSTALL_DIR/backend/.env" ]; then
     warn "Backend .env not found; skipping database migration"
     return
   fi
+
+  if ! [ -t 0 ]; then
+    warn "Non-interactive session detected; skipping automatic migrations. Run 'npm run migrate' from $INSTALL_DIR/backend after preparing the database."
+    return
+  fi
+
+  if ! prompt_confirm "Run database migrations now? (recommended for upgrades when the database already exists)" "n"; then
+    log "Skipping database migration. Run 'npm run migrate' from $INSTALL_DIR/backend once your database is ready."
+    return
+  fi
+
   (cd "$INSTALL_DIR/backend" && npm run migrate --silent)
 }
 

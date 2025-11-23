@@ -286,7 +286,9 @@ export function parseDiscordBotConfig(raw) {
       value = JSON.parse(raw);
     } catch {
       value = {};
+    }
   }
+  return cloneDiscordBotConfig(value);
 }
 
 export function parseTeamDiscordConfig(raw) {
@@ -306,8 +308,6 @@ export function parseTeamDiscordConfig(raw) {
 
 export function encodeTeamDiscordConfig(config = DEFAULT_TEAM_DISCORD_CONFIG) {
   return JSON.stringify(normaliseTeamDiscordConfig(config));
-}
-  return cloneDiscordBotConfig(value);
 }
 
 export function encodeDiscordBotConfig(config) {
