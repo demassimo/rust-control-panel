@@ -86,14 +86,18 @@
     const meta = document.querySelector('meta[name="panel-api-base"]')?.content;
     if (meta) {
       if (typeof window !== 'undefined' && window.location) {
-        try {
-          const metaUrl = new URL(meta, window.location.origin);
-          const normalizedMeta = normalizeApiBase(metaUrl.href);
-          if (normalizedMeta) return normalizedMeta;
-        } catch {
-          const normalizedMeta = normalizeApiBase(meta);
-          if (normalizedMeta) return normalizedMeta;
+        const locationBase = window.location.href || window.location.origin;
+        if (locationBase) {
+          try {
+            const metaUrl = new URL(meta, locationBase);
+            const normalizedMeta = normalizeApiBase(metaUrl.href);
+            if (normalizedMeta) return normalizedMeta;
+          } catch {
+            // fall through to raw meta value
+          }
         }
+        const normalizedMeta = normalizeApiBase(meta);
+        if (normalizedMeta) return normalizedMeta;
       } else {
         const normalizedMeta = normalizeApiBase(meta);
         if (normalizedMeta) return normalizedMeta;
