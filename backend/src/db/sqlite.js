@@ -1,16 +1,56 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import Database from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { serializeCombatLogPayload } from './combat-log.js';
 import { encodeTeamDiscordConfig, parseTeamDiscordConfig } from '../discord-config.js';
 
 export default {
   async connect({ file }) {
-    const dbh = await open({ filename: file, driver: sqlite3.Database });
+    const dbh = createDriver(file);
     await dbh.exec('PRAGMA foreign_keys = ON;');
     return createApi(dbh, 'sqlite');
   }
 };
+
+function createDriver(file) {
+  const db = new Database(file);
+  const applyParams = (fn, params) => {
+    if (params === undefined) return fn();
+    if (Array.isArray(params)) return fn(...params);
+    return fn(params);
+  };
+  const normaliseInsertId = (value) => (typeof value === 'bigint' ? Number(value) : value);
+  const mapRunResult = (result = {}) => ({
+    changes: result.changes ?? 0,
+    lastID: normaliseInsertId(result.lastInsertRowid)
+  });
+  return {
+    async exec(sql) {
+      db.exec(sql);
+    },
+    async get(sql, params) {
+      const stmt = db.prepare(sql);
+      return applyParams(stmt.get.bind(stmt), params);
+    },
+    async all(sql, params) {
+      const stmt = db.prepare(sql);
+      return applyParams(stmt.all.bind(stmt), params);
+    },
+    async run(sql, params) {
+      const stmt = db.prepare(sql);
+      const result = applyParams(stmt.run.bind(stmt), params);
+      return mapRunResult(result);
+    },
+    async prepare(sql) {
+      const stmt = db.prepare(sql);
+      return {
+        run: (...params) => Promise.resolve(mapRunResult(stmt.run(...params))),
+        get: (...params) => Promise.resolve(stmt.get(...params)),
+        all: (...params) => Promise.resolve(stmt.all(...params)),
+        finalize: () => Promise.resolve()
+      };
+    }
+  };
+}
 
 function createApi(dbh, dialect) {
   const escapeLike = (value) => String(value).replace(/[\\%_]/g, (match) => `\\${match}`);

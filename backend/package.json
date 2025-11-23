@@ -9,21 +9,20 @@
     "migrate": "node --input-type=module -e \"import('dotenv/config'); import('./src/db/index.js').then(({ initDb }) => initDb()).then(() => console.log('Database schema ensured')).catch((err) => { console.error('Database migration failed', err); process.exit(1); });\""
   },
   "dependencies": {
+    "better-sqlite3": "^12.4.6",
     "@simplewebauthn/server": "^13.2.2",
-    "bcrypt": "^5.1.1",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "discord.js": "^14.15.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "geoip-lite": "^1.4.7",
+    "geoip-lite2": "^2.2.7",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "mysql2": "^3.11.0",
     "otplib": "^12.0.1",
     "qrcode": "^1.5.4",
     "socket.io": "^4.7.5",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
     "ws": "^8.18.0"
   }
 }
