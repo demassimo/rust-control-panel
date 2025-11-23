@@ -17,6 +17,10 @@ log() {
   echo "[*] $*"
 }
 
+warn() {
+  echo "[!] $*" >&2
+}
+
 require_root() {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
     echo "[!] This installer must be run as root (try: sudo bash scripts/install-linux.sh)" >&2
@@ -262,6 +266,15 @@ configure_backend_env() {
   } >"$env_file"
 }
 
+run_backend_migrations() {
+  log "Ensuring database schema is up to date"
+  if [ ! -f "$INSTALL_DIR/backend/.env" ]; then
+    warn "Backend .env not found; skipping database migration"
+    return
+  fi
+  (cd "$INSTALL_DIR/backend" && npm run migrate --silent)
+}
+
 install_backend_service() {
   log "Installing systemd service"
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -327,6 +340,7 @@ main() {
   copy_sources
   setup_backend
   configure_backend_env
+  run_backend_migrations
   finalize_permissions
   install_backend_service
   install_discord_bot_service

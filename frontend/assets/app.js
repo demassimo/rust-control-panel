@@ -132,7 +132,7 @@
     allowRegistration: false,
     statusTimer: null,
     settings: {},
-    security: { totpEnabled: false, passkeys: [], pendingSecret: null, loaded: false },
+    security: { totpEnabled: false, passkeys: [], pendingSecret: null, backupCodes: [], backupCodesRemaining: 0, loaded: false },
     activePanel: defaultPanel,
     activeTeamId: null,
     activeTeamName: null,
@@ -228,7 +228,11 @@
   const passwordStatus = $('#passwordStatus');
   const mfaStatusLabel = $('#mfaStatus');
   const totpSecretValue = $('#totpSecret');
-  const totpUriValue = $('#totpUri');
+  const totpQrImage = $('#totpQr');
+  const btnCopyTotpSecret = $('#btnCopyTotpSecret');
+  const backupCodesList = $('#backupCodesList');
+  const backupCodesInfo = $('#backupCodesInfo');
+  const btnGenerateBackupCodes = $('#btnGenerateBackupCodes');
   const totpSetupFields = $('#totpSetupFields');
   const totpCodeInput = $('#totpCode');
   const btnStartTotp = $('#btnStartTotp');
@@ -5117,6 +5121,7 @@
     mfa_required: 'Two-factor authentication required. Complete verification to continue.',
     invalid_mfa_code: 'The verification code was not accepted.',
     mfa_expired: 'Your verification window expired. Please sign in again.',
+    mfa_not_enabled: 'Enable two-factor authentication to complete this step.',
     no_passkeys: 'No passkeys are registered for this account.',
     passkeys_unavailable: 'Passkeys are not available on this server.',
     registration_expired: 'The registration request expired. Start again.',
@@ -7089,7 +7094,7 @@
     localStorage.removeItem('token');
     state.serverItems.clear();
     state.settings = {};
-    state.security = { totpEnabled: false, passkeys: [], pendingSecret: null, loaded: false };
+    state.security = { totpEnabled: false, passkeys: [], pendingSecret: null, backupCodes: [], backupCodesRemaining: 0, loaded: false };
     state.pendingMfa = null;
     state.activePanel = 'dashboard';
     state.roles = [];
@@ -9050,6 +9055,36 @@
     }
   }
 
+  function renderBackupCodes() {
+    if (!backupCodesList) return;
+    backupCodesList.innerHTML = '';
+    const codes = Array.isArray(state.security.backupCodes) ? state.security.backupCodes : [];
+    if (codes.length) {
+      for (const code of codes) {
+        const li = document.createElement('li');
+        li.className = 'backup-code';
+        li.textContent = code;
+        backupCodesList.appendChild(li);
+      }
+      if (backupCodesInfo) {
+        backupCodesInfo.textContent = 'Each backup code can be used once. Store them somewhere safe.';
+      }
+    } else {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      const remaining = Number(state.security.backupCodesRemaining) || 0;
+      li.textContent = remaining > 0
+        ? `${remaining} unused backup ${remaining === 1 ? 'code' : 'codes'} available. Generate new codes to view them.`
+        : 'Generate backup codes after enabling 2FA to keep an emergency login option.';
+      backupCodesList.appendChild(li);
+      if (backupCodesInfo) backupCodesInfo.textContent = '';
+    }
+    if (btnGenerateBackupCodes) {
+      btnGenerateBackupCodes.disabled = !state.security.totpEnabled;
+      btnGenerateBackupCodes.classList.toggle('hidden', !state.security.totpEnabled);
+    }
+  }
+
   function renderSecuritySettings() {
     const enabled = Boolean(state.security.totpEnabled);
     if (mfaStatusLabel) {
@@ -9060,15 +9095,29 @@
     btnDisableTotp?.classList.toggle('hidden', !enabled);
     btnStartTotp?.classList.toggle('hidden', enabled);
     if (totpSetupFields) {
-      if (state.security.pendingSecret) {
-        totpSetupFields.classList.remove('hidden');
+      const hasPending = Boolean(state.security.pendingSecret);
+      totpSetupFields.classList.toggle('hidden', !hasPending);
+      if (hasPending) {
         if (totpSecretValue) totpSecretValue.textContent = state.security.pendingSecret.secret || '';
-        if (totpUriValue) totpUriValue.textContent = state.security.pendingSecret.uri || '';
+        if (totpQrImage) {
+          const qr = state.security.pendingSecret.qr || '';
+          if (qr) totpQrImage.src = qr;
+          totpQrImage.classList.toggle('hidden', !qr);
+        }
       } else {
-        totpSetupFields.classList.add('hidden');
+        if (totpSecretValue) totpSecretValue.textContent = '';
+        if (totpQrImage) {
+          totpQrImage.src = '';
+          totpQrImage.classList.add('hidden');
+        }
       }
+      btnCopyTotpSecret?.classList.toggle('hidden', !hasPending || !state.security.pendingSecret?.secret);
     }
-    if (totpCodeInput) totpCodeInput.value = '';
+    if (totpCodeInput) {
+      totpCodeInput.value = '';
+      totpCodeInput.placeholder = '123456 or backup code';
+    }
+    renderBackupCodes();
     renderPasskeys();
   }
 
@@ -9083,6 +9132,8 @@
         totpEnabled: Boolean(data?.totpEnabled),
         passkeys: Array.isArray(data?.passkeys) ? data.passkeys : [],
         pendingSecret: null,
+        backupCodes: [],
+        backupCodesRemaining: Number(data?.backupCodesRemaining) || 0,
         loaded: true
       };
       renderSecuritySettings();
@@ -9096,8 +9147,12 @@
     hideNotice(mfaStatusMessage);
     try {
       const data = await api('/me/security/totp/setup', {}, 'POST');
-      state.security.pendingSecret = { secret: data.secret, uri: data.uri };
-      showNotice(mfaStatusMessage, 'Scan the key with your authenticator app and enter the current code.', 'success');
+      state.security.pendingSecret = { secret: data.secret, uri: data.uri, qr: data.qr };
+      showNotice(
+        mfaStatusMessage,
+        'Scan the QR code with Google Authenticator, Bitwarden, or another TOTP app, then enter the current code.',
+        'success'
+      );
       renderSecuritySettings();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
@@ -9117,15 +9172,17 @@
       if (!state.security.pendingSecret?.secret) return;
     }
     try {
-      await api(
+      const result = await api(
         '/me/security/totp/enable',
         { code, secret: state.security.pendingSecret.secret },
         'POST'
       );
       state.security.totpEnabled = true;
       state.security.pendingSecret = null;
+      state.security.backupCodes = Array.isArray(result?.backupCodes) ? result.backupCodes : [];
+      state.security.backupCodesRemaining = state.security.backupCodes.length || 0;
       renderSecuritySettings();
-      showNotice(mfaStatusMessage, 'Two-factor authentication is enabled.', 'success');
+      showNotice(mfaStatusMessage, 'Two-factor authentication is enabled. Save your backup codes now.', 'success');
     } catch (err) {
       if (errorCode(err) === 'unauthorized') handleUnauthorized();
       else showNotice(mfaStatusMessage, describeError(err), 'error');
@@ -9145,6 +9202,8 @@
       await api('/me/security/totp/disable', { currentPassword: password }, 'POST');
       state.security.totpEnabled = false;
       state.security.pendingSecret = null;
+      state.security.backupCodes = [];
+      state.security.backupCodesRemaining = 0;
       renderSecuritySettings();
       showNotice(mfaStatusMessage, 'Two-factor authentication has been disabled.', 'success');
     } catch (err) {
@@ -9153,12 +9212,62 @@
     }
   }
 
-  async function registerPasskey() {
-    hideNotice(passkeyStatus);
-    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
-      showNotice(passkeyStatus, 'Passkeys are not supported in this browser.', 'error');
+  async function generateBackupCodes() {
+    hideNotice(mfaStatusMessage);
+    if (!state.security.totpEnabled) {
+      showNotice(mfaStatusMessage, 'Enable two-factor authentication before generating backup codes.', 'error');
       return;
     }
+    try {
+      const data = await api('/me/security/backup-codes', {}, 'POST');
+      state.security.backupCodes = Array.isArray(data?.codes) ? data.codes : [];
+      state.security.backupCodesRemaining = state.security.backupCodes.length || 0;
+      renderSecuritySettings();
+      showNotice(mfaStatusMessage, 'New backup codes generated. Store them safely.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') handleUnauthorized();
+      else showNotice(mfaStatusMessage, describeError(err), 'error');
+    }
+  }
+
+  async function copyTotpSecret() {
+    if (!state.security.pendingSecret?.secret) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(state.security.pendingSecret.secret);
+        showNotice(mfaStatusMessage, 'Secret copied to your clipboard.', 'success');
+        return;
+      }
+    } catch (err) {
+      ui.log('Clipboard copy failed: ' + (err?.message || err));
+    }
+    showNotice(mfaStatusMessage, 'Copy the secret manually if your browser blocks clipboard access.', 'error');
+  }
+
+  const PASSKEY_SUPPORT_MESSAGE = 'Passkeys require a secure browser with built-in authenticator support (e.g. Windows Hello or Touch ID).';
+
+  async function ensurePasskeySupport(targetNotice) {
+    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
+      if (targetNotice) showNotice(targetNotice, PASSKEY_SUPPORT_MESSAGE, 'error');
+      return false;
+    }
+    if (!window.isSecureContext) {
+      if (targetNotice) showNotice(targetNotice, 'Passkeys need HTTPS (or localhost) to work in this browser.', 'error');
+      return false;
+    }
+    if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function') {
+      const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false);
+      if (!available) {
+        if (targetNotice) showNotice(targetNotice, PASSKEY_SUPPORT_MESSAGE, 'error');
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function registerPasskey() {
+    hideNotice(passkeyStatus);
+    if (!(await ensurePasskeySupport(passkeyStatus))) return;
     try {
       const data = await api('/me/passkeys/options', {}, 'POST');
       const publicKey = preparePublicKeyOptions(data?.options);
@@ -9303,10 +9412,7 @@
       showNotice(loginError, describeError('mfa_expired'), 'error');
       return;
     }
-    if (typeof window === 'undefined' || !window.PublicKeyCredential) {
-      showNotice(loginMfaStatus, 'Passkeys are not supported in this browser.', 'error');
-      return;
-    }
+    if (!(await ensurePasskeySupport(loginMfaStatus))) return;
     try {
       const optPayload = options || (await publicJson('/login/mfa/passkey/options', {
         method: 'POST',
@@ -9526,6 +9632,8 @@
     btnStartTotp?.addEventListener('click', (e) => { e.preventDefault(); startTotpSetup(); });
     btnEnableTotp?.addEventListener('click', (e) => { e.preventDefault(); enableTotp(); });
     btnDisableTotp?.addEventListener('click', (e) => { e.preventDefault(); disableTotp(); });
+    btnGenerateBackupCodes?.addEventListener('click', (e) => { e.preventDefault(); generateBackupCodes(); });
+    btnCopyTotpSecret?.addEventListener('click', (e) => { e.preventDefault(); copyTotpSecret(); });
     btnRegisterPasskey?.addEventListener('click', (e) => { e.preventDefault(); registerPasskey(); });
     btnSubmitMfa?.addEventListener('click', (e) => { e.preventDefault(); submitMfaCode(); });
     btnMfaUsePasskey?.addEventListener('click', (e) => { e.preventDefault(); startPasskeyMfa(); });

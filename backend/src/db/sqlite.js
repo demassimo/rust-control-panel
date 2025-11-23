@@ -413,6 +413,16 @@ function createApi(dbh, dialect) {
           FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_user_passkeys_user ON user_passkeys(user_id);
+        CREATE TABLE IF NOT EXISTS user_backup_codes(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          code_hash TEXT NOT NULL,
+          used INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now')),
+          used_at TEXT,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_backup_codes_user ON user_backup_codes(user_id);
       `);
       const chatCols = await dbh.all("PRAGMA table_info('chat_messages')");
       if (!chatCols.some((c) => c.name === 'color')) {
@@ -520,6 +530,36 @@ function createApi(dbh, dialect) {
     },
     async disableUserMfa(userId) {
       await dbh.run('UPDATE users SET mfa_secret=NULL, mfa_enabled=0 WHERE id=?', [userId]);
+    },
+    async replaceBackupCodes(userId, codeHashes = []) {
+      await dbh.run('DELETE FROM user_backup_codes WHERE user_id=?', [userId]);
+      const stmt = await dbh.prepare('INSERT INTO user_backup_codes(user_id, code_hash) VALUES(?, ?)');
+      try {
+        for (const hash of codeHashes) {
+          await stmt.run(userId, hash);
+        }
+      } finally {
+        await stmt.finalize();
+      }
+    },
+    async countUserBackupCodes(userId) {
+      const row = await dbh.get(
+        'SELECT COUNT(*) AS c FROM user_backup_codes WHERE user_id=? AND used=0',
+        [userId]
+      );
+      return row?.c || 0;
+    },
+    async consumeBackupCode(userId, codeHash) {
+      const row = await dbh.get(
+        'SELECT id FROM user_backup_codes WHERE user_id=? AND code_hash=? AND used=0 LIMIT 1',
+        [userId, codeHash]
+      );
+      if (!row?.id) return false;
+      await dbh.run('UPDATE user_backup_codes SET used=1, used_at=datetime(\'now\') WHERE id=?', [row.id]);
+      return true;
+    },
+    async deleteUserBackupCodes(userId) {
+      await dbh.run('DELETE FROM user_backup_codes WHERE user_id=?', [userId]);
     },
     async listUserPasskeys(userId) {
       return await dbh.all(

@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import geoip from 'geoip-lite';
 import multer from 'multer';
 import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -114,6 +115,8 @@ const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const MAX_DISCORD_MESSAGE_LENGTH = 2000;
 const MAX_DISCORD_TICKET_MESSAGES = 50;
 const TEAM_AUTH_COOKIE_NAME = process.env.TEAM_AUTH_COOKIE_NAME || 'team_auth_session';
+const BACKUP_CODE_COUNT = 8;
+const BACKUP_CODE_LENGTH = 12;
 const TEAM_AUTH_COOKIE_MAX_AGE_MS = (() => {
   const daysRaw = Number(process.env.TEAM_AUTH_COOKIE_MAX_AGE_DAYS);
   const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : 180;
@@ -6167,6 +6170,43 @@ const serialiseTransports = (value) => {
   return list.length ? JSON.stringify(list) : null;
 };
 
+const BACKUP_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const normaliseBackupCode = (value) => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const hashBackupCode = (code) => crypto.createHash('sha256').update(normaliseBackupCode(code)).digest('hex');
+
+const generateBackupCode = () => {
+  const bytes = crypto.randomBytes(BACKUP_CODE_LENGTH);
+  let output = '';
+  for (const byte of bytes) {
+    output += BACKUP_CODE_ALPHABET[byte % BACKUP_CODE_ALPHABET.length];
+  }
+  return output;
+};
+
+const formatBackupCode = (code) => {
+  const normalized = normaliseBackupCode(code);
+  return normalized.match(/.{1,4}/g)?.join('-') || normalized;
+};
+
+const generateBackupCodes = (count = BACKUP_CODE_COUNT) => {
+  const codes = [];
+  for (let i = 0; i < count; i += 1) {
+    codes.push(formatBackupCode(generateBackupCode()));
+  }
+  return codes;
+};
+
+async function storeBackupCodes(userId, codes) {
+  const hashed = codes.map((code) => hashBackupCode(code));
+  await db.replaceBackupCodes(userId, hashed);
+}
+
+async function generateAndStoreBackupCodes(userId) {
+  const codes = generateBackupCodes();
+  await storeBackupCodes(userId, codes);
+  return codes;
+}
+
 function createMfaTicket(userId) {
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = Date.now() + MFA_TICKET_TTL_MS;
@@ -6296,11 +6336,17 @@ app.post('/api/login/mfa/totp', async (req, res) => {
       clearMfaTicket(ticket);
       return res.status(400).json({ error: 'mfa_not_enabled' });
     }
-    const valid = authenticator.check(String(code).trim(), user.mfa_secret);
-    if (!valid) return res.status(401).json({ error: 'invalid_mfa_code' });
+    const cleanCode = String(code).trim();
+    const valid = authenticator.check(cleanCode.replace(/[^0-9]/g, ''), user.mfa_secret);
+    let usedBackupCode = false;
+    if (!valid) {
+      const consumed = await db.consumeBackupCode(user.id, hashBackupCode(cleanCode));
+      if (!consumed) return res.status(401).json({ error: 'invalid_mfa_code' });
+      usedBackupCode = true;
+    }
     clearMfaTicket(ticket);
     const payload = await buildAuthPayload(user);
-    res.json(payload);
+    res.json({ ...payload, usedBackupCode });
   } catch (err) {
     console.error('totp verify failed', err);
     res.status(500).json({ error: 'db_error' });
@@ -6448,7 +6494,10 @@ app.get('/api/me/security', auth, async (req, res) => {
       : [];
     res.json({
       totpEnabled: Boolean(user.mfa_enabled && user.mfa_secret),
-      passkeys: Array.isArray(passkeys) ? passkeys.map(projectPasskey) : []
+      passkeys: Array.isArray(passkeys) ? passkeys.map(projectPasskey) : [],
+      backupCodesRemaining: typeof db.countUserBackupCodes === 'function'
+        ? await db.countUserBackupCodes(user.id)
+        : 0
     });
   } catch (err) {
     console.error('failed to load security settings', err);
@@ -6463,7 +6512,13 @@ app.post('/api/me/security/totp/setup', auth, async (req, res) => {
     const secret = authenticator.generateSecret();
     const label = user.username || 'RustAdmin';
     const uri = authenticator.keyuri(label, PASSKEY_RP_NAME, secret);
-    res.json({ secret, uri });
+    let qr = null;
+    try {
+      qr = await QRCode.toDataURL(uri, { width: 260, margin: 1, errorCorrectionLevel: 'M' });
+    } catch (err) {
+      console.warn('failed to generate totp qr', err);
+    }
+    res.json({ secret, uri, qr });
   } catch (err) {
     console.error('failed to start totp setup', err);
     res.status(500).json({ error: 'db_error' });
@@ -6477,7 +6532,8 @@ app.post('/api/me/security/totp/enable', auth, async (req, res) => {
     const isValid = authenticator.verify({ token: String(code).trim(), secret: String(secret).trim() });
     if (!isValid) return res.status(401).json({ error: 'invalid_mfa_code' });
     await db.setUserMfaSecret(req.user.uid, String(secret).trim(), true);
-    res.json({ ok: true });
+    const backupCodes = await generateAndStoreBackupCodes(req.user.uid);
+    res.json({ ok: true, backupCodes });
   } catch (err) {
     console.error('failed to enable totp', err);
     res.status(500).json({ error: 'db_error' });
@@ -6493,9 +6549,25 @@ app.post('/api/me/security/totp/disable', auth, async (req, res) => {
     const ok = await bcrypt.compare(currentPassword, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid_current_password' });
     await db.disableUserMfa(user.id);
+    await db.deleteUserBackupCodes(user.id);
     res.json({ ok: true });
   } catch (err) {
     console.error('failed to disable totp', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.post('/api/me/security/backup-codes', auth, async (req, res) => {
+  try {
+    const user = await db.getUser(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'not_found' });
+    if (!user.mfa_secret || !user.mfa_enabled) {
+      return res.status(400).json({ error: 'mfa_not_enabled' });
+    }
+    const codes = await generateAndStoreBackupCodes(user.id);
+    res.json({ codes, count: codes.length });
+  } catch (err) {
+    console.error('failed to generate backup codes', err);
     res.status(500).json({ error: 'db_error' });
   }
 });

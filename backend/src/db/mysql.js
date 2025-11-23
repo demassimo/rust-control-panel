@@ -207,6 +207,16 @@ function createApi(pool, dialect) {
         INDEX(user_id),
         CONSTRAINT fk_passkey_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS user_backup_codes(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        code_hash VARCHAR(255) NOT NULL,
+        used TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        used_at TIMESTAMP NULL,
+        INDEX(user_id),
+        CONSTRAINT fk_backup_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
       await exec(`CREATE TABLE IF NOT EXISTS player_events(
         id INT AUTO_INCREMENT PRIMARY KEY,
         steamid VARCHAR(32) NOT NULL,
@@ -443,6 +453,29 @@ function createApi(pool, dialect) {
     },
     async disableUserMfa(userId) {
       await exec('UPDATE users SET mfa_secret=NULL, mfa_enabled=0 WHERE id=?', [userId]);
+    },
+    async replaceBackupCodes(userId, codeHashes = []) {
+      await exec('DELETE FROM user_backup_codes WHERE user_id=?', [userId]);
+      if (!Array.isArray(codeHashes) || !codeHashes.length) return;
+      const values = codeHashes.map((hash) => [userId, hash]);
+      await exec('INSERT INTO user_backup_codes(user_id, code_hash) VALUES ?', [values]);
+    },
+    async countUserBackupCodes(userId) {
+      const rows = await exec('SELECT COUNT(*) AS c FROM user_backup_codes WHERE user_id=? AND used=0', [userId]);
+      return rows?.[0]?.c || 0;
+    },
+    async consumeBackupCode(userId, codeHash) {
+      const rows = await exec(
+        'SELECT id FROM user_backup_codes WHERE user_id=? AND code_hash=? AND used=0 LIMIT 1',
+        [userId, codeHash]
+      );
+      const id = rows?.[0]?.id;
+      if (!id) return false;
+      await exec('UPDATE user_backup_codes SET used=1, used_at=CURRENT_TIMESTAMP WHERE id=?', [id]);
+      return true;
+    },
+    async deleteUserBackupCodes(userId) {
+      await exec('DELETE FROM user_backup_codes WHERE user_id=?', [userId]);
     },
     async listUserPasskeys(userId) {
       return await exec(
