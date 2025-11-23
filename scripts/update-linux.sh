@@ -81,6 +81,15 @@ update_backend() {
   mkdir -p "$INSTALL_DIR/backend/data"
 }
 
+run_backend_migrations() {
+  if [ ! -f "$INSTALL_DIR/backend/.env" ]; then
+    warn "Backend .env missing at $INSTALL_DIR/backend/.env; skipping database migration"
+    return
+  fi
+  log "Running database migrations"
+  (cd "$INSTALL_DIR/backend" && npm run migrate --silent)
+}
+
 update_backend_service() {
   local source_service="$INSTALL_DIR/deploy/systemd/${SERVICE_NAME}.service"
   if [ ! -f "$source_service" ]; then
@@ -188,6 +197,7 @@ main() {
   clone_latest
   sync_sources
   update_backend
+  run_backend_migrations
   update_backend_service
   install_or_update_discord_service
   if confirm_nginx_update; then

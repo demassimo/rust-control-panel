@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "migrate": "node --input-type=module -e \"import('dotenv/config'); import('./src/db/index.js').then(({ initDb }) => initDb()).then(() => console.log('Database schema ensured')).catch((err) => { console.error('Database migration failed', err); process.exit(1); });\""
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.2.2",
@@ -19,6 +20,7 @@
     "multer": "^2.0.2",
     "mysql2": "^3.11.0",
     "otplib": "^12.0.1",
+    "qrcode": "^1.5.4",
     "socket.io": "^4.7.5",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",

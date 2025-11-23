@@ -5296,7 +5296,7 @@ pre {
 
 .mfa-field {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
@@ -5314,6 +5314,47 @@ pre {
   border: 1px solid rgba(244, 63, 94, 0.35);
   background: rgba(244, 63, 94, 0.08);
   color: var(--accent-strong);
+  font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace);
+  letter-spacing: 0.08em;
+}
+
+.mfa-qr {
+  width: 140px;
+  height: 140px;
+  background: #fff;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+}
+
+.mfa-secret-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.backup-code-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.backup-code-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+}
+
+.backup-code {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
   font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace);
   letter-spacing: 0.08em;
 }

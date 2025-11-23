@@ -1330,16 +1330,36 @@ ion.
                 <h4>Authenticator app</h4>
                 <p class="muted small">Use a TOTP app such as Google Authenticator, 1Password, or Authy.</p>
                 <div id="totpSetupFields" class="mfa-setup hidden">
-                  <div class="mfa-field">
-                    <span class="label">Secret</span>
-                    <code id="totpSecret" class="mfa-secret"></code>
+                  <div class="mfa-field mfa-qr-row">
+                    <div>
+                      <span class="label">Scan code</span>
+                      <p class="muted small">Scan this with Google Authenticator, Bitwarden, or any other TOTP manager.</p>
+                    </div>
+                    <img id="totpQr" class="mfa-qr hidden" alt="Authenticator QR code" />
                   </div>
-                  <div class="mfa-field">
-                    <span class="label">Setup link</span>
-                    <span id="totpUri" class="muted small"></span>
+                  <div class="mfa-field mfa-secret-row">
+                    <div>
+                      <span class="label">Secret key</span>
+                      <p class="muted small">Use this key if your app cannot scan the QR code.</p>
+                    </div>
+                    <div class="mfa-secret-wrap">
+                      <code id="totpSecret" class="mfa-secret"></code>
+                      <button id="btnCopyTotpSecret" class="ghost">Copy</button>
+                    </div>
                   </div>
                 </div>
-                <label>Authenticator code<input id="totpCode" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"></label>
+                <div class="mfa-field mfa-backup-row">
+                  <div>
+                    <span class="label">Backup codes</span>
+                    <p class="muted small">Store these one-time codes safely in case you lose your authenticator.</p>
+                    <p id="backupCodesInfo" class="muted small"></p>
+                  </div>
+                  <div class="backup-code-container">
+                    <ul id="backupCodesList" class="backup-code-list"></ul>
+                    <button id="btnGenerateBackupCodes" class="ghost hidden">Generate backup codes</button>
+                  </div>
+                </div>
+                <label>Authenticator or backup code<input id="totpCode" inputmode="text" autocomplete="one-time-code" placeholder="123456 or BACKUP-CODE"></label>
                 <div class="row">
                   <button id="btnStartTotp" class="ghost">Get setup code</button>
                   <button id="btnEnableTotp" class="accent hidden">Enable 2FA</button>
