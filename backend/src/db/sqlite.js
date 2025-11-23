@@ -2,6 +2,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import { randomBytes } from 'node:crypto';
 import { serializeCombatLogPayload } from './combat-log.js';
+import { encodeTeamDiscordConfig, parseTeamDiscordConfig } from '../discord-config.js';
 
 export default {
   async connect({ file }) {
@@ -100,6 +101,7 @@ function createApi(dbh, dialect) {
         owner_user_id INTEGER NOT NULL,
         discord_token TEXT,
         discord_guild_id TEXT,
+        discord_config_json TEXT,
         discord_auth_enabled INTEGER NOT NULL DEFAULT 0,
         discord_auth_role_id TEXT,
         discord_auth_log_channel_id TEXT,
@@ -360,6 +362,9 @@ function createApi(dbh, dialect) {
       }
       if (!teamCols.some((c) => c.name === 'discord_guild_id')) {
         await dbh.run("ALTER TABLE teams ADD COLUMN discord_guild_id TEXT");
+      }
+      if (!teamCols.some((c) => c.name === 'discord_config_json')) {
+        await dbh.run("ALTER TABLE teams ADD COLUMN discord_config_json TEXT");
       }
       if (!teamCols.some((c) => c.name === 'discord_auth_enabled')) {
         await dbh.run("ALTER TABLE teams ADD COLUMN discord_auth_enabled INTEGER NOT NULL DEFAULT 0");
@@ -765,12 +770,14 @@ function createApi(dbh, dialect) {
       if (!Number.isFinite(numeric)) {
         return { hasToken: false, guildId: null, tokenPreview: null };
       }
-      const row = await dbh.get('SELECT discord_token, discord_guild_id FROM teams WHERE id=?', [numeric]);
+      const row = await dbh.get('SELECT discord_token, discord_guild_id, discord_config_json FROM teams WHERE id=?', [numeric]);
       const token = row?.discord_token != null && row.discord_token !== '' ? String(row.discord_token) : null;
       return {
         hasToken: Boolean(token),
         guildId: row?.discord_guild_id != null && row.discord_guild_id !== '' ? String(row.discord_guild_id) : null,
-        tokenPreview: token ? previewDiscordToken(token) : null
+        tokenPreview: token ? previewDiscordToken(token) : null,
+        token,
+        config: parseTeamDiscordConfig(row?.discord_config_json ?? null)
       };
     },
     async getTeamAuthSettings(teamId){
@@ -827,6 +834,13 @@ function createApi(dbh, dialect) {
       const value = trimOrNull(token);
       const guildValue = trimOrNull(guildId);
       const result = await dbh.run('UPDATE teams SET discord_token=?, discord_guild_id=? WHERE id=?', [value, guildValue, numeric]);
+      return result?.changes ? Number(result.changes) : 0;
+    },
+    async setTeamDiscordConfig(teamId, config){
+      const numeric = Number(teamId);
+      if (!Number.isFinite(numeric)) return 0;
+      const payload = encodeTeamDiscordConfig(config);
+      const result = await dbh.run('UPDATE teams SET discord_config_json=? WHERE id=?', [payload, numeric]);
       return result?.changes ? Number(result.changes) : 0;
     },
     async clearTeamDiscordToken(teamId){

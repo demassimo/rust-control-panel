@@ -47,7 +47,15 @@ import {
   isRustMapMetadataStale,
   purgeRustMapCacheIfDue
 } from './rustmaps.js';
-import { encodeDiscordBotConfig, normaliseDiscordBotConfig, parseDiscordBotConfig } from './discord-config.js';
+import {
+  DEFAULT_TEAM_DISCORD_CONFIG,
+  encodeDiscordBotConfig,
+  encodeTeamDiscordConfig,
+  normaliseDiscordBotConfig,
+  normaliseTeamDiscordConfig,
+  parseDiscordBotConfig,
+  parseTeamDiscordConfig
+} from './discord-config.js';
 import {
   normaliseRolePermissions,
   serialiseRolePermissions,
@@ -6679,10 +6687,12 @@ app.get('/api/team/discord', auth, async (req, res) => {
     const hasToken = Boolean(info?.hasToken);
     const guildId = info?.guildId != null && info.guildId !== '' ? String(info.guildId) : null;
     const tokenPreview = info?.tokenPreview ? String(info.tokenPreview) : null;
+    const config = parseTeamDiscordConfig(info?.config ?? null);
     res.json({
       hasToken,
       guildId,
       tokenPreview,
+      config,
       teamDiscord: { hasToken, guildId, tokenPreview },
       activeTeamHasDiscordToken: hasToken,
       activeTeamDiscordGuildId: guildId
@@ -6707,12 +6717,24 @@ app.post('/api/team/discord', auth, async (req, res) => {
     const token = sanitizeDiscordToken(body.token ?? body.discordToken ?? body.botToken);
     const guildInput = body.guildId ?? body.guild_id ?? body.guildID ?? body.discordGuildId ?? body.discord_guild_id;
     const guildId = sanitizeDiscordSnowflake(guildInput);
-    if (!token) return res.status(400).json({ error: 'missing_token' });
-    if (!guildId) return res.status(400).json({ error: 'missing_guild_id' });
-    await db.setTeamDiscordToken(teamId, token, guildId);
+    const incomingConfig = normaliseTeamDiscordConfig(body.config ?? body.discordConfig ?? body.settings ?? {});
+    const existingSettings = typeof db.getTeamDiscordSettings === 'function'
+      ? await db.getTeamDiscordSettings(teamId)
+      : { config: DEFAULT_TEAM_DISCORD_CONFIG };
+    const currentConfig = parseTeamDiscordConfig(existingSettings?.config ?? null);
+    const nextConfig = normaliseTeamDiscordConfig({ ...currentConfig, ...incomingConfig });
+    const finalToken = token || (existingSettings?.hasToken ? sanitizeDiscordToken(existingSettings.token) : null);
+    const finalGuildId = guildId || (existingSettings?.guildId ? String(existingSettings.guildId) : null);
+    if (!finalToken) return res.status(400).json({ error: 'missing_token' });
+    if (!finalGuildId) return res.status(400).json({ error: 'missing_guild_id' });
+    await db.setTeamDiscordToken(teamId, finalToken, finalGuildId);
+    if (typeof db.setTeamDiscordConfig === 'function') {
+      await db.setTeamDiscordConfig(teamId, nextConfig);
+    }
     let hasToken = true;
-    let responseGuildId = guildId || null;
-    let responseTokenPreview = token ? previewDiscordToken(token) : null;
+    let responseGuildId = finalGuildId || null;
+    let responseTokenPreview = finalToken ? previewDiscordToken(finalToken) : null;
+    let responseConfig = nextConfig;
     if (typeof db.getTeamDiscordSettings === 'function') {
       try {
         const info = await db.getTeamDiscordSettings(teamId);
@@ -6724,6 +6746,7 @@ app.post('/api/team/discord', auth, async (req, res) => {
         }
         responseTokenPreview = info?.tokenPreview ? String(info.tokenPreview) : responseTokenPreview;
         if (!hasToken) responseTokenPreview = null;
+        responseConfig = parseTeamDiscordConfig(info?.config ?? responseConfig ?? null);
       } catch (err) {
         console.warn('failed to refresh team discord token state', err);
       }
@@ -6794,9 +6817,10 @@ app.post('/api/team/discord', auth, async (req, res) => {
       hasToken,
       guildId: responseGuildId,
       tokenPreview: responseTokenPreview,
-      teamDiscord: { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview },
+      teamDiscord: { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview, config: responseConfig },
       activeTeamHasDiscordToken: hasToken,
-      activeTeamDiscordGuildId: responseGuildId
+      activeTeamDiscordGuildId: responseGuildId,
+      config: responseConfig
     });
   } catch (err) {
     console.error('failed to save team discord token', err);
@@ -6815,9 +6839,13 @@ app.delete('/api/team/discord', auth, async (req, res) => {
   }
   try {
     await db.clearTeamDiscordToken(teamId);
+    if (typeof db.setTeamDiscordConfig === 'function') {
+      await db.setTeamDiscordConfig(teamId, DEFAULT_TEAM_DISCORD_CONFIG);
+    }
     let hasToken = false;
     let responseGuildId = null;
     let responseTokenPreview = null;
+    let responseConfig = DEFAULT_TEAM_DISCORD_CONFIG;
     if (typeof db.getTeamDiscordSettings === 'function') {
       try {
         const info = await db.getTeamDiscordSettings(teamId);
@@ -6827,6 +6855,7 @@ app.delete('/api/team/discord', auth, async (req, res) => {
         }
         responseTokenPreview = info?.tokenPreview ? String(info.tokenPreview) : null;
         if (!hasToken) responseTokenPreview = null;
+        responseConfig = parseTeamDiscordConfig(info?.config ?? null);
       } catch (err) {
         console.warn('failed to refresh team discord token state', err);
       }
@@ -6897,9 +6926,10 @@ app.delete('/api/team/discord', auth, async (req, res) => {
       hasToken,
       guildId: responseGuildId,
       tokenPreview: responseTokenPreview,
-      teamDiscord: { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview },
+      teamDiscord: { hasToken, guildId: responseGuildId, tokenPreview: responseTokenPreview, config: responseConfig },
       activeTeamHasDiscordToken: hasToken,
-      activeTeamDiscordGuildId: responseGuildId
+      activeTeamDiscordGuildId: responseGuildId,
+      config: responseConfig
     });
   } catch (err) {
     console.error('failed to clear team discord token', err);
