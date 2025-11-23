@@ -5388,10 +5388,14 @@
       logMfa('api base probe failed', { base, source, error: probe.error || 'unknown error' });
     }
 
-    if (candidates[0]?.base) {
-      ui.log(`Falling back to API base ${candidates[0].base} without connectivity verification.`);
-      logMfa('api base fallback without verification', { base: candidates[0].base });
-      return candidates[0].base;
+    const fallback = candidates.find((c) => c.source === 'relative')
+      || candidates.find((c) => c.source === 'detected')
+      || candidates[0];
+
+    if (fallback?.base) {
+      ui.log(`Falling back to API base ${fallback.base} without connectivity verification.`);
+      logMfa('api base fallback without verification', { base: fallback.base, source: fallback.source || 'unknown' });
+      return fallback.base;
     }
 
     ui.log('No API base detected; defaulting to ./api.');
