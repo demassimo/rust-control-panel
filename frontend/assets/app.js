@@ -5386,9 +5386,6 @@
       }
       ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
       logMfa('api base probe failed', { base, source, error: probe.error || 'unknown error' });
-        return base;
-      }
-      ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
     }
 
     if (candidates[0]?.base) {
