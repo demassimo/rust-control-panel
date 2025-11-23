@@ -38,6 +38,7 @@ This document summarizes the purpose of the key files and directories that make 
 - `assets/modules/players-graph.js` – Visualises historical player counts for the selected server.
 - `assets/modules/players.js` – Provides searchable player management tools, including moderation actions, player notes, profile metadata, and now surfaced Discord identity/alt signals from the team-auth API.
 - `assets/modules/team-auth.js` – Lists linked Discord/Steam accounts for the active team, supports filtering, and deep-links into the player directory for moderation follow-up.【F:frontend/assets/modules/team-auth.js†L1-L212】
+- `assets/modules/discord-modules.js` – Placeholder bundle to register optional Discord-related widgets while avoiding missing asset errors when the script tag is present in `index.html`.
 - `assets/modules/map.js` – Integrates with RustMaps data to render the live map overlay, monument markers, real-time world-event icons (cargo ship, patrol helicopter), and player positions.
 
 ## Documentation (`docs/`)
