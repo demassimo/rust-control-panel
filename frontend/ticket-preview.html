@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="panel-api-base" content="/api" />
+  <meta name="panel-api-base" content="./api" />
   <title>Ticket Preview</title>
   <style>
     body {
@@ -180,13 +180,17 @@
         const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
         if (metaContent) {
           try {
-            const metaUrl = new URL(metaContent, window.location.origin);
-            const normalized = normalizeApiBase(metaUrl.href);
-            if (normalized) return normalized;
+            const base = window.location?.href || window.location?.origin;
+            if (base) {
+              const metaUrl = new URL(metaContent, base);
+              const normalized = normalizeApiBase(metaUrl.href);
+              if (normalized) return normalized;
+            }
           } catch {
-            const normalized = normalizeApiBase(metaContent);
-            if (normalized) return normalized;
+            // fall through to raw meta handling below
           }
+          const normalized = normalizeApiBase(metaContent);
+          if (normalized) return normalized;
         }
         const stored = normalizeApiBase(localStorage.getItem('apiBase'));
         if (stored) return stored;

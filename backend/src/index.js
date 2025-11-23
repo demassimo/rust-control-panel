@@ -6528,6 +6528,7 @@ app.post('/api/me/settings', auth, async (req, res) => {
 
 app.get('/api/me/security', auth, async (req, res) => {
   try {
+    console.info('[mfa] loading security settings', { userId: req.user?.uid, ip: req.ip });
     const user = await db.getUser(req.user.uid);
     if (!user) return res.status(404).json({ error: 'not_found' });
     const passkeys = typeof db.listUserPasskeys === 'function'
@@ -6548,6 +6549,7 @@ app.get('/api/me/security', auth, async (req, res) => {
 
 app.post('/api/me/security/totp/setup', auth, async (req, res) => {
   try {
+    console.info('[mfa] starting totp setup', { userId: req.user?.uid, ip: req.ip });
     const user = await db.getUser(req.user.uid);
     if (!user) return res.status(404).json({ error: 'not_found' });
     const secret = authenticator.generateSecret();
@@ -6570,10 +6572,15 @@ app.post('/api/me/security/totp/enable', auth, async (req, res) => {
   const { code, secret } = req.body || {};
   if (!code || !secret) return res.status(400).json({ error: 'missing_fields' });
   try {
+    console.info('[mfa] attempting totp enable', { userId: req.user?.uid, ip: req.ip });
     const isValid = authenticator.verify({ token: String(code).trim(), secret: String(secret).trim() });
-    if (!isValid) return res.status(401).json({ error: 'invalid_mfa_code' });
+    if (!isValid) {
+      console.warn('[mfa] totp enable rejected: invalid code', { userId: req.user?.uid });
+      return res.status(401).json({ error: 'invalid_mfa_code' });
+    }
     await db.setUserMfaSecret(req.user.uid, String(secret).trim(), true);
     const backupCodes = await generateAndStoreBackupCodes(req.user.uid);
+    console.info('[mfa] totp enabled', { userId: req.user?.uid, backupCodes: backupCodes.length });
     res.json({ ok: true, backupCodes });
   } catch (err) {
     console.error('failed to enable totp', err);
@@ -6588,9 +6595,13 @@ app.post('/api/me/security/totp/disable', auth, async (req, res) => {
     const user = await db.getUser(req.user.uid);
     if (!user) return res.status(404).json({ error: 'not_found' });
     const ok = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!ok) return res.status(401).json({ error: 'invalid_current_password' });
+    if (!ok) {
+      console.warn('[mfa] totp disable rejected: invalid password', { userId: req.user?.uid });
+      return res.status(401).json({ error: 'invalid_current_password' });
+    }
     await db.disableUserMfa(user.id);
     await db.deleteUserBackupCodes(user.id);
+    console.info('[mfa] totp disabled', { userId: req.user?.uid, ip: req.ip });
     res.json({ ok: true });
   } catch (err) {
     console.error('failed to disable totp', err);
@@ -6600,12 +6611,14 @@ app.post('/api/me/security/totp/disable', auth, async (req, res) => {
 
 app.post('/api/me/security/backup-codes', auth, async (req, res) => {
   try {
+    console.info('[mfa] generating backup codes', { userId: req.user?.uid, ip: req.ip });
     const user = await db.getUser(req.user.uid);
     if (!user) return res.status(404).json({ error: 'not_found' });
     if (!user.mfa_secret || !user.mfa_enabled) {
       return res.status(400).json({ error: 'mfa_not_enabled' });
     }
     const codes = await generateAndStoreBackupCodes(user.id);
+    console.info('[mfa] backup codes generated', { userId: req.user?.uid, count: codes.length });
     res.json({ codes, count: codes.length });
   } catch (err) {
     console.error('failed to generate backup codes', err);
