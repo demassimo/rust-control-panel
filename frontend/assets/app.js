@@ -5307,14 +5307,18 @@
     const metaContent = document.querySelector('meta[name="panel-api-base"]')?.content?.trim();
     if (metaContent) {
       if (hasWindow) {
-        try {
-          const metaUrl = new URL(metaContent, window.location.origin);
-          const normalizedMeta = normalizeApiBase(metaUrl.href);
-          if (normalizedMeta) return normalizedMeta;
-        } catch {
-          const normalizedFallback = normalizeApiBase(metaContent);
-          if (normalizedFallback) return normalizedFallback;
+        const locationBase = window.location?.href || window.location?.origin;
+        if (locationBase) {
+          try {
+            const metaUrl = new URL(metaContent, locationBase);
+            const normalizedMeta = normalizeApiBase(metaUrl.href);
+            if (normalizedMeta) return normalizedMeta;
+          } catch {
+            // fall through to the raw meta value below
+          }
         }
+        const normalizedFallback = normalizeApiBase(metaContent);
+        if (normalizedFallback) return normalizedFallback;
       } else {
         const normalizedMeta = normalizeApiBase(metaContent);
         if (normalizedMeta) return normalizedMeta;
