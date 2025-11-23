@@ -254,6 +254,24 @@ const DEFAULT_PANEL_ORIGIN = (() => {
   const host = BIND === '0.0.0.0' ? 'localhost' : BIND;
   return `http://${host}:${PORT}`;
 })();
+const DEFAULT_PANEL_HOST = (() => {
+  try {
+    const url = PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || TEAM_AUTH_APP_URL;
+    if (url) return new URL(url).hostname;
+  } catch {
+    // ignore
+  }
+  return null;
+})();
+const DEFAULT_PANEL_SCHEME = (() => {
+  try {
+    const url = PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || TEAM_AUTH_APP_URL;
+    if (url) return (new URL(url).protocol || '').replace(/:$/, '') || null;
+  } catch {
+    // ignore
+  }
+  return null;
+})();
 const CONFIGURED_PASSKEY_RP_ID = process.env.PASSKEY_RP_ID || null;
 const PASSKEY_RP_ID = CONFIGURED_PASSKEY_RP_ID || (() => {
   try {
@@ -303,17 +321,32 @@ const extractForwardedHost = (req) => {
   }
   const host = req?.get?.('host');
   if (typeof host === 'string' && host.trim()) return host.trim();
+  if (DEFAULT_PANEL_HOST) return DEFAULT_PANEL_HOST;
   return req?.hostname || null;
 };
 
 const extractProtocol = (req) => {
   if (TRUST_PROXY) {
+    const cfVisitor = req?.get?.('cf-visitor');
+    if (typeof cfVisitor === 'string' && cfVisitor.trim()) {
+      try {
+        const parsed = JSON.parse(cfVisitor);
+        const scheme = parsed?.scheme || parsed?.Scheme;
+        if (typeof scheme === 'string' && scheme.trim()) {
+          return scheme.trim();
+        }
+      } catch {
+        const match = cfVisitor.match(/"scheme"\s*:\s*"(.*?)"/i);
+        if (match?.[1]) return match[1];
+      }
+    }
     const xfProto = req?.get?.('x-forwarded-proto');
     if (typeof xfProto === 'string' && xfProto.trim()) {
       return xfProto.split(',')[0].trim();
     }
   }
   if (typeof req?.protocol === 'string' && req.protocol) return req.protocol;
+  if (DEFAULT_PANEL_SCHEME) return DEFAULT_PANEL_SCHEME;
   return 'http';
 };
 
