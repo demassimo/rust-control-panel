@@ -26,7 +26,7 @@ export async function initDb() {
   await db.init();
   await ensureDefaultRoles();
   await ensureDefaultTeams();
-  const bcrypt = await import('bcrypt');
+  const bcrypt = await import('bcryptjs');
   const count = await db.countUsers();
   if (count === 0) {
     const hash = bcrypt.hashSync('admin123', 10);
