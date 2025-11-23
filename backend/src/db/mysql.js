@@ -1,6 +1,7 @@
 import mysql from 'mysql2/promise';
 import { randomBytes } from 'node:crypto';
 import { serializeCombatLogPayload } from './combat-log.js';
+import { encodeTeamDiscordConfig, parseTeamDiscordConfig } from '../discord-config.js';
 
 export default {
   async connect(cfg) {
@@ -102,6 +103,7 @@ function createApi(pool, dialect) {
         owner_user_id INT NOT NULL,
         discord_token TEXT NULL,
         discord_guild_id TEXT NULL,
+        discord_config_json JSON NULL,
         discord_auth_enabled TINYINT(1) NOT NULL DEFAULT 0,
         discord_auth_role_id VARCHAR(64) NULL,
         discord_auth_log_channel_id VARCHAR(64) NULL,
@@ -182,6 +184,7 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_players ADD COLUMN total_playtime_seconds BIGINT NULL');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_token TEXT NULL');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_guild_id TEXT NULL');
+      await ensureColumn('ALTER TABLE teams ADD COLUMN discord_config_json JSON NULL');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_auth_enabled TINYINT(1) NOT NULL DEFAULT 0');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_auth_role_id VARCHAR(64) NULL');
       await ensureColumn('ALTER TABLE teams ADD COLUMN discord_auth_log_channel_id VARCHAR(64) NULL');
@@ -656,14 +659,16 @@ function createApi(pool, dialect) {
       );
     },
     async getTeamDiscordSettings(teamId){
-      const rows = await exec('SELECT discord_token, discord_guild_id FROM teams WHERE id=?', [teamId]);
+      const rows = await exec('SELECT discord_token, discord_guild_id, discord_config_json FROM teams WHERE id=?', [teamId]);
       const row = Array.isArray(rows) && rows.length ? rows[0] : rows;
       const token = row?.discord_token != null && row.discord_token !== '' ? String(row.discord_token) : null;
       const guild = row?.discord_guild_id;
       return {
         hasToken: Boolean(token),
         guildId: guild != null && guild !== '' ? String(guild) : null,
-        tokenPreview: token ? previewDiscordToken(token) : null
+        tokenPreview: token ? previewDiscordToken(token) : null,
+        token,
+        config: parseTeamDiscordConfig(row?.discord_config_json ?? null)
       };
     },
     async getTeamAuthSettings(teamId){
@@ -718,6 +723,11 @@ function createApi(pool, dialect) {
       const value = trimOrNull(token);
       const guildValue = trimOrNull(guildId);
       const res = await exec('UPDATE teams SET discord_token=?, discord_guild_id=? WHERE id=?', [value, guildValue, teamId]);
+      return res?.affectedRows || 0;
+    },
+    async setTeamDiscordConfig(teamId, config){
+      const payload = encodeTeamDiscordConfig(config);
+      const res = await exec('UPDATE teams SET discord_config_json=? WHERE id=?', [payload, teamId]);
       return res?.affectedRows || 0;
     },
     async clearTeamDiscordToken(teamId){

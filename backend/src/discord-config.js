@@ -21,6 +21,18 @@ export const DEFAULT_TICKETING_CONFIG = Object.freeze({
   panelButtonLabel: 'Open Ticket'
 });
 
+export const DEFAULT_COMMAND_PERMISSIONS = Object.freeze({
+  status: null,
+  ticket: null,
+  rustlookup: null,
+  auth: null
+});
+
+export const DEFAULT_TEAM_DISCORD_CONFIG = Object.freeze({
+  ticketing: Object.freeze({ ...DEFAULT_TICKETING_CONFIG }),
+  commandPermissions: Object.freeze({ ...DEFAULT_COMMAND_PERMISSIONS })
+});
+
 export const DEFAULT_DISCORD_BOT_CONFIG = Object.freeze({
   presenceTemplate: '{statusEmoji} {playerCount} on {serverName}',
   presenceStatuses: Object.freeze({
@@ -85,6 +97,23 @@ function sanitizeTicketMessage(value, fallback) {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   return trimmed.slice(0, 500);
+}
+
+function normalizeCommandRole(value) {
+  if (value == null) return null;
+  const str = String(value).trim();
+  return str.length ? str : null;
+}
+
+export function normalizeCommandPermissions(permissions = {}) {
+  const source = permissions && typeof permissions === 'object' ? permissions : {};
+  const base = DEFAULT_COMMAND_PERMISSIONS;
+  return {
+    status: normalizeCommandRole(source.status ?? source.ruststatus),
+    ticket: normalizeCommandRole(source.ticket),
+    rustlookup: normalizeCommandRole(source.rustlookup ?? source.lookup),
+    auth: normalizeCommandRole(source.auth)
+  };
 }
 
 function sanitizePanelText(value, fallback, maxLength = 190) {
@@ -226,9 +255,25 @@ export function normaliseDiscordBotConfig(value = {}) {
   }
 }
 
+export function normaliseTeamDiscordConfig(value = {}) {
+  const hasSource = typeof value === 'object' && value != null;
+  const source = hasSource ? value : {};
+  const ticketing = normalizeTicketingConfig(source.ticketing);
+  const commandPermissions = normalizeCommandPermissions(source.commandPermissions ?? source.command_permissions);
+  return { ticketing, commandPermissions };
+}
+
 export function cloneDiscordBotConfig(config = DEFAULT_DISCORD_BOT_CONFIG) {
   const normalised = normaliseDiscordBotConfig(config);
   return cloneNormalisedConfig(normalised);
+}
+
+export function cloneTeamDiscordConfig(config = DEFAULT_TEAM_DISCORD_CONFIG) {
+  const normalised = normaliseTeamDiscordConfig(config);
+  return {
+    ticketing: { ...normalised.ticketing },
+    commandPermissions: { ...normalised.commandPermissions }
+  };
 }
 
 export function parseDiscordBotConfig(raw) {
@@ -241,8 +286,27 @@ export function parseDiscordBotConfig(raw) {
       value = JSON.parse(raw);
     } catch {
       value = {};
+  }
+}
+
+export function parseTeamDiscordConfig(raw) {
+  if (raw == null) {
+    return cloneTeamDiscordConfig(DEFAULT_TEAM_DISCORD_CONFIG);
+  }
+  let value = raw;
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      value = {};
     }
   }
+  return cloneTeamDiscordConfig(value);
+}
+
+export function encodeTeamDiscordConfig(config = DEFAULT_TEAM_DISCORD_CONFIG) {
+  return JSON.stringify(normaliseTeamDiscordConfig(config));
+}
   return cloneDiscordBotConfig(value);
 }
 

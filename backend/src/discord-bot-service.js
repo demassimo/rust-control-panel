@@ -27,9 +27,11 @@ import {
   STATUS_COLORS,
   DEFAULT_DISCORD_BOT_CONFIG,
   DEFAULT_TICKETING_CONFIG,
+  DEFAULT_TEAM_DISCORD_CONFIG,
   parseDiscordBotConfig,
   encodeDiscordBotConfig,
   cloneDiscordBotConfig,
+  parseTeamDiscordConfig,
   CONFIG_FIELD_CHOICES,
   renderPresenceTemplate,
   describePresenceTemplateUsage,
@@ -199,20 +201,46 @@ function buildTicketPreviewUrl(teamId, ticket) {
 }
 
 function getTicketConfig(state) {
-  const config = getStateConfig(state);
+  const config = getTeamConfig(state);
   return config.ticketing ?? DEFAULT_TICKETING_CONFIG;
 }
 
 function updateTicketConfig(state, mutate) {
   if (typeof mutate !== 'function') return getTicketConfig(state);
-  const nextRoot = cloneStateConfig(state);
+  const nextRoot = getTeamConfig(state) ? { ...getTeamConfig(state) } : { ...DEFAULT_TEAM_DISCORD_CONFIG };
   const working = { ...(nextRoot.ticketing ?? DEFAULT_TICKETING_CONFIG) };
   const mutated = mutate(working);
   const finalTicketing =
     typeof mutated === 'object' && mutated != null ? mutated : working;
   nextRoot.ticketing = { ...DEFAULT_TICKETING_CONFIG, ...finalTicketing };
-  const appliedConfig = setStateConfig(state, nextRoot);
+  const appliedConfig = setTeamConfig(state, nextRoot);
   return appliedConfig.ticketing ?? DEFAULT_TICKETING_CONFIG;
+}
+
+function getTeamConfig(state) {
+  if (state?.teamCommandState?.config) return state.teamCommandState.config;
+  if (state?.teamConfig) return state.teamConfig;
+  return DEFAULT_TEAM_DISCORD_CONFIG;
+}
+
+function setTeamConfig(state, config) {
+  if (!config) {
+    if (state) state.teamConfig = DEFAULT_TEAM_DISCORD_CONFIG;
+    return DEFAULT_TEAM_DISCORD_CONFIG;
+  }
+  const parsed = parseTeamDiscordConfig(config);
+  if (state) {
+    state.teamConfig = parsed;
+    if (state.teamCommandState) {
+      state.teamCommandState.config = parsed;
+    }
+  }
+  return parsed;
+}
+
+function getCommandPermissions(state) {
+  const config = getTeamConfig(state);
+  return config.commandPermissions || {};
 }
 
 function formatChannelMention(id, fallback = 'Not set') {
@@ -1161,7 +1189,8 @@ async function ensureTeamBot(teamId, { token, guildId, state } = {}) {
       cooldownUntil: 0,
       guildRegistrations: new Map(),
       guildServers: new Map(),
-      serverStates: new Map()
+      serverStates: new Map(),
+      config: state?.teamConfig ?? DEFAULT_TEAM_DISCORD_CONFIG
     };
     teamBots.set(teamId, teamState);
   } else if (teamState.token !== token) {
@@ -1173,6 +1202,9 @@ async function ensureTeamBot(teamId, { token, guildId, state } = {}) {
       detachStateFromTeamBot(state);
     }
     teamState.serverStates.set(state.serverId, state);
+    if (state.teamConfig) {
+      teamState.config = state.teamConfig;
+    }
     state.teamCommandState = teamState;
     if (guildId) {
       for (const [existingGuildId, members] of teamState.guildServers.entries()) {
@@ -1393,6 +1425,71 @@ async function handleTeamInteraction(teamState, interaction) {
   await handleInteraction(state, interaction);
 }
 
+function hasAdminPermission(interaction) {
+  try {
+    return Boolean(interaction?.member?.permissions?.has(PermissionFlagsBits.Administrator));
+  } catch {
+    return false;
+  }
+}
+
+function memberHasRole(interaction, roleId) {
+  if (!roleId) return false;
+  const target = String(roleId).trim();
+  if (!target) return false;
+  const roles = interaction?.member?.roles;
+  if (!roles) return false;
+  if (roles.cache?.has?.(target)) return true;
+  const roleList = Array.isArray(roles)
+    ? roles
+    : Array.isArray(roles.data)
+      ? roles.data
+      : roles instanceof Map || roles instanceof Set
+        ? Array.from(roles.values())
+        : null;
+  if (!roleList) return false;
+  return roleList.some((role) => {
+    const id = typeof role === 'string' ? role : role?.id;
+    return id && String(id).trim() === target;
+  });
+}
+
+function commandKeyForInteraction(interaction) {
+  const name = interaction?.commandName;
+  if (!name) return null;
+  if (name === 'ruststatus') return 'status';
+  if (name === 'rustlookup') return 'rustlookup';
+  if (name === 'ticket') return 'ticket';
+  if (name === 'auth') return 'auth';
+  return null;
+}
+
+async function ensureCommandPermission(state, interaction) {
+  const commandKey = commandKeyForInteraction(interaction);
+  if (!commandKey) return true;
+  const permissions = getCommandPermissions(state) || {};
+  const requiredRole = sanitizeId(permissions[commandKey]);
+  if (!requiredRole) return true;
+  if (hasAdminPermission(interaction)) return true;
+  if (memberHasRole(interaction, requiredRole)) return true;
+  const message = 'You do not have permission to use this command.';
+  const canReply = typeof interaction.isRepliable === 'function'
+    ? interaction.isRepliable()
+    : Boolean(interaction.repliable);
+  if (canReply) {
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(message);
+      } else {
+        await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+      }
+    } catch (err) {
+      console.error('failed to send permission denial response', err);
+    }
+  }
+  return false;
+}
+
 
 async function shutdownBot(serverId) {
   const state = bots.get(serverId);
@@ -1557,17 +1654,26 @@ async function ensureBot(integration) {
 
   let teamToken = null;
   let teamGuildId = state.teamGuildId;
-  if (Number.isFinite(state.teamId) && typeof db.getTeam === 'function') {
+  let teamConfig = state.teamConfig ?? DEFAULT_TEAM_DISCORD_CONFIG;
+  if (Number.isFinite(state.teamId)) {
     try {
-      const team = await db.getTeam(state.teamId);
-      teamToken = sanitizeId(team?.discord_token);
-      teamGuildId = sanitizeId(team?.discord_guild_id ?? team?.discordGuildId);
+      if (typeof db.getTeamDiscordSettings === 'function') {
+        const settings = await db.getTeamDiscordSettings(state.teamId);
+        teamToken = sanitizeId(settings?.token ?? settings?.discord_token);
+        teamGuildId = sanitizeId(settings?.guildId ?? settings?.discord_guild_id ?? settings?.discordGuildId);
+        teamConfig = parseTeamDiscordConfig(settings?.config ?? teamConfig ?? null);
+      } else if (typeof db.getTeam === 'function') {
+        const team = await db.getTeam(state.teamId);
+        teamToken = sanitizeId(team?.discord_token);
+        teamGuildId = sanitizeId(team?.discord_guild_id ?? team?.discordGuildId);
+      }
     } catch (err) {
       console.error(`failed to load team ${state.teamId} discord token for server ${serverId}`, err);
     }
   }
   state.teamToken = teamToken;
   state.teamGuildId = teamGuildId;
+  setTeamConfig(state, teamConfig);
 
   const usingTeamCommand = Boolean(teamToken);
   const allowServerCommands =
@@ -4183,23 +4289,25 @@ async function handleAutocomplete(state, interaction) {
   return false;
 }
 
-async function handleInteraction(state, interaction) {
-  if (interaction.guildId && state.guildId && interaction.guildId !== state.guildId) {
-    return;
-  }
-
-  try {
-    if (typeof interaction.isAutocomplete === 'function' && interaction.isAutocomplete()) {
-      const handled = await handleAutocomplete(state, interaction);
-      if (handled) return;
+  async function handleInteraction(state, interaction) {
+    if (interaction.guildId && state.guildId && interaction.guildId !== state.guildId) {
+      return;
     }
 
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'help') {
-        await handleHelpCommand(interaction, { state, teamState: state.teamCommandState });
-      } else if (interaction.commandName === 'ruststatus') {
-        await handleRustStatusCommand(state, interaction);
-      } else if (interaction.commandName === 'rustlookup') {
+    try {
+      if (typeof interaction.isAutocomplete === 'function' && interaction.isAutocomplete()) {
+        const handled = await handleAutocomplete(state, interaction);
+        if (handled) return;
+      }
+
+      if (interaction.isChatInputCommand()) {
+        const allowed = await ensureCommandPermission(state, interaction);
+        if (!allowed) return;
+        if (interaction.commandName === 'help') {
+          await handleHelpCommand(interaction, { state, teamState: state.teamCommandState });
+        } else if (interaction.commandName === 'ruststatus') {
+          await handleRustStatusCommand(state, interaction);
+        } else if (interaction.commandName === 'rustlookup') {
         await handleRustLookupCommand(state, interaction);
       } else if (interaction.commandName === 'auth') {
         await handleAuthCommand(state, interaction);
