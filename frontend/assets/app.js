@@ -5386,6 +5386,9 @@
       }
       ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
       logMfa('api base probe failed', { base, source, error: probe.error || 'unknown error' });
+        return base;
+      }
+      ui.log(`API probe failed for ${base} (${source}): ${probe.error || 'unknown error'}.`);
     }
 
     if (candidates[0]?.base) {
@@ -9196,6 +9199,7 @@
       logMfa('skipping security load, no token present');
       return;
     }
+    if (!state.TOKEN) return;
     logMfa('loading security settings', { api: state.API || '(unset)', tokenPresent: Boolean(state.TOKEN) });
     hideNotice(mfaStatusMessage);
     hideNotice(passkeyStatus);
