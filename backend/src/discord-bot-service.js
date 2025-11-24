@@ -680,6 +680,114 @@ function buildTeamCommandDefinitions() {
           type: ApplicationCommandOptionType.Subcommand,
           name: 'refresh',
           description: 'Force an immediate status refresh'
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: 'setchannel',
+          description: 'Set the channel used for status updates',
+          options: [
+            {
+              type: ApplicationCommandOptionType.Channel,
+              name: 'channel',
+              description: 'Channel that will contain status updates (defaults to current channel)',
+              required: false,
+              channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement]
+            }
+          ]
+        },
+        {
+          type: ApplicationCommandOptionType.SubcommandGroup,
+          name: 'config',
+          description: 'Configure the status embed appearance',
+          options: [
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'show',
+              description: 'Show the current configuration'
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'setpresence',
+              description: 'Set or reset the presence template',
+              options: [
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'template',
+                  description: 'Presence template that supports tokens like {players} and {status}',
+                  required: false,
+                  max_length: 190
+                },
+                {
+                  type: ApplicationCommandOptionType.Boolean,
+                  name: 'reset',
+                  description: 'Reset to the default presence template',
+                  required: false
+                }
+              ]
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'setcolors',
+              description: 'Set or reset the embed colours for different states',
+              options: [
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'online',
+                  description: 'Hex colour for online state (e.g. #57F287)',
+                  required: false,
+                  min_length: 4,
+                  max_length: 7
+                },
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'offline',
+                  description: 'Hex colour for offline state (e.g. #ED4245)',
+                  required: false,
+                  min_length: 4,
+                  max_length: 7
+                },
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'stale',
+                  description: 'Hex colour for stale state (e.g. #FEE75C)',
+                  required: false,
+                  min_length: 4,
+                  max_length: 7
+                },
+                {
+                  type: ApplicationCommandOptionType.Boolean,
+                  name: 'reset',
+                  description: 'Reset embed colours to defaults',
+                  required: false
+                }
+              ]
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'toggle',
+              description: 'Enable or disable a field in the status embed',
+              options: [
+                {
+                  type: ApplicationCommandOptionType.String,
+                  name: 'field',
+                  description: 'Field to enable or disable',
+                  required: true,
+                  choices: CONFIG_FIELD_CHOICES
+                },
+                {
+                  type: ApplicationCommandOptionType.Boolean,
+                  name: 'enabled',
+                  description: 'Whether the selected field should be shown',
+                  required: true
+                }
+              ]
+            },
+            {
+              type: ApplicationCommandOptionType.Subcommand,
+              name: 'reset',
+              description: 'Reset the status embed configuration to defaults'
+            }
+          ]
         }
       ]
     },
