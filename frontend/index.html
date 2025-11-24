@@ -674,42 +674,49 @@
               <section class="discord-status">
                 <h4 class="discord-section-title">Server Bot connection</h4>
                 <p class="muted small">
-                  This workspace stores its own Server Bot token and guild ID. You can only edit this workspace's bot configurat
-ion.
+                  This workspace stores its own Server Bot token and guild ID. You can only edit this workspace's bot configuration.
                 </p>
-                <dl class="discord-config-list connection-list">
-                  <div>
-                    <dt>Guild ID</dt>
-                    <dd id="discord-connection-guild">Not set</dd>
-                  </div>
-                  <div>
-                    <dt>Status channel ID</dt>
-                    <dd id="discord-connection-channel">Not set</dd>
-                  </div>
-                  <div>
-                    <dt>Bot token</dt>
-                    <dd id="discord-connection-token">Not linked</dd>
-                  </div>
-                </dl>
-                <p id="discord-connection-status" class="notice hidden"></p>
-              </section>
-              <section class="discord-status">
-                <h4 class="discord-section-title">Live status</h4>
-                <div class="discord-status-summary">
-                  <article class="discord-stat">
-                    <span class="label">Current players</span>
-                    <strong class="value" id="discord-current-players">0</strong>
-                  </article>
-                  <article class="discord-stat">
-                    <span class="label">Max players</span>
-                    <strong class="value" id="discord-max-players">—</strong>
-                  </article>
-                  <article class="discord-stat">
-                    <span class="label">Joining</span>
-                    <strong class="value" id="discord-joining">0</strong>
-                  </article>
+                <div class="field-grid">
+                  <label class="inline" for="discord-connection-guild-input">
+                    Guild ID
+                    <input
+                      type="text"
+                      id="discord-connection-guild-input"
+                      name="discordConnectionGuildId"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="Enter Discord guild ID"
+                    />
+                  </label>
+                  <label class="inline" for="discord-connection-channel-input">
+                    Status channel ID
+                    <input
+                      type="text"
+                      id="discord-connection-channel-input"
+                      name="discordConnectionChannelId"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="Enter channel ID for status updates"
+                    />
+                  </label>
+                  <label class="inline" for="discord-connection-token-input">
+                    Bot token
+                    <input
+                      type="text"
+                      id="discord-connection-token-input"
+                      name="discordConnectionToken"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="Paste the Discord bot token"
+                    />
+                  </label>
                 </div>
-                <p class="discord-last-check" id="discord-last-check">Last check: —</p>
+                <div class="form-actions">
+                  <button type="button" class="accent" id="discord-connection-save">Save bot connection</button>
+                </div>
+                <p id="discord-connection-status" class="notice hidden"></p>
               </section>
               <section
                 id="teamDiscordStatusSection"
@@ -721,13 +728,6 @@ ion.
                   <p class="muted small">Configure how the Discord bot reports each server's status.</p>
                 </div>
                 <div class="team-discord-status">
-                  <div class="team-discord-form team-discord-server-select">
-                    <label for="discord-status-server">Server
-                      <select id="discord-status-server">
-                        <option value="">Select a server…</option>
-                      </select>
-                    </label>
-                  </div>
                   <div id="discord-settings" class="discord-settings-grid" aria-live="polite">
                     <section class="discord-config">
                       <h4 class="discord-section-title">Current configuration</h4>
@@ -760,27 +760,6 @@ ion.
                           <p id="discord-enabled-fields-empty" class="discord-config-empty muted small hidden">
                             No stats will be posted.
                           </p>
-                        </div>
-                        <div class="discord-config-group">
-                          <h5 class="discord-config-title">Ticketing</h5>
-                          <dl class="discord-config-list">
-                            <div>
-                              <dt>Status</dt>
-                              <dd id="discord-ticketing-summary-status">Disabled</dd>
-                            </div>
-                            <div>
-                              <dt>Category</dt>
-                              <dd id="discord-ticketing-summary-category">Not set</dd>
-                            </div>
-                            <div>
-                              <dt>Log channel</dt>
-                              <dd id="discord-ticketing-summary-log">Not set</dd>
-                            </div>
-                            <div>
-                              <dt>Staff role</dt>
-                              <dd id="discord-ticketing-summary-role">Not set</dd>
-                            </div>
-                          </dl>
                         </div>
                       </div>
                     </section>
@@ -869,76 +848,6 @@ ion.
                               <span>Last update timestamp</span>
                             </label>
                           </div>
-                        </fieldset>
-                        <fieldset class="field-grid">
-                          <legend class="field-label">Ticketing</legend>
-                          <label class="checkbox">
-                            <input type="checkbox" id="discord-ticketing-enabled" />
-                            <span>Enable Discord ticketing panel</span>
-                          </label>
-                          <div class="field-grid-row">
-                            <label class="inline" for="discord-ticketing-category">
-                              Ticket category ID
-                              <input
-                                type="text"
-                                id="discord-ticketing-category"
-                                inputmode="numeric"
-                                autocomplete="off"
-                                spellcheck="false"
-                                placeholder="e.g. 123456789012345678"
-                              />
-                            </label>
-                            <label class="inline" for="discord-ticketing-log">
-                              Log channel ID
-                              <input
-                                type="text"
-                                id="discord-ticketing-log"
-                                inputmode="numeric"
-                                autocomplete="off"
-                                spellcheck="false"
-                                placeholder="Optional"
-                              />
-                            </label>
-                          </div>
-                          <div class="field-grid-row">
-                            <label class="inline" for="discord-ticketing-role">
-                              Staff role ID
-                              <input
-                                type="text"
-                                id="discord-ticketing-role"
-                                inputmode="numeric"
-                                autocomplete="off"
-                                spellcheck="false"
-                                placeholder="Role allowed to manage tickets"
-                              />
-                            </label>
-                            <label class="checkbox">
-                              <input type="checkbox" id="discord-ticketing-ping" />
-                              <span>Ping staff role when a ticket opens</span>
-                            </label>
-                          </div>
-                          <label class="inline" for="discord-ticketing-panel-channel">
-                            Panel channel ID
-                            <input
-                              type="text"
-                              id="discord-ticketing-panel-channel"
-                              inputmode="numeric"
-                              autocomplete="off"
-                              spellcheck="false"
-                              placeholder="Optional panel channel"
-                            />
-                          </label>
-                          <label class="inline" for="discord-ticketing-panel-message">
-                            Panel message ID
-                            <input
-                              type="text"
-                              id="discord-ticketing-panel-message"
-                              inputmode="numeric"
-                              autocomplete="off"
-                              spellcheck="false"
-                              placeholder="Optional existing panel message"
-                            />
-                          </label>
                         </fieldset>
                         <div class="form-actions">
                           <button type="submit" class="accent" id="discord-status-save">Save status settings</button>
