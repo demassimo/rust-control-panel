@@ -17,6 +17,7 @@
   const connectionGuildInput = document.getElementById('discord-connection-guild-input');
   const connectionChannelInput = document.getElementById('discord-connection-channel-input');
   const connectionTokenInput = document.getElementById('discord-connection-token-input');
+  const connectionSaveButton = document.getElementById('discord-connection-save');
   const presenceSelectEls = {
     online: document.getElementById('discord-presence-online'),
     offline: document.getElementById('discord-presence-offline'),
@@ -140,6 +141,20 @@
     return PRESENCE_NAMES[key] || String(value);
   }
 
+  function setConnectionStatus(message, variant = 'info') {
+    if (!connectionStatusEl) return;
+    if (!message) {
+      connectionStatusEl.textContent = '';
+      connectionStatusEl.classList.add('hidden');
+      connectionStatusEl.classList.remove('error', 'success');
+      return;
+    }
+    connectionStatusEl.textContent = message;
+    connectionStatusEl.classList.remove('hidden', 'error', 'success');
+    if (variant === 'error') connectionStatusEl.classList.add('error');
+    else if (variant === 'success') connectionStatusEl.classList.add('success');
+  }
+
   function updateEnabledFields(fields) {
     if (!enabledFieldsList) return;
     while (enabledFieldsList.firstChild) {
@@ -219,6 +234,13 @@
     const shouldDisable = !!disabled || !state.serverId;
     statusForm.querySelectorAll('textarea, input, select, button').forEach((el) => {
       el.disabled = shouldDisable;
+    });
+  }
+
+  function disableConnectionForm(disabled) {
+    const shouldDisable = !!disabled || !state.serverId;
+    [connectionGuildInput, connectionChannelInput, connectionTokenInput, connectionSaveButton].forEach((el) => {
+      if (el) el.disabled = shouldDisable;
     });
   }
 
@@ -335,6 +357,13 @@
       if (integration) connectionStatusEl.classList.add('success');
       else connectionStatusEl.classList.add('error');
     }
+
+    setConnectionStatus(
+      integration
+        ? 'Update the guild, status channel, or bot token for this workspace.'
+        : "Add this workspace's Server Bot token and guild ID to enable status updates.",
+      integration ? 'success' : 'error'
+    );
   }
 
   function updateBadge(presenceLabel, presence) {
@@ -468,6 +497,7 @@
 
     if (!state.serverId) {
       disableStatusForm(true);
+      disableConnectionForm(true);
       resetView();
       if (!silent) setStatusNotice(describeError('missing_server'), 'error');
       return;
@@ -480,6 +510,7 @@
 
     if (shouldShowLoading) setStatusNotice('Loading Discord status…');
     disableStatusForm(true);
+    disableConnectionForm(true);
 
     try {
       const data = await apiRequest('GET');
@@ -487,20 +518,24 @@
       applyIntegration(data.integration || null);
       updateStatusView(data.status || {});
       disableStatusForm(false);
+      disableConnectionForm(false);
       if (shouldShowLoading) clearStatusNotice();
     } catch (err) {
       if (state.serverId !== activeServer || state.refreshToken !== token) return;
       disableStatusForm(false);
+      disableConnectionForm(false);
       const code = err?.code || err?.message || 'api_error';
       if (code === 'unauthorized') {
         setStatusNotice(describeError(code), 'error');
         disableStatusForm(true);
+        disableConnectionForm(true);
         stopPolling();
         return;
       }
       if (code === 'missing_server') {
         setStatusNotice(describeError(code), 'error');
         disableStatusForm(true);
+        disableConnectionForm(true);
         return;
       }
       if (!silent) setStatusNotice(describeError(code), 'error');
@@ -526,6 +561,43 @@
       disableStatusForm(false);
       const code = err?.code || err?.message || 'api_error';
       setStatusNotice(describeError(code), 'error');
+    }
+  }
+
+  async function saveConnection(event) {
+    event?.preventDefault();
+    if (!state.serverId) {
+      setConnectionStatus(describeError('missing_server'), 'error');
+      return;
+    }
+
+    const payload = gatherConnectionPayload();
+    const guildId = payload.guildId || state.integration?.guildId || '';
+    const channelId = payload.channelId || state.integration?.channelId || '';
+    const hasToken = Boolean(payload.botToken || state.integration?.hasToken);
+
+    if (!guildId || !channelId) {
+      setConnectionStatus('Enter a guild ID and status channel ID to start the Server Bot.', 'error');
+      return;
+    }
+    if (!hasToken) {
+      setConnectionStatus('Paste the bot token so the Server Bot can connect.', 'error');
+      return;
+    }
+
+    disableConnectionForm(true);
+    setConnectionStatus('Saving Server Bot connection…');
+
+    try {
+      const data = await apiRequest('POST', payload);
+      applyIntegration(data.integration || null, { force: true });
+      updateStatusView(data.status || {});
+      setConnectionStatus('Server Bot connection saved. The bot will start shortly.', 'success');
+      disableConnectionForm(false);
+    } catch (err) {
+      disableConnectionForm(false);
+      const code = err?.code || err?.message || 'api_error';
+      setConnectionStatus(describeError(code), 'error');
     }
   }
 
@@ -560,6 +632,7 @@
   }
 
   statusForm?.addEventListener('submit', saveStatusConfig);
+  connectionSaveButton?.addEventListener('click', saveConnection);
 
   statusTemplateInput?.addEventListener('input', markStatusDirty);
   Object.values(presenceSelectEls).forEach((select) => {
@@ -608,6 +681,7 @@
     selectServer(window.__workspaceSelectedServer);
   } else {
     disableStatusForm(true);
+    disableConnectionForm(true);
     resetView();
     setStatusNotice(describeError('missing_server'), 'error');
   }
