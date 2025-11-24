@@ -318,22 +318,92 @@
             </div>
             <fieldset class="role-fieldset">
               <legend>Slash command roles</legend>
-              <p class="muted small">Limit who can run the Main Bot's commands. Hold Ctrl/Cmd to select multiple roles or leave empty to allow everyone.</p>
-              <div class="grid2 stack-sm">
-                <label for="team-command-status-role">/status roles
-                  <select id="team-command-status-role" multiple size="6"></select>
-                </label>
-                <label for="team-command-ticket-role">/ticket roles
-                  <select id="team-command-ticket-role" multiple size="6"></select>
-                </label>
-              </div>
-              <div class="grid2 stack-sm">
-                <label for="team-command-lookup-role">/rustlookup roles
-                  <select id="team-command-lookup-role" multiple size="6"></select>
-                </label>
-                <label for="team-command-auth-role">/auth roles
-                  <select id="team-command-auth-role" multiple size="6"></select>
-                </label>
+              <p class="muted small">Limit who can run the Main Bot's commands. Select roles or paste IDs separated by commas; leave empty to allow everyone.</p>
+              <div class="discord-command-grid">
+                <div class="command-role" data-command="status">
+                  <div class="command-role-label">
+                    <span class="command-role-title">/status roles</span>
+                    <small class="muted">Everyone if empty</small>
+                  </div>
+                  <div class="input-combo">
+                    <select id="team-command-status-role-select" class="input-combo-select command-role-select">
+                      <option value="">Select a role</option>
+                    </select>
+                    <input
+                      id="team-command-status-role-input"
+                      class="command-role-input"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      list="discord-role-options"
+                      placeholder="Add role IDs, separated by commas"
+                    />
+                  </div>
+                  <div id="team-command-status-role-list" class="command-role-list" data-command="status"></div>
+                </div>
+                <div class="command-role" data-command="ticket">
+                  <div class="command-role-label">
+                    <span class="command-role-title">/ticket roles</span>
+                    <small class="muted">Everyone if empty</small>
+                  </div>
+                  <div class="input-combo">
+                    <select id="team-command-ticket-role-select" class="input-combo-select command-role-select">
+                      <option value="">Select a role</option>
+                    </select>
+                    <input
+                      id="team-command-ticket-role-input"
+                      class="command-role-input"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      list="discord-role-options"
+                      placeholder="Add role IDs, separated by commas"
+                    />
+                  </div>
+                  <div id="team-command-ticket-role-list" class="command-role-list" data-command="ticket"></div>
+                </div>
+                <div class="command-role" data-command="rustlookup">
+                  <div class="command-role-label">
+                    <span class="command-role-title">/rustlookup roles</span>
+                    <small class="muted">Everyone if empty</small>
+                  </div>
+                  <div class="input-combo">
+                    <select id="team-command-lookup-role-select" class="input-combo-select command-role-select">
+                      <option value="">Select a role</option>
+                    </select>
+                    <input
+                      id="team-command-lookup-role-input"
+                      class="command-role-input"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      list="discord-role-options"
+                      placeholder="Add role IDs, separated by commas"
+                    />
+                  </div>
+                  <div id="team-command-lookup-role-list" class="command-role-list" data-command="rustlookup"></div>
+                </div>
+                <div class="command-role" data-command="auth">
+                  <div class="command-role-label">
+                    <span class="command-role-title">/auth roles</span>
+                    <small class="muted">Everyone if empty</small>
+                  </div>
+                  <div class="input-combo">
+                    <select id="team-command-auth-role-select" class="input-combo-select command-role-select">
+                      <option value="">Select a role</option>
+                    </select>
+                    <input
+                      id="team-command-auth-role-input"
+                      class="command-role-input"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      list="discord-role-options"
+                      placeholder="Add role IDs, separated by commas"
+                    />
+                  </div>
+                  <div id="team-command-auth-role-list" class="command-role-list" data-command="auth"></div>
+                </div>
               </div>
               <div class="row space-between align-center">
                 <p id="teamCommandRolesStatus" class="notice hidden"></p>
