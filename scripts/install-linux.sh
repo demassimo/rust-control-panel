@@ -10,6 +10,7 @@ DISCORD_SERVICE_NAME=rustadmin-discord-bot
 DISCORD_SERVICE_FILE=/etc/systemd/system/${DISCORD_SERVICE_NAME}.service
 NGINX_SITE=/etc/nginx/sites-available/rustadmin.conf
 NGINX_LINK=/etc/nginx/sites-enabled/rustadmin.conf
+NGINX_SSL_DIR=/etc/nginx/ssl
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR=""
 
@@ -326,6 +327,48 @@ configure_nginx() {
   fi
   tmp_conf="$(mktemp)"
   sed "s/__BACKEND_PORT__/$backend_port/g" "$INSTALL_DIR/deploy/nginx/rustadmin.conf" >"$tmp_conf"
+  mkdir -p "$NGINX_SSL_DIR"
+
+  local panel_public_url panel_host san_target cert_file key_file
+  if [ -f "$backend_env" ]; then
+    panel_public_url="$(awk -F '=' '/^PANEL_PUBLIC_URL=/{print $2}' "$backend_env" | tail -n1 | tr -d '[:space:]')"
+  else
+    panel_public_url=""
+  fi
+  panel_host="$(printf '%s' "${panel_public_url:-}" | sed -E 's#^[a-zA-Z]+://##' | cut -d/ -f1 | cut -d: -f1)"
+
+  cert_file="$NGINX_SSL_DIR/rustadmin.crt"
+  key_file="$NGINX_SSL_DIR/rustadmin.key"
+  local needs_cert="false"
+  if [[ ! -f "$cert_file" || ! -f "$key_file" ]]; then
+    needs_cert="true"
+  fi
+
+  if [[ -z "$panel_host" && "$needs_cert" == "true" ]]; then
+    panel_host="$(prompt_with_default "Hostname for self-signed TLS certificate" "$(hostname -f 2>/dev/null || echo localhost)")"
+  fi
+
+  if [[ -z "$panel_host" ]]; then
+    panel_host="localhost"
+  fi
+
+  if [[ "$panel_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    san_target="IP:${panel_host}"
+  else
+    san_target="DNS:${panel_host}"
+  fi
+
+  if [[ "$needs_cert" == "true" ]]; then
+    log "Generating self-signed TLS certificate for $panel_host"
+    openssl req -x509 -nodes -newkey rsa:4096 -days 825 \
+      -keyout "$key_file" -out "$cert_file" \
+      -subj "/CN=${panel_host}" -addext "subjectAltName=${san_target}"
+    chmod 600 "$key_file"
+    chmod 644 "$cert_file"
+  else
+    log "Using existing TLS certificate at $cert_file"
+  fi
+
   install -m 644 "$tmp_conf" "$NGINX_SITE"
   rm -f "$tmp_conf"
   ln -sf "$NGINX_SITE" "$NGINX_LINK"
@@ -356,7 +399,7 @@ main() {
   install_backend_service
   install_discord_bot_service
   configure_nginx
-  log "Installation complete. API on :8787, UI on :80"
+  log "Installation complete. API on :8787, UI on :443 (self-signed TLS)"
 }
 
 main "$@"

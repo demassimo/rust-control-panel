@@ -5,7 +5,7 @@ This bundle is ready for **Debian/Ubuntu** with **systemd**. It includes:
 - Swappable DB layer (SQLite or MySQL)
 - Players module with Steam sync
 - Sample **systemd** unit (backend)
-- Sample **nginx** config (static frontend)
+- Sample **nginx** config (static frontend over HTTPS)
 - **scripts/install-linux.sh** and **scripts/uninstall-linux.sh**
 
 ## Quick Install
@@ -15,6 +15,12 @@ cd rust-control-panel
 sudo bash scripts/install-linux.sh
 # follow the prompts to configure the backend environment
 ```
+
+### HTTPS and TLS certificates
+
+The installer now provisions a **self-signed** TLS certificate for the hostname you provide in `PANEL_PUBLIC_URL` and configures nginx to listen on port **443**. The certificate and key live at `/etc/nginx/ssl/rustadmin.crt` and `/etc/nginx/ssl/rustadmin.key`, and port **80** automatically redirects to HTTPS. When upgrading an existing install, the installer and update script generate a new certificate if they don't find one and will prompt for the hostname to embed in that cert when the current configuration doesn't specify one.
+
+Browsers will show a warning until you trust the certificate or replace it with one from a public CA. To swap in a trusted certificate, update those files and reload nginx.
 
 Need a tour of the codebase? Check out [`FILES.md`](FILES.md) for a high-level description of each file and directory.
 
