@@ -10903,4 +10903,5 @@
   };
 
   whenTemplatesReady().then(start).catch((err) => console.error('App init failed', err));
+}
 })();
