@@ -65,7 +65,7 @@ MYSQL_PASSWORD=strongpass
 MYSQL_DATABASE=rustadmin
 ```
 
-Set `STEAM_API_KEY=...` for Steam enrichment.
+Set `STEAM_API_KEY=...` for Steam enrichment, or store a team-specific key from **Discord → Main Bot settings** to override the global value.
 Set `RUSTMAPS_API_KEY=...` to provide a fallback RustMaps key (optional). Each panel user can store their own key from **Settings → Personal settings** — required for the live map module (see https://api.rustmaps.com for keys).
 Set `PANEL_PUBLIC_URL=https://your-panel.example.com` so ticket preview links shared over Discord resolve to the correct public hostname.
 
@@ -89,6 +89,8 @@ Team authentication links now rely on OAuth flows for both Discord and Steam. Co
 - `STEAM_OPENID_RETURN_URL` — the callback URL Steam should redirect to (defaults to `https://<host>/api/auth/steam/callback`).
 - `STEAM_OPENID_REALM` — optional OpenID realm sent to Steam (defaults to the request origin).
 - `TEAM_AUTH_STATE_SECRET` — secret used to sign OAuth state and session cookies (falls back to `JWT_SECRET`, but a dedicated value is recommended).
+
+You can also manage the Discord OAuth client ID/secret/redirect URI and the Steam Web API key from **Discord → Main Bot settings** in the panel. Values saved in the dashboard override the environment defaults for that team while keeping existing bot tokens intact.
 
 The bot credentials for Discord tickets (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_TICKET_PANEL_CHANNEL_ID`) also live in this file, but the ticket panel itself is created from the web UI—once the bot variables are set, publish the panel from **Discord tickets → Create ticket panel**.
 
