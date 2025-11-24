@@ -6510,12 +6510,21 @@ app.get('/api/public-config', (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
   const userName = normalizeUsername(username);
-  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
+  if (!userName || !password) {
+    console.warn('login attempt missing fields', { username: userName || '(empty)' });
+    return res.status(400).json({ error: 'missing_fields' });
+  }
   try {
-    const row = await db.getUserByUsername(userName);
-    if (!row) return res.status(401).json({ error: 'invalid_login' });
+    const row = await findUserCaseInsensitive(userName);
+    if (!row) {
+      console.warn('login failed: user not found', { username: userName });
+      return res.status(401).json({ error: 'invalid_login' });
+    }
     const ok = await bcrypt.compare(password, row.password_hash);
-    if (!ok) return res.status(401).json({ error: 'invalid_login' });
+    if (!ok) {
+      console.warn('login failed: invalid password', { username: userName, userId: row.id });
+      return res.status(401).json({ error: 'invalid_login' });
+    }
     const hasTotp = Boolean(row.mfa_enabled && row.mfa_secret);
     const passkeyCount = typeof db.countUserPasskeys === 'function'
       ? await db.countUserPasskeys(row.id)
@@ -6523,6 +6532,12 @@ app.post('/api/login', async (req, res) => {
     const requiresMfa = hasTotp || passkeyCount > 0;
     if (requiresMfa) {
       const ticket = createMfaTicket(row.id);
+      console.info('login requires mfa', {
+        username: userName,
+        userId: row.id,
+        hasTotp,
+        passkeyCount
+      });
       let passkeyOptions = null;
       if (passkeyCount > 0) {
         try {
@@ -6540,8 +6555,10 @@ app.post('/api/login', async (req, res) => {
       });
     }
     const payload = await buildAuthPayload(row);
+    console.info('login successful', { username: userName, userId: row.id });
     res.json(payload);
   } catch (e) {
+    console.error('login error', { username: userName, error: e });
     res.status(500).json({ error: 'db_error' });
   }
 });
