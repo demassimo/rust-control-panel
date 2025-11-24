@@ -8869,6 +8869,11 @@
       });
   }
 
+  function selectedRolesFromSelect(select) {
+    if (!select) return [];
+    return Array.from(select.selectedOptions || [])
+      .map((option) => option.value)
+      .filter(Boolean);
   function getCommandPermissionsDraft() {
     const config = state.teamDiscord?.config || defaultTeamDiscordConfig();
     return normalizeTeamCommandPermissions(config.commandPermissions || {});
