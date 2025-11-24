@@ -498,6 +498,7 @@ label.inline input[type="checkbox"]:focus-visible,
   background: rgba(255, 255, 255, 0.04);
   box-shadow: 0 18px 36px rgba(244, 63, 94, 0.16);
   margin-right: auto;
+  flex-wrap: wrap;
 }
 
 .topnav .nav-btn {
@@ -1826,7 +1827,6 @@ label.inline input[type="checkbox"]:focus-visible,
 
 .workspace-menu {
   display: flex;
-  flex-wrap: wrap;
   gap: 14px;
 }
 
@@ -5780,8 +5780,36 @@ pre {
 @media (max-width: 720px) {
   .app-shell { padding: 28px 16px 64px; }
   .app-header { position: static; padding: 20px; }
+  .header-controls { gap: 10px; }
+  .topnav {
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding: 6px;
+    scrollbar-width: thin;
+  }
+  .topnav::-webkit-scrollbar { height: 6px; }
+  .topnav::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.25); border-radius: 999px; }
+  .topnav .nav-btn { flex: 0 0 auto; white-space: nowrap; }
   .dashboard { gap: 20px; }
   .servers-section, .team-card, .workspace, .settings-panel { padding: 24px; }
+  .workspace { gap: 18px; }
+  .workspace-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .workspace-header .ghost.small { width: 100%; order: 1; }
+  .workspace-title { width: 100%; }
+  .workspace-title h2 { font-size: 1.4rem; }
+  .workspace-menu {
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+    margin: 0 -4px;
+    padding-left: 4px;
+    padding-right: 4px;
+    scrollbar-width: thin;
+  }
+  .workspace-menu::-webkit-scrollbar { height: 6px; }
+  .workspace-menu::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.25); border-radius: 999px; }
+  .workspace-menu .menu-tab { flex: 0 0 auto; white-space: nowrap; }
   .workspace-views { gap: 20px; }
   .login-hero, .login-card { padding: 24px; }
 }
