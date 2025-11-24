@@ -3062,10 +3062,11 @@ async function fetchRustPlaytimeMinutes(steamid, key) {
   return Number.isFinite(minutes) ? minutes : null;
 }
 
-async function resolveSteamProfiles(steamids) {
+async function resolveSteamProfiles(steamids, { steamApiKey = null } = {}) {
   const ids = [...new Set((steamids || []).map((id) => String(id || '').trim()).filter(Boolean))];
   const profileMap = new Map();
   if (ids.length === 0) return profileMap;
+  const apiKey = sanitizeDiscordToken(steamApiKey, 120) || process.env.STEAM_API_KEY || '';
   if (typeof db.getPlayersBySteamIds === 'function') {
     try {
       const rows = await db.getPlayersBySteamIds(ids);
@@ -3092,9 +3093,9 @@ async function resolveSteamProfiles(steamids) {
       profileMap.set(steamid, existing);
     }
   }
-  if (toFetch.length > 0 && process.env.STEAM_API_KEY) {
+  if (toFetch.length > 0 && apiKey) {
     try {
-      const fetched = await fetchSteamProfiles(toFetch, process.env.STEAM_API_KEY, { includePlaytime: true });
+      const fetched = await fetchSteamProfiles(toFetch, apiKey, { includePlaytime: true });
       const nowIso = new Date().toISOString();
       await Promise.all(fetched.map(async (profile) => {
         const normalized = {
@@ -4775,11 +4776,11 @@ async function maybeRefreshTeamInfoFromMonitor(serverId, players) {
   return result.players;
 }
 
-async function enrichLivePlayers(players) {
+async function enrichLivePlayers(players, { steamApiKey = null } = {}) {
   if (!Array.isArray(players) || players.length === 0) return [];
   try {
     const steamIds = players.map((p) => p?.steamId || '').filter(Boolean);
-    const profiles = await resolveSteamProfiles(steamIds);
+    const profiles = await resolveSteamProfiles(steamIds, { steamApiKey });
     return players.map((player) => {
       const endpoint = extractEndpoint(player.address);
       const profile = profiles.get(player.steamId) || null;
@@ -4863,8 +4864,10 @@ async function processMonitorPlayerListSnapshot(serverId, message) {
   try {
     let players = parsePlayerListMessage(message);
     if (!Array.isArray(players) || players.length === 0) return;
+    const serverRow = await getMonitoredServerRow(serverId);
+    const steamApiKey = await resolveTeamSteamApiKey(serverRow?.team_id ?? serverRow?.teamId);
     players = await maybeRefreshTeamInfoFromMonitor(serverId, players);
-    players = await enrichLivePlayers(players);
+    players = await enrichLivePlayers(players, { steamApiKey });
     await syncServerPlayerDirectory(serverId, players);
   } catch (err) {
     console.warn('Failed to process monitored player list', err);
@@ -5277,12 +5280,57 @@ function previewDiscordToken(token) {
   return `••••${text.slice(-4)}`;
 }
 
+function sanitizeUrlOverride(value, maxLength = 800) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trimmed.match(/^https?:\/\//i)) return null;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
+  return trimmed.slice(0, maxLength);
+}
+
 function sanitizeDiscordSnowflake(value, maxLength = 64) {
   if (value == null) return '';
   const digits = String(value).replace(/[^0-9]/g, '');
   if (!digits) return '';
   if (!Number.isFinite(maxLength) || maxLength <= 0) return digits;
   return digits.slice(0, maxLength);
+}
+
+async function loadTeamDiscordConfig(teamId) {
+  const numeric = Number(teamId);
+  if (!Number.isFinite(numeric) || typeof db.getTeamDiscordSettings !== 'function') {
+    return DEFAULT_TEAM_DISCORD_CONFIG;
+  }
+  try {
+    const settings = await db.getTeamDiscordSettings(numeric);
+    return parseTeamDiscordConfig(settings?.config ?? null);
+  } catch (err) {
+    console.warn('failed to load team discord config', err);
+    return DEFAULT_TEAM_DISCORD_CONFIG;
+  }
+}
+
+function buildDiscordOAuthSettings(req, teamConfig = DEFAULT_TEAM_DISCORD_CONFIG) {
+  const discordOauth = teamConfig?.oauth?.discord || {};
+  const clientId = sanitizeDiscordSnowflake(discordOauth.clientId) || DISCORD_OAUTH_CLIENT_ID;
+  const clientSecret = sanitizeDiscordToken(discordOauth.clientSecret, 400) || DISCORD_OAUTH_CLIENT_SECRET;
+  const redirectUri = resolveDiscordRedirectUri(req, discordOauth.redirectUri);
+  return { clientId, clientSecret, redirectUri };
+}
+
+function buildSteamOAuthSettings(req, teamConfig = DEFAULT_TEAM_DISCORD_CONFIG) {
+  const steamOauth = teamConfig?.oauth?.steam || {};
+  const apiKey = sanitizeDiscordToken(steamOauth.apiKey, 120) || process.env.STEAM_API_KEY || '';
+  const realm = resolveSteamRealm(req, steamOauth.realm);
+  const returnUrl = resolveSteamReturnUrl(req, steamOauth.returnUrl);
+  return { apiKey, realm, returnUrl };
+}
+
+async function resolveTeamSteamApiKey(teamId) {
+  const config = await loadTeamDiscordConfig(teamId);
+  const apiKey = sanitizeDiscordToken(config?.oauth?.steam?.apiKey, 120) || process.env.STEAM_API_KEY || '';
+  return apiKey;
 }
 
 function projectDiscordRole(role) {
@@ -5564,23 +5612,29 @@ function buildTeamAuthReturnUrl(token, extraParams = {}) {
   return `${link}${connector}${params.toString()}`;
 }
 
-function resolveDiscordRedirectUri(req) {
+function resolveDiscordRedirectUri(req, override) {
+  const overrideUri = sanitizeUrlOverride(override, 800);
+  if (overrideUri) return overrideUri;
   if (DISCORD_OAUTH_REDIRECT_URI) return DISCORD_OAUTH_REDIRECT_URI;
   const origin = `${req.protocol}://${req.get('host')}`;
   return `${origin}/api/auth/discord/callback`;
 }
 
-function resolveTicketDiscordRedirectUri(req) {
-  return resolveDiscordRedirectUri(req);
+function resolveTicketDiscordRedirectUri(req, override) {
+  return resolveDiscordRedirectUri(req, override);
 }
 
-function resolveSteamReturnUrl(req) {
+function resolveSteamReturnUrl(req, override) {
+  const overrideUrl = sanitizeUrlOverride(override, 800);
+  if (overrideUrl) return overrideUrl;
   if (STEAM_OPENID_RETURN_URL) return STEAM_OPENID_RETURN_URL;
   const origin = `${req.protocol}://${req.get('host')}`;
   return `${origin}/api/auth/steam/callback`;
 }
 
-function resolveSteamRealm(req) {
+function resolveSteamRealm(req, override) {
+  const overrideRealm = sanitizeUrlOverride(override, 800);
+  if (overrideRealm) return overrideRealm;
   if (STEAM_OPENID_REALM) return STEAM_OPENID_REALM;
   const origin = `${req.protocol}://${req.get('host')}`;
   return origin;
@@ -7337,9 +7391,6 @@ app.get('/api/team/auth/profiles', auth, async (req, res) => {
 app.get('/api/auth/discord/redirect', async (req, res) => {
   const requestToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
   const fallbackLink = buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'invalid_token' });
-  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
-    return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'discord_unavailable' }));
-  }
   if (typeof db.getTeamAuthRequestByToken !== 'function') {
     return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'not_supported' }));
   }
@@ -7354,6 +7405,11 @@ app.get('/api/auth/discord/redirect', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'expired' }));
     }
+    const teamConfig = await loadTeamDiscordConfig(record.team_id ?? record.teamId);
+    const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
+    if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'discord_unavailable' }));
+    }
     const cookieJar = parseCookies(req.headers.cookie || '');
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const stateToken = encodeSignedPayload({
@@ -7365,10 +7421,9 @@ app.get('/api/auth/discord/redirect', async (req, res) => {
     if (!stateToken) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'state_error' }));
     }
-    const redirectUri = resolveDiscordRedirectUri(req);
     const authorizeUrl = new URL('https://discord.com/api/oauth2/authorize');
-    authorizeUrl.searchParams.set('client_id', DISCORD_OAUTH_CLIENT_ID);
-    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('client_id', discordOAuth.clientId);
+    authorizeUrl.searchParams.set('redirect_uri', discordOAuth.redirectUri);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('scope', 'identify');
     authorizeUrl.searchParams.set('state', stateToken);
@@ -7390,10 +7445,6 @@ async function handleTicketDiscordCallback(req, res, statePayload, code) {
     res.redirect(fallback);
     return true;
   }
-  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
-    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'discord_unavailable' }) || fallback);
-    return true;
-  }
   if (!code) {
     res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'authorization_failed' }) || fallback);
     return true;
@@ -7409,10 +7460,16 @@ async function handleTicketDiscordCallback(req, res, statePayload, code) {
     res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'ticket_open' }) || fallback);
     return true;
   }
-  const redirectUri = resolveTicketDiscordRedirectUri(req);
+  const teamConfig = await loadTeamDiscordConfig(teamId);
+  const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
+  if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'discord_unavailable' }) || fallback);
+    return true;
+  }
+  const redirectUri = resolveTicketDiscordRedirectUri(req, discordOAuth.redirectUri);
   const body = new URLSearchParams();
-  body.set('client_id', DISCORD_OAUTH_CLIENT_ID);
-  body.set('client_secret', DISCORD_OAUTH_CLIENT_SECRET);
+  body.set('client_id', discordOAuth.clientId);
+  body.set('client_secret', discordOAuth.clientSecret);
   body.set('grant_type', 'authorization_code');
   body.set('code', String(code));
   body.set('redirect_uri', redirectUri);
@@ -7486,9 +7543,6 @@ app.get('/api/auth/discord/callback', async (req, res) => {
   if (!requestToken) {
     return res.redirect(buildTeamAuthReturnUrl('', { discord_error: 'state_invalid' }));
   }
-  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
-    return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unavailable' }));
-  }
   if (!code) {
     return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'authorization_failed' }));
   }
@@ -7503,16 +7557,21 @@ app.get('/api/auth/discord/callback', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'expired' }));
     }
+    const teamConfig = await loadTeamDiscordConfig(record.team_id ?? record.teamId);
+    const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
+    if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
+      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unavailable' }));
+    }
     const cookieJar = parseCookies(req.headers.cookie || '');
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const expectedCookie = sanitizeCookieId(statePayload.cookieId || null);
     if (expectedCookie && cookieId && expectedCookie !== cookieId) {
       return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'session_mismatch' }));
     }
-    const redirectUri = resolveDiscordRedirectUri(req);
+    const redirectUri = resolveDiscordRedirectUri(req, discordOAuth.redirectUri);
     const body = new URLSearchParams();
-    body.set('client_id', DISCORD_OAUTH_CLIENT_ID);
-    body.set('client_secret', DISCORD_OAUTH_CLIENT_SECRET);
+    body.set('client_id', discordOAuth.clientId);
+    body.set('client_secret', discordOAuth.clientSecret);
     body.set('grant_type', 'authorization_code');
     body.set('code', String(code));
     body.set('redirect_uri', redirectUri);
@@ -7578,6 +7637,7 @@ app.get('/api/auth/steam/redirect', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'expired' }));
     }
+    const teamConfig = await loadTeamDiscordConfig(record.team_id ?? record.teamId);
     const cookieJar = parseCookies(req.headers.cookie || '');
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const stateToken = encodeSignedPayload({
@@ -7589,13 +7649,14 @@ app.get('/api/auth/steam/redirect', async (req, res) => {
     if (!stateToken) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'state_error' }));
     }
-    const returnUrl = new URL(resolveSteamReturnUrl(req));
+    const steamOAuth = buildSteamOAuthSettings(req, teamConfig);
+    const returnUrl = new URL(resolveSteamReturnUrl(req, steamOAuth.returnUrl));
     returnUrl.searchParams.set('state', stateToken);
     const params = new URLSearchParams({
       'openid.ns': 'http://specs.openid.net/auth/2.0',
       'openid.mode': 'checkid_setup',
       'openid.return_to': returnUrl.toString(),
-      'openid.realm': resolveSteamRealm(req),
+      'openid.realm': resolveSteamRealm(req, steamOAuth.realm),
       'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
       'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select'
     });
@@ -8674,21 +8735,23 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
 });
 
 app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (req, res) => {
-  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
-    return res.status(503).json({ error: 'discord_unavailable' });
-  }
   const teamId = Number(req.params?.teamId);
   if (!Number.isFinite(teamId)) return res.status(400).json({ error: 'invalid_team' });
   const rawToken = typeof req.params?.ticketToken === 'string' ? req.params.ticketToken.trim() : '';
   if (!rawToken) return res.status(400).json({ error: 'invalid_ticket' });
   const fallbackReturn = buildTicketPreviewReturn(teamId, rawToken, { discord_error: 'authorization_failed' });
   try {
+    const teamConfig = await loadTeamDiscordConfig(teamId);
+    const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
+    if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
+      return res.status(503).json({ error: 'discord_unavailable' });
+    }
     const row = await loadDiscordTicketForTeam(teamId, rawToken);
     if (!row) return res.status(404).json({ error: 'not_found' });
     const ticket = projectDiscordTicket(row);
     const isClosed = ticket?.status === 'closed' || Boolean(ticket?.closedAt);
     if (!isClosed) return res.status(409).json({ error: 'ticket_open' });
-    const redirectUri = resolveTicketDiscordRedirectUri(req);
+    const redirectUri = resolveTicketDiscordRedirectUri(req, discordOAuth.redirectUri);
     const returnToParam = typeof req.query?.returnTo === 'string' ? req.query.returnTo : null;
     const stateToken = encodeSignedPayload({
       purpose: 'ticket_discord_state',
@@ -8699,7 +8762,7 @@ app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (
     });
     if (!stateToken) return res.status(500).json({ error: 'state_error' });
     const params = new URLSearchParams({
-      client_id: DISCORD_OAUTH_CLIENT_ID,
+      client_id: discordOAuth.clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: 'identify',
@@ -9123,7 +9186,8 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       clearManualRefreshState(id);
     }
 
-    players = await enrichLivePlayers(players);
+    const steamApiKey = await resolveTeamSteamApiKey(server?.team_id ?? server?.teamId);
+    players = await enrichLivePlayers(players, { steamApiKey });
     await syncServerPlayerDirectory(id, players);
     logger.debug('Processed live players', { count: players.length });
     let info = getCachedServerInfo(id);
@@ -10266,9 +10330,10 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
 app.post('/api/steam/sync', auth, async (req, res) => {
   const { steamids } = req.body || {};
   if (!Array.isArray(steamids) || steamids.length === 0) return res.status(400).json({ error: 'missing_steamids' });
-  if (!process.env.STEAM_API_KEY) return res.status(400).json({ error: 'no_steam_api_key' });
+  const steamApiKey = await resolveTeamSteamApiKey(req.authUser?.activeTeamId);
+  if (!steamApiKey) return res.status(400).json({ error: 'no_steam_api_key' });
   try {
-    const list = await fetchSteamProfiles(steamids, process.env.STEAM_API_KEY, { includePlaytime: true });
+    const list = await fetchSteamProfiles(steamids, steamApiKey, { includePlaytime: true });
     const nowIso = new Date().toISOString();
     for (const profile of list) {
       await db.upsertPlayer({

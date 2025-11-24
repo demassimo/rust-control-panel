@@ -251,6 +251,14 @@
   const teamDiscordSummary = $('#teamDiscordSummary');
   const teamDiscordSummaryGuild = $('#teamDiscordSummaryGuild');
   const teamDiscordSummaryToken = $('#teamDiscordSummaryToken');
+  const teamOAuthForm = $('#teamOAuthForm');
+  const teamDiscordOauthClientId = $('#teamDiscordOauthClientId');
+  const teamDiscordOauthClientSecret = $('#teamDiscordOauthClientSecret');
+  const teamDiscordOauthRedirectUri = $('#teamDiscordOauthRedirectUri');
+  const teamSteamApiKeyInput = $('#teamSteamApiKey');
+  const teamOAuthStatus = $('#teamOAuthStatus');
+  const btnSaveTeamOAuth = $('#btnSaveTeamOAuth');
+  const btnClearTeamOAuth = $('#btnClearTeamOAuth');
   const teamAuthSection = $('#teamAuthSection');
   const teamAuthForm = $('#teamAuthForm');
   const teamAuthEnabledInput = $('#teamAuthEnabled');
@@ -5901,6 +5909,18 @@
         ticket: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.ticket],
         rustlookup: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.rustlookup],
         auth: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.auth]
+      },
+      oauth: {
+        discord: {
+          clientId: null,
+          clientSecret: null,
+          redirectUri: null
+        },
+        steam: {
+          apiKey: null,
+          realm: null,
+          returnUrl: null
+        }
       }
     };
   }
@@ -6000,13 +6020,55 @@
     };
   }
 
+  function normalizeUrlConfig(value, max = 800) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return null;
+    if (!/^https?:\/\//i.test(text)) return null;
+    const limit = Number.isFinite(max) && max > 0 ? max : undefined;
+    return limit ? text.slice(0, limit) : text;
+  }
+
+  function normalizeSecretValue(value, max = 400) {
+    if (value == null) return null;
+    const text = String(value).trim();
+    if (!text) return null;
+    const limit = Number.isFinite(max) && max > 0 ? max : undefined;
+    return limit ? text.slice(0, limit) : text;
+  }
+
+  function normalizeDiscordClientId(value) {
+    const digits = typeof value === 'string' ? value.replace(/[^0-9]/g, '') : '';
+    if (!digits) return null;
+    return digits.slice(0, 64);
+  }
+
+  function normalizeTeamOAuthConfig(oauth = {}) {
+    const source = oauth && typeof oauth === 'object' ? oauth : {};
+    const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
+    const steam = source.steam && typeof source.steam === 'object' ? source.steam : {};
+    return {
+      discord: {
+        clientId: normalizeDiscordClientId(discord.clientId ?? discord.client_id),
+        clientSecret: normalizeSecretValue(discord.clientSecret ?? discord.client_secret, 400),
+        redirectUri: normalizeUrlConfig(discord.redirectUri ?? discord.redirect_uri, 800)
+      },
+      steam: {
+        apiKey: normalizeSecretValue(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120),
+        realm: normalizeUrlConfig(steam.realm ?? steam.realm_url, 800),
+        returnUrl: normalizeUrlConfig(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800)
+      }
+    };
+  }
+
   function normalizeTeamDiscordConfig(config = {}) {
     const source = config && typeof config === 'object' ? config : {};
+    const oauth = normalizeTeamOAuthConfig(source.oauth || {});
     return {
       ticketing: normalizeWorkspaceTicketing(source.ticketing || {}),
       commandPermissions: normalizeTeamCommandPermissions(
         source.commandPermissions || source.command_permissions || {}
-      )
+      ),
+      oauth
     };
   }
 
@@ -8771,7 +8833,19 @@
       state.teamDiscord.config = normalized;
     }
     state.teamDiscord.configLoaded = true;
+    resetTeamOAuthInputs();
     updateTeamDiscordConfigUi();
+  }
+
+  function resetTeamOAuthInputs() {
+    [teamDiscordOauthClientId, teamDiscordOauthRedirectUri, teamDiscordOauthClientSecret, teamSteamApiKeyInput]
+      .forEach((input) => {
+        if (!input) return;
+        if ((input === teamDiscordOauthClientSecret || input === teamSteamApiKeyInput) && !input.matches(':focus')) {
+          input.value = '';
+        }
+        if (input.dataset) delete input.dataset.touched;
+      });
   }
 
   function selectedRolesFromSelect(select) {
@@ -8882,6 +8956,9 @@
     state.teamDiscord.config = details;
 
     const ticketing = details.ticketing || DEFAULT_DISCORD_TICKETING_CONFIG;
+    const oauth = details.oauth || defaultTeamDiscordConfig().oauth;
+    const discordOauth = oauth.discord || {};
+    const steamOauth = oauth.steam || {};
     const ticketingEnabled = Boolean(ticketing.enabled);
     if (discordTicketingEnabledInput && !discordTicketingEnabledInput.matches(':focus')) {
       discordTicketingEnabledInput.checked = ticketingEnabled;
@@ -8977,6 +9054,27 @@
       discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId, roleLookup);
     }
 
+    if (teamDiscordOauthClientId && !teamDiscordOauthClientId.matches(':focus')) {
+      teamDiscordOauthClientId.value = discordOauth.clientId || '';
+      delete teamDiscordOauthClientId.dataset?.touched;
+    }
+    if (teamDiscordOauthRedirectUri && !teamDiscordOauthRedirectUri.matches(':focus')) {
+      teamDiscordOauthRedirectUri.value = discordOauth.redirectUri || '';
+      delete teamDiscordOauthRedirectUri.dataset?.touched;
+    }
+    if (teamDiscordOauthClientSecret && !teamDiscordOauthClientSecret.matches(':focus')) {
+      teamDiscordOauthClientSecret.value = '';
+      delete teamDiscordOauthClientSecret.dataset?.touched;
+    }
+    if (teamSteamApiKeyInput && !teamSteamApiKeyInput.matches(':focus')) {
+      if (teamSteamApiKeyInput.dataset?.touched === 'true') {
+        // keep user-entered value
+      } else {
+        teamSteamApiKeyInput.value = '';
+      }
+      delete teamSteamApiKeyInput.dataset?.touched;
+    }
+
     if (btnRefreshTeamDiscordChannels) {
       btnRefreshTeamDiscordChannels.disabled = !canManage || loading || !hasSettings || channelsLoading;
     }
@@ -8996,6 +9094,39 @@
         hideNotice(teamDiscordChannelsStatus);
       }
     }
+
+    if (teamDiscordOauthClientId) {
+      teamDiscordOauthClientId.disabled = !canManage || loading;
+      if (!teamDiscordOauthClientId.matches(':focus')) {
+        teamDiscordOauthClientId.placeholder = discordOauth.clientId
+          ? 'Client ID stored — enter to replace'
+          : 'Enter Discord OAuth client ID';
+      }
+    }
+    if (teamDiscordOauthClientSecret) {
+      teamDiscordOauthClientSecret.disabled = !canManage || loading;
+      teamDiscordOauthClientSecret.placeholder = discordOauth.clientSecret
+        ? 'Secret stored — enter to replace'
+        : 'Paste Discord OAuth client secret';
+    }
+    if (teamDiscordOauthRedirectUri) {
+      teamDiscordOauthRedirectUri.disabled = !canManage || loading;
+      if (!teamDiscordOauthRedirectUri.matches(':focus')) {
+        teamDiscordOauthRedirectUri.placeholder = discordOauth.redirectUri
+          ? 'Redirect stored — enter to replace'
+          : 'Optional: custom Discord redirect URI';
+      }
+    }
+    if (teamSteamApiKeyInput) {
+      teamSteamApiKeyInput.disabled = !canManage || loading;
+      if (!teamSteamApiKeyInput.matches(':focus')) {
+        teamSteamApiKeyInput.placeholder = steamOauth.apiKey
+          ? 'Key stored — enter to replace or clear'
+          : 'Optional: Steam Web API key';
+      }
+    }
+    if (btnSaveTeamOAuth) btnSaveTeamOAuth.disabled = !canManage || loading;
+    if (btnClearTeamOAuth) btnClearTeamOAuth.disabled = !canManage || loading;
 
     const commandPerms = normalizeTeamCommandPermissions(details.commandPermissions || {});
     const disableCommandSelects = !canManage || loading || !hasSettings || rolesLoading || !availableRoles.length;
@@ -9161,6 +9292,34 @@
     hideNotice(teamTicketingStatus);
     updateTeamDiscordConfigUi(updated);
   }
+
+  function updateTeamOAuthState({ clearSecrets = false } = {}) {
+    const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
+    const baseOauth = current.oauth || defaultTeamDiscordConfig().oauth;
+    const clientIdTouched = teamDiscordOauthClientId?.dataset?.touched === 'true';
+    const redirectTouched = teamDiscordOauthRedirectUri?.dataset?.touched === 'true';
+    const secretTouched = teamDiscordOauthClientSecret?.dataset?.touched === 'true';
+    const steamKeyTouched = teamSteamApiKeyInput?.dataset?.touched === 'true';
+
+    const oauth = normalizeTeamOAuthConfig({
+      discord: {
+        clientId: clientIdTouched ? teamDiscordOauthClientId?.value : baseOauth.discord.clientId,
+        clientSecret: clearSecrets
+          ? null
+          : (secretTouched ? teamDiscordOauthClientSecret?.value : baseOauth.discord.clientSecret),
+        redirectUri: redirectTouched ? teamDiscordOauthRedirectUri?.value : baseOauth.discord.redirectUri
+      },
+      steam: {
+        apiKey: clearSecrets ? null : (steamKeyTouched ? teamSteamApiKeyInput?.value : baseOauth.steam.apiKey),
+        realm: baseOauth.steam.realm,
+        returnUrl: baseOauth.steam.returnUrl
+      }
+    });
+    const updated = normalizeTeamDiscordConfig({ ...current, oauth });
+    state.teamDiscord.config = updated;
+    hideNotice(teamOAuthStatus);
+    updateTeamDiscordConfigUi(updated);
+  }
   function updateTeamDiscordUi() {
     if (!teamDiscordSection) return;
     const canManage = canManageTeamDiscord();
@@ -9307,6 +9466,7 @@
     state.teamDiscord.loading = true;
     updateTeamDiscordUi();
     hideNotice(teamDiscordStatus);
+    hideNotice(teamOAuthStatus);
     let unauthorized = false;
     try {
       const data = await api('/team/discord');
@@ -9388,6 +9548,60 @@
       updateTeamDiscordUi();
     }
     if (unauthorized) return;
+  }
+
+  async function handleTeamOAuthSubmit(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    updateTeamOAuthState();
+    state.teamDiscord.loading = true;
+    updateTeamDiscordUi();
+    hideNotice(teamOAuthStatus);
+    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}) };
+    let unauthorized = false;
+    try {
+      const data = await api('/team/discord', payload, 'POST');
+      setTeamDiscordConfig(data?.config || payload.config);
+      state.teamDiscord.hasToken = Boolean(data?.hasToken ?? state.teamDiscord.hasToken);
+      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : state.teamDiscord.guildId;
+      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      showNotice(teamOAuthStatus, 'Saved OAuth settings for this team.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        unauthorized = true;
+        handleUnauthorized();
+      } else {
+        showNotice(teamOAuthStatus, describeError(err), 'error');
+      }
+    } finally {
+      state.teamDiscord.loading = false;
+      updateTeamDiscordUi();
+    }
+    if (unauthorized) return;
+  }
+
+  function handleClearTeamOAuth(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    if (teamDiscordOauthClientId) {
+      teamDiscordOauthClientId.dataset.touched = 'true';
+      teamDiscordOauthClientId.value = '';
+    }
+    if (teamDiscordOauthClientSecret) {
+      teamDiscordOauthClientSecret.dataset.touched = 'true';
+      teamDiscordOauthClientSecret.value = '';
+    }
+    if (teamDiscordOauthRedirectUri) {
+      teamDiscordOauthRedirectUri.dataset.touched = 'true';
+      teamDiscordOauthRedirectUri.value = '';
+    }
+    if (teamSteamApiKeyInput) {
+      teamSteamApiKeyInput.dataset.touched = 'true';
+      teamSteamApiKeyInput.value = '';
+    }
+    updateTeamOAuthState({ clearSecrets: true });
+    showNotice(teamOAuthStatus, 'Cleared stored OAuth values locally. Save to apply.', 'info');
   }
 
   async function handleTeamDiscordSubmit(ev) {
@@ -10383,10 +10597,25 @@
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     teamSelect?.addEventListener('change', onTeamSelectionChange);
     teamDiscordForm?.addEventListener('submit', handleTeamDiscordSubmit);
+    teamOAuthForm?.addEventListener('submit', handleTeamOAuthSubmit);
+    btnSaveTeamOAuth?.addEventListener('click', handleTeamOAuthSubmit);
+    btnClearTeamOAuth?.addEventListener('click', handleClearTeamOAuth);
     teamTicketingForm?.addEventListener('submit', handleTeamTicketingSubmit);
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
+    [
+      teamDiscordOauthClientId,
+      teamDiscordOauthClientSecret,
+      teamDiscordOauthRedirectUri,
+      teamSteamApiKeyInput
+    ].forEach((input) => {
+      input?.addEventListener('input', () => {
+        input.dataset.touched = 'true';
+        hideNotice(teamOAuthStatus);
+        updateTeamOAuthState();
+      });
+    });
     btnRefreshTeamDiscordChannels?.addEventListener('click', () => {
       loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
     });
