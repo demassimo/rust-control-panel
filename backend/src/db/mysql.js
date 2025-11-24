@@ -165,19 +165,35 @@ function createApi(pool, dialect) {
         INDEX idx_server_players_server (server_id),
         CONSTRAINT fk_server_players_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;`);
-      const ensureColumn = async (sql) => {
-        try { await exec(sql); }
-        catch (e) { if (e.code !== 'ER_DUP_FIELDNAME') throw e; }
-      };
-      const ensureIndex = async (sql) => {
-        try { await exec(sql); }
-        catch (e) { if (e.code !== 'ER_DUP_KEYNAME') throw e; }
-      };
-      await ensureColumn('ALTER TABLE players ADD COLUMN game_bans INT DEFAULT 0');
-      await ensureColumn('ALTER TABLE players ADD COLUMN last_ban_days INT NULL');
-      await ensureColumn('ALTER TABLE players ADD COLUMN visibility INT NULL');
-      await ensureColumn('ALTER TABLE players ADD COLUMN rust_playtime_minutes INT NULL');
-      await ensureColumn('ALTER TABLE players ADD COLUMN playtime_updated_at TIMESTAMP NULL');
+        const ensureColumn = async (sql) => {
+          try { await exec(sql); }
+          catch (e) { if (e.code !== 'ER_DUP_FIELDNAME') throw e; }
+        };
+        const ensureIndex = async (sql) => {
+          try { await exec(sql); }
+          catch (e) { if (e.code !== 'ER_DUP_KEYNAME') throw e; }
+        };
+        const ensurePasskeyCredentialLength = async () => {
+          const rows = await exec(
+            `SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'user_passkeys'
+               AND COLUMN_NAME = 'credential_id'
+             LIMIT 1`
+          );
+          const col = rows?.[0];
+          const maxLength = Number(col?.CHARACTER_MAXIMUM_LENGTH) || 0;
+          const isVarchar = typeof col?.DATA_TYPE === 'string' && col.DATA_TYPE.toLowerCase() === 'varchar';
+          if (isVarchar && maxLength < 512) {
+            await exec('ALTER TABLE user_passkeys MODIFY credential_id VARCHAR(1024) NOT NULL');
+          }
+        };
+        await ensureColumn('ALTER TABLE players ADD COLUMN game_bans INT DEFAULT 0');
+        await ensureColumn('ALTER TABLE players ADD COLUMN last_ban_days INT NULL');
+        await ensureColumn('ALTER TABLE players ADD COLUMN visibility INT NULL');
+        await ensureColumn('ALTER TABLE players ADD COLUMN rust_playtime_minutes INT NULL');
+        await ensureColumn('ALTER TABLE players ADD COLUMN playtime_updated_at TIMESTAMP NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_ip VARCHAR(128) NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN last_port INT NULL');
       await ensureColumn('ALTER TABLE server_players ADD COLUMN forced_display_name VARCHAR(190) NULL');
@@ -197,19 +213,20 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE chat_messages ADD COLUMN color VARCHAR(32) NULL');
       await ensureColumn('ALTER TABLE users ADD COLUMN mfa_secret TEXT NULL');
       await ensureColumn('ALTER TABLE users ADD COLUMN mfa_enabled TINYINT(1) NOT NULL DEFAULT 0');
-      await exec(`CREATE TABLE IF NOT EXISTS user_passkeys(
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        credential_id VARCHAR(255) UNIQUE NOT NULL,
-        public_key TEXT NOT NULL,
-        counter BIGINT NOT NULL DEFAULT 0,
-        transports TEXT NULL,
-        friendly_name VARCHAR(190) NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX(user_id),
-        CONSTRAINT fk_passkey_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB;`);
+        await exec(`CREATE TABLE IF NOT EXISTS user_passkeys(
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          credential_id VARCHAR(1024) UNIQUE NOT NULL,
+          public_key TEXT NOT NULL,
+          counter BIGINT NOT NULL DEFAULT 0,
+          transports TEXT NULL,
+          friendly_name VARCHAR(190) NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX(user_id),
+          CONSTRAINT fk_passkey_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB;`);
+        await ensurePasskeyCredentialLength();
       await exec(`CREATE TABLE IF NOT EXISTS user_backup_codes(
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
