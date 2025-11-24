@@ -186,7 +186,7 @@ function createApi(pool, dialect) {
           const maxLength = Number(col?.CHARACTER_MAXIMUM_LENGTH) || 0;
           const isVarchar = typeof col?.DATA_TYPE === 'string' && col.DATA_TYPE.toLowerCase() === 'varchar';
           if (isVarchar && maxLength < 512) {
-            await exec('ALTER TABLE user_passkeys MODIFY credential_id VARCHAR(1024) NOT NULL');
+            await exec('ALTER TABLE user_passkeys MODIFY credential_id VARCHAR(768) NOT NULL');
           }
         };
         await ensureColumn('ALTER TABLE players ADD COLUMN game_bans INT DEFAULT 0');
@@ -216,7 +216,7 @@ function createApi(pool, dialect) {
         await exec(`CREATE TABLE IF NOT EXISTS user_passkeys(
           id INT AUTO_INCREMENT PRIMARY KEY,
           user_id INT NOT NULL,
-          credential_id VARCHAR(1024) UNIQUE NOT NULL,
+          credential_id VARCHAR(768) UNIQUE NOT NULL,
           public_key TEXT NOT NULL,
           counter BIGINT NOT NULL DEFAULT 0,
           transports TEXT NULL,
