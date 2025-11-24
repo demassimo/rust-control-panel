@@ -295,8 +295,12 @@
   const workspaceChatLoading = $('#workspaceChatLoading');
   const workspaceChatNotice = $('#workspaceChatNotice');
   const discordBotStatusPill = $('#discord-bot-status');
+  const discordConnectionGuildInput = $('#discord-connection-guild-input');
+  const discordConnectionChannelInput = $('#discord-connection-channel-input');
+  const discordConnectionTokenInput = $('#discord-connection-token-input');
+  const discordConnectionStatus = $('#discord-connection-status');
+  const discordStatusServerSelect = null;
   const discordSettingsGrid = $('#discord-settings');
-  const discordStatusServerSelect = $('#discord-status-server');
   const discordCurrentPlayers = $('#discord-current-players');
   const discordMaxPlayers = $('#discord-max-players');
   const discordJoiningPlayers = $('#discord-joining');
@@ -6022,6 +6026,40 @@
     updateWorkspaceDiscordStatusUi(normalized);
   }
 
+  function updateWorkspaceDiscordConnectionUi(integration = state.workspaceDiscord.integration) {
+    const guildId = integration?.guildId || '';
+    const channelId = integration?.channelId || '';
+    const hasToken = Boolean(integration?.hasToken);
+
+    if (discordConnectionGuildInput && document.activeElement !== discordConnectionGuildInput) {
+      discordConnectionGuildInput.value = guildId;
+    }
+    if (discordConnectionChannelInput && document.activeElement !== discordConnectionChannelInput) {
+      discordConnectionChannelInput.value = channelId;
+    }
+    if (discordConnectionTokenInput && !discordConnectionTokenInput.value) {
+      discordConnectionTokenInput.placeholder = hasToken
+        ? 'Leave blank to keep the saved token'
+        : 'Paste the Discord bot token';
+    }
+
+    if (discordConnectionStatus) {
+      if (!Number.isFinite(state.workspaceDiscord.serverId)) {
+        showNotice(discordConnectionStatus, 'Open a server workspace to edit the Server Bot connection.', 'info');
+      } else if (!hasServerCapability('discord')) {
+        showNotice(discordConnectionStatus, 'You do not have permission to manage the Discord bot for this server.', 'error');
+      } else if (!integration) {
+        showNotice(
+          discordConnectionStatus,
+          "Add this workspace's Server Bot token, guild ID, and status channel to enable embeds.",
+          'warning'
+        );
+      } else {
+        showNotice(discordConnectionStatus, 'Update the guild, status channel, or bot token for this workspace.', 'success');
+      }
+    }
+  }
+
   function updateWorkspaceDiscordStatusUi(status = state.workspaceDiscord.status) {
     const details = status && typeof status === 'object' ? status : null;
     if (!details) {
@@ -6080,6 +6118,7 @@
   }
 
   function updateWorkspaceDiscordUi() {
+    updateWorkspaceDiscordConnectionUi();
     updateWorkspaceDiscordConfigUi();
     updateWorkspaceDiscordStatusUi();
     if (discordSettingsGrid) {
@@ -6090,7 +6129,7 @@
     const serverId = state.workspaceDiscord.serverId;
     if (!Number.isFinite(serverId)) {
       setDiscordStatusFormDisabled(true);
-      showNotice(discordStatusNotice, 'Select a server to manage the Discord status embed.', 'info');
+      showNotice(discordStatusNotice, 'Open a server workspace to manage the Discord status embed.', 'info');
       return;
     }
 
@@ -6106,29 +6145,24 @@
       return;
     }
 
-    if (state.workspaceDiscord.error) {
-      setDiscordStatusFormDisabled(true);
-      showNotice(discordStatusNotice, state.workspaceDiscord.error, 'error');
-      return;
+      if (state.workspaceDiscord.error) {
+        setDiscordStatusFormDisabled(true);
+        showNotice(discordStatusNotice, state.workspaceDiscord.error, 'error');
+        return;
+      }
+      setDiscordStatusFormDisabled(state.workspaceDiscord.saving);
+      if (state.workspaceDiscord.saving) {
+        showNotice(discordStatusNotice, 'Saving status settings…', 'info');
+      } else if (!state.workspaceDiscord.integration) {
+        showNotice(
+          discordStatusNotice,
+          'Add the Server Bot connection details and save to start posting embeds.',
+          'warning'
+        );
+      } else if (!discordStatusNotice.classList.contains('success')) {
+        hideNotice(discordStatusNotice);
+      }
     }
-
-    if (!state.workspaceDiscord.integration) {
-      setDiscordStatusFormDisabled(true);
-      showNotice(
-        discordStatusNotice,
-        "Link this workspace's Server Bot before enabling status embeds.",
-        'warning'
-      );
-      return;
-    }
-
-    setDiscordStatusFormDisabled(state.workspaceDiscord.saving);
-    if (state.workspaceDiscord.saving) {
-      showNotice(discordStatusNotice, 'Saving status settings…', 'info');
-    } else if (!discordStatusNotice.classList.contains('success')) {
-      hideNotice(discordStatusNotice);
-    }
-  }
 
   async function loadWorkspaceDiscord(serverId, { force = false } = {}) {
     const numericId = Number(serverId);
@@ -6146,16 +6180,6 @@
     }
 
     state.workspaceDiscord.serverId = numericId;
-    if (discordStatusServerSelect) {
-      const targetValue = String(numericId);
-      if (discordStatusServerSelect.value !== targetValue) {
-        const hasOption = Array.from(discordStatusServerSelect.options).some((opt) => opt.value === targetValue);
-        if (!hasOption) {
-          renderDiscordStatusServerOptions();
-        }
-        discordStatusServerSelect.value = targetValue;
-      }
-    }
 
     if (!hasServerCapability('discord')) {
       state.workspaceDiscord.integration = null;
@@ -6209,10 +6233,6 @@
     setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
     setWorkspaceDiscordStatus(null);
     updateWorkspaceDiscordUi();
-    if (discordStatusServerSelect) {
-      discordStatusServerSelect.value = '';
-    }
-    renderDiscordStatusServerOptions();
   }
 
   function gatherWorkspaceDiscordPayload() {
@@ -6234,54 +6254,49 @@
       const text = typeof value === 'string' ? value.trim() : '';
       return text ? text : null;
     };
-    const ticketing = {
-      enabled: Boolean(discordTicketingEnabledInput?.checked),
-      categoryId: toOptionalId(discordTicketingCategoryInput?.value),
-      logChannelId: toOptionalId(discordTicketingLogInput?.value),
-      staffRoleId: toOptionalId(discordTicketingRoleInput?.value),
-      pingStaffOnOpen: Boolean(discordTicketingPingInput?.checked),
-      panelChannelId: toOptionalId(discordTicketingPanelChannelInput?.value),
-      panelMessageId: toOptionalId(discordTicketingPanelMessageInput?.value)
-    };
-    return {
+    const config = {
       presenceTemplate: template,
       presenceStatuses: statuses,
-      fields,
-      ticketing
+      fields
     };
+
+    const guildId = toOptionalId(discordConnectionGuildInput?.value);
+    const channelId = toOptionalId(discordConnectionChannelInput?.value);
+    const botToken = typeof discordConnectionTokenInput?.value === 'string'
+      ? discordConnectionTokenInput.value.trim()
+      : '';
+
+    const payload = { config };
+
+    if (guildId) payload.guildId = guildId;
+    if (channelId) payload.channelId = channelId;
+    if (botToken) payload.botToken = botToken;
+
+    return payload;
   }
 
-  async function handleDiscordStatusSubmit(ev) {
-    ev?.preventDefault();
-    if (!hasServerCapability('discord')) {
-      showNotice(discordStatusNotice, 'You do not have permission to manage the Discord bot for this server.', 'error');
-      return;
-    }
-    const serverId = state.workspaceDiscord.serverId;
-    if (!Number.isFinite(serverId)) {
-      showNotice(discordStatusNotice, 'Select a server to manage the Discord status embed.', 'error');
-      return;
-    }
-    if (!state.workspaceDiscord.integration) {
-      showNotice(
-        discordStatusNotice,
-        "Link this workspace's Server Bot before updating the status embed.",
-        'warning'
-      );
-      return;
-    }
-    const payload = gatherWorkspaceDiscordPayload();
-    state.workspaceDiscord.saving = true;
-    updateWorkspaceDiscordUi();
-    try {
-      const body = { config: payload };
-      const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, body, 'POST');
-      const integration = data?.integration || null;
-      state.workspaceDiscord.integration = integration;
-      setWorkspaceDiscordConfig(integration?.config || payload);
-      setWorkspaceDiscordStatus(data?.status || state.workspaceDiscord.status);
-      state.workspaceDiscord.error = null;
-      showNotice(discordStatusNotice, 'Discord status settings saved.', 'success');
+    async function handleDiscordStatusSubmit(ev) {
+      ev?.preventDefault();
+      if (!hasServerCapability('discord')) {
+        showNotice(discordStatusNotice, 'You do not have permission to manage the Discord bot for this server.', 'error');
+        return;
+      }
+      const serverId = state.workspaceDiscord.serverId;
+      if (!Number.isFinite(serverId)) {
+        showNotice(discordStatusNotice, 'Open a server workspace to manage the Discord status embed.', 'error');
+        return;
+      }
+      const payload = gatherWorkspaceDiscordPayload();
+      state.workspaceDiscord.saving = true;
+      updateWorkspaceDiscordUi();
+      try {
+        const data = await api(`/servers/${encodeURIComponent(serverId)}/discord`, payload, 'POST');
+        const integration = data?.integration || null;
+        state.workspaceDiscord.integration = integration;
+        setWorkspaceDiscordConfig(integration?.config || payload.config);
+        setWorkspaceDiscordStatus(data?.status || state.workspaceDiscord.status);
+        state.workspaceDiscord.error = null;
+        showNotice(discordStatusNotice, 'Discord status settings saved.', 'success');
     } catch (err) {
       showNotice(discordStatusNotice, describeError(err), 'error');
     } finally {
@@ -7059,95 +7074,25 @@
   }
 
   function renderDiscordStatusServerOptions() {
-    if (!discordStatusServerSelect) return;
-    const select = discordStatusServerSelect;
-    const servers = getManageableDiscordServers();
-    const currentValue = select.value;
-    const desiredValue = (() => {
-      const selectedId = Number.isFinite(state.workspaceDiscord.serverId)
-        ? String(state.workspaceDiscord.serverId)
-        : '';
-      if (selectedId && servers.some((server) => String(server.id) === selectedId)) return selectedId;
-      if (currentValue && servers.some((server) => String(server.id) === currentValue)) return currentValue;
-      return '';
-    })();
-
-    select.innerHTML = '';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = servers.length ? 'Select a server…' : 'No servers available';
-    placeholder.disabled = servers.length === 0;
-    placeholder.selected = desiredValue === '';
-    select.appendChild(placeholder);
-
-    for (const server of servers) {
-      const option = document.createElement('option');
-      option.value = String(server.id);
-      option.textContent = server.name;
-      option.selected = option.value === desiredValue;
-      select.appendChild(option);
-    }
-
-    if (desiredValue) {
-      select.value = desiredValue;
-    } else {
-      select.value = '';
-    }
-
-    const canManage = canManageTeamDiscord();
-    select.disabled = !canManage || servers.length === 0;
+    // Server selection UI removed; keep stub for compatibility.
   }
 
   function ensureDiscordStatusSelection({ force = false } = {}) {
-    if (!discordStatusServerSelect) return;
-    renderDiscordStatusServerOptions();
-    const servers = getManageableDiscordServers();
     const canManage = canManageTeamDiscord();
     if (teamDiscordStatusSection) {
       teamDiscordStatusSection.classList.toggle('hidden', !canManage);
       teamDiscordStatusSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
     }
-    if (!canManage || servers.length === 0) {
-      if (discordStatusServerSelect.value !== '') {
-        discordStatusServerSelect.value = '';
-      }
-      if (state.workspaceDiscord.serverId != null) {
-        loadWorkspaceDiscord(null, { force: true }).catch(() => {});
-      } else {
-        updateWorkspaceDiscordUi();
-      }
+
+    if (!canManage) {
+      resetWorkspaceDiscord();
       return;
     }
 
-    let targetId = null;
-    if (Number.isFinite(state.workspaceDiscord.serverId)) {
-      const numeric = Number(state.workspaceDiscord.serverId);
-      if (servers.some((server) => Number(server.id) === numeric)) {
-        targetId = numeric;
-      }
-    }
-    if (!Number.isFinite(targetId) && Number.isFinite(state.currentServerId)) {
-      const numeric = Number(state.currentServerId);
-      if (servers.some((server) => Number(server.id) === numeric)) {
-        targetId = numeric;
-      }
-    }
-    if (!Number.isFinite(targetId) && servers.length > 0) {
-      targetId = Number(servers[0].id);
-    }
-
+    const targetId = Number.isFinite(state.currentServerId) ? Number(state.currentServerId) : null;
     if (!Number.isFinite(targetId)) {
-      if (discordStatusServerSelect.value !== '') {
-        discordStatusServerSelect.value = '';
-      }
-      loadWorkspaceDiscord(null, { force: true }).catch(() => {});
+      resetWorkspaceDiscord();
       return;
-    }
-
-    const targetValue = String(targetId);
-    if (discordStatusServerSelect.value !== targetValue) {
-      discordStatusServerSelect.value = targetValue;
-      force = true;
     }
 
     if (force || Number(state.workspaceDiscord.serverId) !== targetId) {
