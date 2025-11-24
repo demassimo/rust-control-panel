@@ -14,9 +14,9 @@
   const statusNoticeEl = document.getElementById('discord-status-notice');
   const statusTemplateInput = document.getElementById('discord-presence-template-input');
   const connectionStatusEl = document.getElementById('discord-connection-status');
-  const connectionGuildEl = document.getElementById('discord-connection-guild');
-  const connectionChannelEl = document.getElementById('discord-connection-channel');
-  const connectionTokenEl = document.getElementById('discord-connection-token');
+  const connectionGuildInput = document.getElementById('discord-connection-guild-input');
+  const connectionChannelInput = document.getElementById('discord-connection-channel-input');
+  const connectionTokenInput = document.getElementById('discord-connection-token-input');
   const presenceSelectEls = {
     online: document.getElementById('discord-presence-online'),
     offline: document.getElementById('discord-presence-offline'),
@@ -275,6 +275,24 @@
     return { presenceTemplate: template, presenceStatuses, fields };
   }
 
+  function gatherConnectionPayload() {
+    const normalizeSnowflake = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+      return text ? text : null;
+    };
+
+    const payload = {};
+    const guildId = normalizeSnowflake(connectionGuildInput?.value);
+    const channelId = normalizeSnowflake(connectionChannelInput?.value);
+    const botToken = typeof connectionTokenInput?.value === 'string' ? connectionTokenInput.value.trim() : '';
+
+    if (guildId) payload.guildId = guildId;
+    if (channelId) payload.channelId = channelId;
+    if (botToken) payload.botToken = botToken;
+
+    return payload;
+  }
+
   function updateConfigSummary(config) {
     const cfg = config && typeof config === 'object' ? config : null;
     if (presenceTemplateEl) {
@@ -293,17 +311,25 @@
   }
 
   function updateConnectionSummary(integration) {
-    const guildText = integration?.guildId || 'Not set';
-    const channelText = integration?.channelId || 'Not set';
-    const tokenText = integration?.hasToken ? 'Linked' : 'Not linked';
+    const guildText = integration?.guildId || '';
+    const channelText = integration?.channelId || '';
+    const hasToken = Boolean(integration?.hasToken);
 
-    if (connectionGuildEl) connectionGuildEl.textContent = guildText;
-    if (connectionChannelEl) connectionChannelEl.textContent = channelText;
-    if (connectionTokenEl) connectionTokenEl.textContent = tokenText;
+    if (connectionGuildInput && document.activeElement !== connectionGuildInput) {
+      connectionGuildInput.value = guildText;
+    }
+    if (connectionChannelInput && document.activeElement !== connectionChannelInput) {
+      connectionChannelInput.value = channelText;
+    }
+    if (connectionTokenInput && !connectionTokenInput.value) {
+      connectionTokenInput.placeholder = hasToken
+        ? 'Leave blank to keep the saved token'
+        : 'Paste the Discord bot token';
+    }
 
     if (connectionStatusEl) {
       connectionStatusEl.textContent = integration
-        ? "You are editing this workspace's Server Bot connection."
+        ? 'Update the guild, status channel, or bot token for this workspace.'
         : "Add this workspace's Server Bot token and guild ID to enable status updates.";
       connectionStatusEl.classList.remove('hidden', 'error', 'success');
       if (integration) connectionStatusEl.classList.add('success');
@@ -490,7 +516,7 @@
     disableStatusForm(true);
     setStatusNotice('Saving status settings…');
     try {
-      const payload = { config: gatherStatusPayload() };
+      const payload = { config: gatherStatusPayload(), ...gatherConnectionPayload() };
       const data = await apiRequest('POST', payload);
       applyIntegration(data.integration || null, { force: true });
       updateStatusView(data.status || {});
