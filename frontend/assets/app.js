@@ -381,10 +381,18 @@
   const discordCategoryOptions = $('#discord-category-options');
   const discordChannelOptions = $('#discord-channel-options');
   const discordRoleOptions = $('#discord-role-options');
-  const teamCommandStatusInput = $('#team-command-status-role');
-  const teamCommandTicketInput = $('#team-command-ticket-role');
-  const teamCommandLookupInput = $('#team-command-lookup-role');
-  const teamCommandAuthInput = $('#team-command-auth-role');
+  const teamCommandStatusInput = $('#team-command-status-role-input');
+  const teamCommandTicketInput = $('#team-command-ticket-role-input');
+  const teamCommandLookupInput = $('#team-command-lookup-role-input');
+  const teamCommandAuthInput = $('#team-command-auth-role-input');
+  const teamCommandStatusSelect = $('#team-command-status-role-select');
+  const teamCommandTicketSelect = $('#team-command-ticket-role-select');
+  const teamCommandLookupSelect = $('#team-command-lookup-role-select');
+  const teamCommandAuthSelect = $('#team-command-auth-role-select');
+  const teamCommandStatusList = $('#team-command-status-role-list');
+  const teamCommandTicketList = $('#team-command-ticket-role-list');
+  const teamCommandLookupList = $('#team-command-lookup-role-list');
+  const teamCommandAuthList = $('#team-command-auth-role-list');
   const teamCommandSummaryStatus = $('#team-command-summary-status');
   const teamCommandSummaryTicket = $('#team-command-summary-ticket');
   const teamCommandSummaryLookup = $('#team-command-summary-lookup');
@@ -3864,12 +3872,12 @@
     [discordTicketingPanelChannelSelect, discordTicketingPanelChannelInput]
   ];
 
-  const teamCommandInputs = [
-    teamCommandStatusInput,
-    teamCommandTicketInput,
-    teamCommandLookupInput,
-    teamCommandAuthInput
-  ];
+    const commandRoleControls = [
+      { key: 'status', input: teamCommandStatusInput, select: teamCommandStatusSelect, list: teamCommandStatusList },
+      { key: 'ticket', input: teamCommandTicketInput, select: teamCommandTicketSelect, list: teamCommandTicketList },
+      { key: 'rustlookup', input: teamCommandLookupInput, select: teamCommandLookupSelect, list: teamCommandLookupList },
+      { key: 'auth', input: teamCommandAuthInput, select: teamCommandAuthSelect, list: teamCommandAuthList }
+    ];
 
   discordTicketingEnabledInput?.addEventListener('change', updateTeamTicketingState);
   discordTicketingPingInput?.addEventListener('change', updateTeamTicketingState);
@@ -3882,9 +3890,24 @@
       updateTeamTicketingState();
     });
   });
-  teamCommandInputs.forEach((input) => {
-    input?.addEventListener('change', updateTeamCommandPermissionsState);
-  });
+    commandRoleControls.forEach(({ key, input, select, list }) => {
+      const commitInput = () => commitCommandRoleInput(key);
+      input?.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ',') {
+          ev.preventDefault();
+          commitCommandRoleInput(key);
+        }
+      });
+      input?.addEventListener('change', commitInput);
+      input?.addEventListener('blur', commitInput);
+      select?.addEventListener('change', () => handleCommandRoleSelect(key, select.value));
+      list?.addEventListener('click', (ev) => {
+        const target = ev.target?.closest?.('[data-remove-command-role]');
+        if (!target) return;
+        ev.preventDefault();
+        removeCommandRole(target.dataset.commandRole, target.dataset.roleId);
+      });
+    });
 
   btnRefreshTeamCommandRoles?.addEventListener('click', () => {
     loadTeamDiscordRoles({ force: true, showStatus: true }).catch(() => {});
@@ -5131,11 +5154,9 @@
 
     updateTeamAccessView({ refreshUsers: isTeam, refreshAdmin: isAdmin });
     if (isDiscord) {
-      if (state.teamDiscord.loadedTeamId !== state.activeTeamId && !state.teamDiscord.loading) {
-        loadTeamDiscord({ force: true }).catch(() => {});
-      } else {
-        updateTeamDiscordUi();
-      }
+      const shouldForceDiscordLoad = state.teamDiscord.loadedTeamId !== state.activeTeamId;
+      loadTeamDiscord({ force: shouldForceDiscordLoad, refreshLists: true }).catch(() => {});
+      if (!shouldForceDiscordLoad) updateTeamDiscordUi();
       loadTeamAuthSettings({ force: true }).catch(() => {});
     }
   }
@@ -8848,36 +8869,129 @@
       });
   }
 
-  function selectedRolesFromSelect(select) {
-    if (!select) return [];
-    return Array.from(select.selectedOptions || [])
-      .map((option) => option.value)
-      .filter(Boolean);
+  function getCommandPermissionsDraft() {
+    const config = state.teamDiscord?.config || defaultTeamDiscordConfig();
+    return normalizeTeamCommandPermissions(config.commandPermissions || {});
   }
 
-  function syncCommandRoleSelect(select, roles, selectedValues = [], disabled = false) {
+  function syncCommandRoleOptions(select, roles, disabled = false) {
     if (!select) return;
-    const selectedSet = new Set(normalizeCommandRoleList(selectedValues));
     const roleList = Array.isArray(roles) ? roles : [];
-    select.innerHTML = '';
-    if (!roleList.length) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = 'No Discord roles found';
-      select.append(option);
-      select.disabled = true;
-      return;
-    }
     const fragment = document.createDocumentFragment();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = roleList.length ? 'Select a role' : 'No Discord roles found';
+    fragment.append(placeholder);
     roleList.forEach((role) => {
       const option = document.createElement('option');
       option.value = role.id;
       option.textContent = role.name;
-      option.selected = selectedSet.has(role.id);
       fragment.append(option);
     });
+    select.innerHTML = '';
     select.append(fragment);
-    select.disabled = disabled;
+    select.value = '';
+    select.disabled = disabled || !roleList.length;
+  }
+
+  function renderCommandRoleList(list, values, roleLookup, commandKey, disabled = false) {
+    if (!list) return;
+    const ids = normalizeCommandRoleList(values);
+    list.innerHTML = '';
+    if (!ids.length) {
+      const placeholder = document.createElement('span');
+      placeholder.className = 'command-role-placeholder';
+      placeholder.textContent = disabled ? 'Connect the Main Bot to add roles.' : 'Everyone can run this command.';
+      list.append(placeholder);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    ids.forEach((id) => {
+      const chip = document.createElement('span');
+      chip.className = 'command-role-chip';
+      const name = roleLookup?.get(id)?.name || id;
+      const label = document.createElement('span');
+      label.textContent = name;
+      const meta = document.createElement('small');
+      meta.textContent = id;
+      chip.append(label, meta);
+      if (!disabled) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'command-role-remove';
+        remove.setAttribute('aria-label', `Remove ${name} from ${commandKey} roles`);
+        remove.dataset.commandRole = commandKey;
+        remove.dataset.roleId = id;
+        remove.textContent = 'Remove';
+        chip.append(remove);
+      }
+      fragment.append(chip);
+    });
+    list.append(fragment);
+  }
+
+  function addCommandRoles(commandKey, roleValues = []) {
+    if (!commandKey) return;
+    const draft = getCommandPermissionsDraft();
+    const next = new Set(draft[commandKey] || []);
+    roleValues.map((value) => normalizeCommandRoleValue(value)).forEach((id) => {
+      if (id) next.add(id);
+    });
+    draft[commandKey] = Array.from(next);
+    updateTeamCommandPermissionsState(draft);
+  }
+
+  function removeCommandRole(commandKey, roleValue) {
+    if (!commandKey) return;
+    const draft = getCommandPermissionsDraft();
+    const next = new Set(draft[commandKey] || []);
+    const id = normalizeCommandRoleValue(roleValue);
+    if (id && next.has(id)) {
+      next.delete(id);
+      draft[commandKey] = Array.from(next);
+      updateTeamCommandPermissionsState(draft);
+    }
+  }
+
+  function handleCommandRoleSelect(commandKey, value) {
+    const normalized = normalizeCommandRoleValue(value);
+    const input = {
+      status: teamCommandStatusInput,
+      ticket: teamCommandTicketInput,
+      rustlookup: teamCommandLookupInput,
+      auth: teamCommandAuthInput
+    }[commandKey];
+    const select = {
+      status: teamCommandStatusSelect,
+      ticket: teamCommandTicketSelect,
+      rustlookup: teamCommandLookupSelect,
+      auth: teamCommandAuthSelect
+    }[commandKey];
+    if (normalized) {
+      addCommandRoles(commandKey, [normalized]);
+    }
+    if (input) input.value = '';
+    if (select) select.value = '';
+  }
+
+  function commitCommandRoleInput(commandKey) {
+    const input = {
+      status: teamCommandStatusInput,
+      ticket: teamCommandTicketInput,
+      rustlookup: teamCommandLookupInput,
+      auth: teamCommandAuthInput
+    }[commandKey];
+    if (!input) return;
+    const raw = input.value || '';
+    if (!raw.trim()) {
+      input.value = '';
+      return;
+    }
+    const ids = raw.split(/[,\s]+/g)
+      .map((value) => normalizeCommandRoleValue(value))
+      .filter(Boolean);
+    input.value = '';
+    if (ids.length) addCommandRoles(commandKey, ids);
   }
 
   function syncDiscordCategoryOptions(list, categories) {
@@ -9129,12 +9243,34 @@
     if (btnClearTeamOAuth) btnClearTeamOAuth.disabled = !canManage || loading;
 
     const commandPerms = normalizeTeamCommandPermissions(details.commandPermissions || {});
-    const disableCommandSelects = !canManage || loading || !hasSettings || rolesLoading || !availableRoles.length;
+    const commandInputsDisabled = !canManage || loading || !hasSettings;
+    const disableCommandSelects = commandInputsDisabled || rolesLoading || !availableRoles.length;
 
-    syncCommandRoleSelect(teamCommandStatusInput, availableRoles, commandPerms.status, disableCommandSelects);
-    syncCommandRoleSelect(teamCommandTicketInput, availableRoles, commandPerms.ticket, disableCommandSelects);
-    syncCommandRoleSelect(teamCommandLookupInput, availableRoles, commandPerms.rustlookup, disableCommandSelects);
-    syncCommandRoleSelect(teamCommandAuthInput, availableRoles, commandPerms.auth, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandStatusSelect, availableRoles, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandTicketSelect, availableRoles, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandLookupSelect, availableRoles, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandAuthSelect, availableRoles, disableCommandSelects);
+
+    const commandInputMap = {
+      status: teamCommandStatusInput,
+      ticket: teamCommandTicketInput,
+      rustlookup: teamCommandLookupInput,
+      auth: teamCommandAuthInput
+    };
+    Object.entries(commandInputMap).forEach(([, input]) => {
+      if (!input) return;
+      input.disabled = commandInputsDisabled;
+      if (!input.matches(':focus')) {
+        input.placeholder = commandInputsDisabled
+          ? 'Connect the Main Bot to add roles'
+          : 'Add role IDs, separated by commas';
+      }
+    });
+
+    renderCommandRoleList(teamCommandStatusList, commandPerms.status, roleLookup, 'status', commandInputsDisabled);
+    renderCommandRoleList(teamCommandTicketList, commandPerms.ticket, roleLookup, 'ticket', commandInputsDisabled);
+    renderCommandRoleList(teamCommandLookupList, commandPerms.rustlookup, roleLookup, 'rustlookup', commandInputsDisabled);
+    renderCommandRoleList(teamCommandAuthList, commandPerms.auth, roleLookup, 'auth', commandInputsDisabled);
 
     if (btnRefreshTeamCommandRoles) {
       btnRefreshTeamCommandRoles.disabled = !canManage || loading || !hasSettings || rolesLoading;
@@ -9279,14 +9415,9 @@
     updateTeamDiscordConfigUi(updated);
   }
 
-  function updateTeamCommandPermissionsState() {
+  function updateTeamCommandPermissionsState(nextPermissions) {
     const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
-    const commandPermissions = normalizeTeamCommandPermissions({
-      status: selectedRolesFromSelect(teamCommandStatusInput),
-      ticket: selectedRolesFromSelect(teamCommandTicketInput),
-      rustlookup: selectedRolesFromSelect(teamCommandLookupInput),
-      auth: selectedRolesFromSelect(teamCommandAuthInput)
-    });
+    const commandPermissions = normalizeTeamCommandPermissions(nextPermissions || current.commandPermissions || {});
     const updated = normalizeTeamDiscordConfig({ ...current, commandPermissions });
     state.teamDiscord.config = updated;
     hideNotice(teamTicketingStatus);
@@ -9431,7 +9562,7 @@
     }
   }
 
-  async function loadTeamDiscord({ force = false } = {}) {
+  async function loadTeamDiscord({ force = false, refreshLists = false } = {}) {
     if (!teamDiscordSection) return;
     if (!state.TOKEN) return;
     if (!canManageTeamDiscord()) {
@@ -9453,7 +9584,7 @@
       updateTeamAuthUi();
       return;
     }
-    if (!force && state.teamDiscord.loadedTeamId === state.activeTeamId) {
+    if (!force && !refreshLists && state.teamDiscord.loadedTeamId === state.activeTeamId) {
       updateTeamDiscordUi();
       if (!state.teamDiscordRoles.roles.length && !state.teamDiscordRoles.loading) {
         loadTeamDiscordRoles().catch(() => {});
@@ -9485,8 +9616,8 @@
       if (!state.teamDiscord.guildId && teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = '';
       }
-      await loadTeamDiscordRoles({ force: true });
-      await loadTeamDiscordChannels({ force: true });
+      await loadTeamDiscordRoles({ force: true, showStatus: refreshLists });
+      await loadTeamDiscordChannels({ force: true, showStatus: refreshLists });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
