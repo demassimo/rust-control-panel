@@ -1,4 +1,4 @@
-# Rust Admin Online — Linux Install
+# Rust Control Panel — Linux Install
 
 This bundle is ready for **Debian/Ubuntu** with **systemd**. It includes:
 - Node.js backend (Express + Socket.IO)

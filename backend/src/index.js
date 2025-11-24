@@ -282,7 +282,7 @@ const PASSKEY_RP_ID = CONFIGURED_PASSKEY_RP_ID || (() => {
 })();
 const CONFIGURED_PASSKEY_ORIGIN = process.env.PASSKEY_ORIGIN || null;
 const PASSKEY_ORIGIN = CONFIGURED_PASSKEY_ORIGIN || DEFAULT_PANEL_ORIGIN;
-const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Admin Dashboard';
+const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Control Panel Dashboard';
 
 const TRUST_PROXY = (() => {
   const raw = typeof process.env.TRUST_PROXY === 'string' ? process.env.TRUST_PROXY.trim().toLowerCase() : '';
