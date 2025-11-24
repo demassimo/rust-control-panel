@@ -336,35 +336,170 @@
             Each workspace has its own Server Bot token and guild ID for appearance and embed styling. Open a server workspace to
             configure its Server Bot.
           </p>
-          <section id="teamAuthSection" class="team-discord-auth">
-            <div class="team-section-head">
-              <h4 id="teamAuthTitle">Discord authentication</h4>
-              <p class="muted small">Control whether team members must link Discord before receiving roles.</p>
-            </div>
-            <form id="teamAuthForm" class="team-discord-form" autocomplete="off">
-              <label class="checkbox">
-                <input type="checkbox" id="teamAuthEnabled" />
-                <span>Require Discord authentication</span>
-              </label>
-              <label for="teamAuthRole">Auto-assign role ID
-                <input id="teamAuthRole" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 123456789012345678" />
-              </label>
-              <label for="teamAuthLogChannel">Log channel ID
-                <input
-                  id="teamAuthLogChannel"
-                  type="text"
-                  inputmode="numeric"
-                  autocomplete="off"
-                  placeholder="Optional: 123456789012345678"
-                />
-              </label>
-              <p class="muted small">When set, completed links are announced in the selected Discord channel.</p>
-              <div class="row">
-                <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
+          <div class="team-discord-settings">
+            <section id="teamAuthSection" class="team-discord-auth">
+              <div class="team-section-head">
+                <h4 id="teamAuthTitle">Discord authentication</h4>
+                <p class="muted small">Control whether team members must link Discord before receiving roles.</p>
               </div>
-              <p id="teamAuthStatus" class="notice hidden"></p>
-            </form>
-          </section>
+              <form id="teamAuthForm" class="team-discord-form" autocomplete="off">
+                <label class="checkbox">
+                  <input type="checkbox" id="teamAuthEnabled" />
+                  <span>Require Discord authentication</span>
+                </label>
+                <label for="teamAuthRole">Auto-assign role ID
+                  <input id="teamAuthRole" type="text" inputmode="numeric" autocomplete="off" placeholder="e.g. 123456789012345678" />
+                </label>
+                <label for="teamAuthLogChannel">Log channel ID
+                  <input
+                    id="teamAuthLogChannel"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    placeholder="Optional: 123456789012345678"
+                  />
+                </label>
+                <p class="muted small">When set, completed links are announced in the selected Discord channel.</p>
+                <div class="row">
+                  <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
+                </div>
+                <p id="teamAuthStatus" class="notice hidden"></p>
+              </form>
+            </section>
+            <section id="teamTicketingSection" class="team-discord-auth">
+              <div class="team-section-head">
+                <h4>Ticketing and commands</h4>
+                <p class="muted small">Manage support tickets and slash command roles for the Main Bot.</p>
+              </div>
+              <div class="grid2 stack-sm">
+                <div class="discord-config">
+                  <h4 class="discord-section-title">Current ticketing setup</h4>
+                  <dl class="discord-config-list">
+                    <div>
+                      <dt>Status</dt>
+                      <dd id="discord-ticketing-summary-status">—</dd>
+                    </div>
+                    <div>
+                      <dt>Ticket category</dt>
+                      <dd id="discord-ticketing-summary-category">—</dd>
+                    </div>
+                    <div>
+                      <dt>Log channel</dt>
+                      <dd id="discord-ticketing-summary-log">—</dd>
+                    </div>
+                    <div>
+                      <dt>Staff role</dt>
+                      <dd id="discord-ticketing-summary-role">—</dd>
+                    </div>
+                  </dl>
+                  <h5 class="discord-config-title">Slash command roles</h5>
+                  <dl class="discord-config-list">
+                    <div>
+                      <dt>/status</dt>
+                      <dd id="team-command-summary-status">Everyone</dd>
+                    </div>
+                    <div>
+                      <dt>/ticket</dt>
+                      <dd id="team-command-summary-ticket">Everyone</dd>
+                    </div>
+                    <div>
+                      <dt>/rustlookup</dt>
+                      <dd id="team-command-summary-lookup">Everyone</dd>
+                    </div>
+                    <div>
+                      <dt>/auth</dt>
+                      <dd id="team-command-summary-auth">Everyone</dd>
+                    </div>
+                  </dl>
+                </div>
+                <form id="teamTicketingForm" class="team-discord-form" autocomplete="off">
+                  <label class="checkbox">
+                    <input type="checkbox" id="discord-ticketing-enabled" />
+                    <span>Enable ticketing on the Main Bot</span>
+                  </label>
+                  <div class="grid2 stack-sm">
+                    <label for="discord-ticketing-category">Ticket category ID
+                      <input
+                        id="discord-ticketing-category"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="e.g. 123456789012345678"
+                      />
+                    </label>
+                    <label for="discord-ticketing-log">Log channel ID
+                      <input
+                        id="discord-ticketing-log"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="Optional: 123456789012345678"
+                      />
+                    </label>
+                  </div>
+                  <div class="grid2 stack-sm">
+                    <label for="discord-ticketing-role">Staff role ID
+                      <input
+                        id="discord-ticketing-role"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="Role pinged for new tickets"
+                      />
+                    </label>
+                    <label class="checkbox" for="discord-ticketing-ping">
+                      <input type="checkbox" id="discord-ticketing-ping" />
+                      <span>Ping the staff role when tickets open</span>
+                    </label>
+                  </div>
+                  <div class="grid2 stack-sm">
+                    <label for="discord-ticketing-panel-channel">Panel channel ID
+                      <input
+                        id="discord-ticketing-panel-channel"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="Channel containing the ticket panel"
+                      />
+                    </label>
+                    <label for="discord-ticketing-panel-message">Panel message ID
+                      <input
+                        id="discord-ticketing-panel-message"
+                        type="text"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="Optional: existing panel message"
+                      />
+                    </label>
+                  </div>
+                  <fieldset class="role-fieldset">
+                    <legend>Slash command roles</legend>
+                    <p class="muted small">Limit who can run the Main Bot's commands.</p>
+                    <div class="grid2 stack-sm">
+                      <label for="team-command-status-role">/status role ID
+                        <input id="team-command-status-role" type="text" inputmode="numeric" autocomplete="off" />
+                      </label>
+                      <label for="team-command-ticket-role">/ticket role ID
+                        <input id="team-command-ticket-role" type="text" inputmode="numeric" autocomplete="off" />
+                      </label>
+                    </div>
+                    <div class="grid2 stack-sm">
+                      <label for="team-command-lookup-role">/rustlookup role ID
+                        <input id="team-command-lookup-role" type="text" inputmode="numeric" autocomplete="off" />
+                      </label>
+                      <label for="team-command-auth-role">/auth role ID
+                        <input id="team-command-auth-role" type="text" inputmode="numeric" autocomplete="off" />
+                      </label>
+                    </div>
+                  </fieldset>
+                  <div class="row">
+                    <button type="submit" class="accent">Save ticketing settings</button>
+                  </div>
+                  <p id="teamTicketingStatus" class="notice hidden"></p>
+                </form>
+              </div>
+            </section>
+          </div>
         </section>
 
       </section>

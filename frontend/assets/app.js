@@ -111,6 +111,12 @@
     panelChannelId: '',
     panelMessageId: ''
   };
+  const DEFAULT_DISCORD_COMMAND_PERMISSIONS = {
+    status: '',
+    ticket: '',
+    rustlookup: '',
+    auth: ''
+  };
   const DISCORD_STATUS_FIELD_LABELS = {
     joining: 'Joining players',
     queued: 'Queue length',
@@ -164,7 +170,15 @@
     teams: [],
     roles: [],
     roleTemplates: { serverCapabilities: [], globalPermissions: [] },
-    teamDiscord: { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null },
+    teamDiscord: {
+      hasToken: false,
+      guildId: null,
+      tokenPreview: null,
+      loading: false,
+      loadedTeamId: null,
+      config: defaultTeamDiscordConfig(),
+      configLoaded: false
+    },
     teamAuth: { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null },
     workspaceDiscord: {
       serverId: null,
@@ -228,6 +242,9 @@
   const teamAuthLogChannelInput = $('#teamAuthLogChannel');
   const teamAuthStatus = $('#teamAuthStatus');
   const btnSaveTeamAuth = $('#teamAuthSave');
+  const teamTicketingSection = $('#teamTicketingSection');
+  const teamTicketingForm = $('#teamTicketingForm');
+  const teamTicketingStatus = $('#teamTicketingStatus');
   const roleSelect = $('#roleSelect');
   const roleNameInput = $('#roleName');
   const roleDescriptionInput = $('#roleDescription');
@@ -331,6 +348,14 @@
   const discordTicketingPingInput = $('#discord-ticketing-ping');
   const discordTicketingPanelChannelInput = $('#discord-ticketing-panel-channel');
   const discordTicketingPanelMessageInput = $('#discord-ticketing-panel-message');
+  const teamCommandStatusInput = $('#team-command-status-role');
+  const teamCommandTicketInput = $('#team-command-ticket-role');
+  const teamCommandLookupInput = $('#team-command-lookup-role');
+  const teamCommandAuthInput = $('#team-command-auth-role');
+  const teamCommandSummaryStatus = $('#team-command-summary-status');
+  const teamCommandSummaryTicket = $('#team-command-summary-ticket');
+  const teamCommandSummaryLookup = $('#team-command-summary-lookup');
+  const teamCommandSummaryAuth = $('#team-command-summary-auth');
   const aqTicketsList = $('#aqTicketsList');
   const aqTicketsLoading = $('#aqTicketsLoading');
   const aqTicketsError = $('#aqTicketsError');
@@ -3796,27 +3821,20 @@
     discordTicketingPanelMessageInput
   ];
 
-  function updateTicketingState() {
-    if (!state.workspaceDiscord.config) {
-      state.workspaceDiscord.config = defaultWorkspaceDiscordConfig();
-    }
-    const ticketing = state.workspaceDiscord.config.ticketing || { ...DEFAULT_DISCORD_TICKETING_CONFIG };
-    ticketing.enabled = Boolean(discordTicketingEnabledInput?.checked);
-    ticketing.categoryId = (discordTicketingCategoryInput?.value || '').trim();
-    ticketing.logChannelId = (discordTicketingLogInput?.value || '').trim();
-    ticketing.staffRoleId = (discordTicketingRoleInput?.value || '').trim();
-    ticketing.pingStaffOnOpen = Boolean(discordTicketingPingInput?.checked);
-    ticketing.panelChannelId = (discordTicketingPanelChannelInput?.value || '').trim();
-    ticketing.panelMessageId = (discordTicketingPanelMessageInput?.value || '').trim();
-    state.workspaceDiscord.config.ticketing = ticketing;
-    hideNotice(discordStatusNotice);
-    updateWorkspaceDiscordConfigUi(state.workspaceDiscord.config);
-  }
+  const teamCommandInputs = [
+    teamCommandStatusInput,
+    teamCommandTicketInput,
+    teamCommandLookupInput,
+    teamCommandAuthInput
+  ];
 
-  discordTicketingEnabledInput?.addEventListener('change', updateTicketingState);
-  discordTicketingPingInput?.addEventListener('change', updateTicketingState);
+  discordTicketingEnabledInput?.addEventListener('change', updateTeamTicketingState);
+  discordTicketingPingInput?.addEventListener('change', updateTeamTicketingState);
   ticketingInputs.forEach((input) => {
-    input?.addEventListener('input', updateTicketingState);
+    input?.addEventListener('input', updateTeamTicketingState);
+  });
+  teamCommandInputs.forEach((input) => {
+    input?.addEventListener('input', updateTeamCommandPermissionsState);
   });
 
   if (typeof window !== 'undefined') {
@@ -5817,6 +5835,13 @@
     };
   }
 
+  function defaultTeamDiscordConfig() {
+    return {
+      ticketing: { ...DEFAULT_DISCORD_TICKETING_CONFIG },
+      commandPermissions: { ...DEFAULT_DISCORD_COMMAND_PERMISSIONS }
+    };
+  }
+
   function sanitizePresenceValue(value, key) {
     const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (DISCORD_ALLOWED_PRESENCES.has(raw)) return raw;
@@ -5857,6 +5882,14 @@
     return text;
   }
 
+  function normalizeCommandRoleValue(value) {
+    if (value == null) return '';
+    const trimmed = String(value).trim();
+    const digits = trimmed.replace(/[^0-9]/g, '');
+    if (!digits) return '';
+    return digits.slice(0, 64);
+  }
+
   function normalizeWorkspaceTicketing(ticketing = {}) {
     const source = ticketing && typeof ticketing === 'object' ? ticketing : {};
     const base = DEFAULT_DISCORD_TICKETING_CONFIG;
@@ -5868,6 +5901,27 @@
       pingStaffOnOpen: typeof source.pingStaffOnOpen === 'boolean' ? source.pingStaffOnOpen : base.pingStaffOnOpen,
       panelChannelId: normalizeSnowflake(source.panelChannelId ?? source.panel_channel_id ?? base.panelChannelId),
       panelMessageId: normalizeSnowflake(source.panelMessageId ?? source.panel_message_id ?? base.panelMessageId)
+    };
+  }
+
+  function normalizeTeamCommandPermissions(commandPermissions = {}) {
+    const source = commandPermissions && typeof commandPermissions === 'object' ? commandPermissions : {};
+    const base = DEFAULT_DISCORD_COMMAND_PERMISSIONS;
+    return {
+      status: normalizeCommandRoleValue(source.status ?? source.ruststatus ?? base.status),
+      ticket: normalizeCommandRoleValue(source.ticket ?? base.ticket),
+      rustlookup: normalizeCommandRoleValue(source.rustlookup ?? source.lookup ?? base.rustlookup),
+      auth: normalizeCommandRoleValue(source.auth ?? base.auth)
+    };
+  }
+
+  function normalizeTeamDiscordConfig(config = {}) {
+    const source = config && typeof config === 'object' ? config : {};
+    return {
+      ticketing: normalizeWorkspaceTicketing(source.ticketing || {}),
+      commandPermissions: normalizeTeamCommandPermissions(
+        source.commandPermissions || source.command_permissions || {}
+      )
     };
   }
 
@@ -5948,57 +6002,6 @@
       input.checked = Boolean(details.fields[key]);
     });
     updateWorkspaceDiscordEnabledFields(details.fields);
-
-    const ticketing = details.ticketing || DEFAULT_DISCORD_TICKETING_CONFIG;
-    const ticketingEnabled = Boolean(ticketing.enabled);
-    if (discordTicketingEnabledInput && !discordTicketingEnabledInput.matches(':focus')) {
-      discordTicketingEnabledInput.checked = ticketingEnabled;
-    }
-    if (discordTicketingCategoryInput && document.activeElement !== discordTicketingCategoryInput) {
-      discordTicketingCategoryInput.value = ticketing.categoryId || '';
-    }
-    if (discordTicketingLogInput && document.activeElement !== discordTicketingLogInput) {
-      discordTicketingLogInput.value = ticketing.logChannelId || '';
-    }
-    if (discordTicketingRoleInput && document.activeElement !== discordTicketingRoleInput) {
-      discordTicketingRoleInput.value = ticketing.staffRoleId || '';
-    }
-    if (discordTicketingPingInput) {
-      discordTicketingPingInput.checked = Boolean(ticketing.pingStaffOnOpen);
-    }
-    if (discordTicketingPanelChannelInput && document.activeElement !== discordTicketingPanelChannelInput) {
-      discordTicketingPanelChannelInput.value = ticketing.panelChannelId || '';
-    }
-    if (discordTicketingPanelMessageInput && document.activeElement !== discordTicketingPanelMessageInput) {
-      discordTicketingPanelMessageInput.value = ticketing.panelMessageId || '';
-    }
-    const ticketingInputs = [
-      discordTicketingCategoryInput,
-      discordTicketingLogInput,
-      discordTicketingRoleInput,
-      discordTicketingPanelChannelInput,
-      discordTicketingPanelMessageInput
-    ];
-    ticketingInputs.forEach((input) => {
-      if (!input) return;
-      input.disabled = !ticketingEnabled;
-    });
-    if (discordTicketingSummaryStatus) {
-      discordTicketingSummaryStatus.textContent = ticketingEnabled ? 'Enabled' : 'Disabled';
-    }
-    const formatTicketValue = (value) => {
-      const text = typeof value === 'string' ? value.trim() : '';
-      return text ? text : 'Not set';
-    };
-    if (discordTicketingSummaryCategory) {
-      discordTicketingSummaryCategory.textContent = formatTicketValue(ticketing.categoryId);
-    }
-    if (discordTicketingSummaryLog) {
-      discordTicketingSummaryLog.textContent = formatTicketValue(ticketing.logChannelId);
-    }
-    if (discordTicketingSummaryRole) {
-      discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId);
-    }
   }
 
   function updateWorkspaceDiscordEnabledFields(fields = {}) {
@@ -7180,7 +7183,15 @@
     state.activePanel = 'dashboard';
     state.roles = [];
     state.roleTemplates = { serverCapabilities: [], globalPermissions: [] };
-    state.teamDiscord = { hasToken: false, guildId: null, tokenPreview: null, loading: false, loadedTeamId: null };
+    state.teamDiscord = {
+      hasToken: false,
+      guildId: null,
+      tokenPreview: null,
+      loading: false,
+      loadedTeamId: null,
+      config: defaultTeamDiscordConfig(),
+      configLoaded: false
+    };
     state.teamAuth = { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null };
     activeRoleEditKey = null;
     updateRoleOptions();
@@ -8642,6 +8653,151 @@
       updateTeamAuthUi();
     }
   }
+
+  function setTeamDiscordConfig(config) {
+    const normalized = normalizeTeamDiscordConfig(config);
+    if (!state.teamDiscord) {
+      state.teamDiscord = { config: normalized };
+    } else {
+      state.teamDiscord.config = normalized;
+    }
+    state.teamDiscord.configLoaded = true;
+    updateTeamDiscordConfigUi();
+  }
+
+  function updateTeamDiscordConfigUi(config = state.teamDiscord?.config) {
+    if (!teamDiscordSection) return;
+    const canManage = canManageTeamDiscord();
+    const stateObj = state.teamDiscord || {};
+    const loading = !!stateObj.loading;
+    const hasSettings = Boolean(stateObj?.hasToken) || Boolean(stateObj?.guildId);
+    const details = normalizeTeamDiscordConfig(config || defaultTeamDiscordConfig());
+    state.teamDiscord.config = details;
+
+    const ticketing = details.ticketing || DEFAULT_DISCORD_TICKETING_CONFIG;
+    const ticketingEnabled = Boolean(ticketing.enabled);
+    if (discordTicketingEnabledInput && !discordTicketingEnabledInput.matches(':focus')) {
+      discordTicketingEnabledInput.checked = ticketingEnabled;
+    }
+    if (discordTicketingCategoryInput && document.activeElement !== discordTicketingCategoryInput) {
+      discordTicketingCategoryInput.value = ticketing.categoryId || '';
+    }
+    if (discordTicketingLogInput && document.activeElement !== discordTicketingLogInput) {
+      discordTicketingLogInput.value = ticketing.logChannelId || '';
+    }
+    if (discordTicketingRoleInput && document.activeElement !== discordTicketingRoleInput) {
+      discordTicketingRoleInput.value = ticketing.staffRoleId || '';
+    }
+    if (discordTicketingPingInput) {
+      discordTicketingPingInput.checked = Boolean(ticketing.pingStaffOnOpen);
+    }
+    if (discordTicketingPanelChannelInput && document.activeElement !== discordTicketingPanelChannelInput) {
+      discordTicketingPanelChannelInput.value = ticketing.panelChannelId || '';
+    }
+    if (discordTicketingPanelMessageInput && document.activeElement !== discordTicketingPanelMessageInput) {
+      discordTicketingPanelMessageInput.value = ticketing.panelMessageId || '';
+    }
+    const ticketingInputs = [
+      discordTicketingCategoryInput,
+      discordTicketingLogInput,
+      discordTicketingRoleInput,
+      discordTicketingPanelChannelInput,
+      discordTicketingPanelMessageInput
+    ];
+    ticketingInputs.forEach((input) => {
+      if (!input) return;
+      input.disabled = !canManage || loading || !hasSettings || !ticketingEnabled;
+    });
+    if (discordTicketingEnabledInput) {
+      discordTicketingEnabledInput.disabled = !canManage || loading || !hasSettings;
+    }
+    const formatTicketValue = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+      return text ? text : 'Not set';
+    };
+    if (discordTicketingSummaryStatus) {
+      discordTicketingSummaryStatus.textContent = ticketingEnabled ? 'Enabled' : 'Disabled';
+    }
+    if (discordTicketingSummaryCategory) {
+      discordTicketingSummaryCategory.textContent = formatTicketValue(ticketing.categoryId);
+    }
+    if (discordTicketingSummaryLog) {
+      discordTicketingSummaryLog.textContent = formatTicketValue(ticketing.logChannelId);
+    }
+    if (discordTicketingSummaryRole) {
+      discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId);
+    }
+
+    const commandPerms = details.commandPermissions || DEFAULT_DISCORD_COMMAND_PERMISSIONS;
+    if (teamCommandStatusInput && document.activeElement !== teamCommandStatusInput) {
+      teamCommandStatusInput.value = commandPerms.status || '';
+    }
+    if (teamCommandTicketInput && document.activeElement !== teamCommandTicketInput) {
+      teamCommandTicketInput.value = commandPerms.ticket || '';
+    }
+    if (teamCommandLookupInput && document.activeElement !== teamCommandLookupInput) {
+      teamCommandLookupInput.value = commandPerms.rustlookup || '';
+    }
+    if (teamCommandAuthInput && document.activeElement !== teamCommandAuthInput) {
+      teamCommandAuthInput.value = commandPerms.auth || '';
+    }
+    const commandInputs = [
+      teamCommandStatusInput,
+      teamCommandTicketInput,
+      teamCommandLookupInput,
+      teamCommandAuthInput
+    ];
+    commandInputs.forEach((input) => {
+      if (!input) return;
+      input.disabled = !canManage || loading || !hasSettings;
+    });
+    const formatCommandValue = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+      return text ? text : 'Everyone';
+    };
+    if (teamCommandSummaryStatus) teamCommandSummaryStatus.textContent = formatCommandValue(commandPerms.status);
+    if (teamCommandSummaryTicket) teamCommandSummaryTicket.textContent = formatCommandValue(commandPerms.ticket);
+    if (teamCommandSummaryLookup) teamCommandSummaryLookup.textContent = formatCommandValue(commandPerms.rustlookup);
+    if (teamCommandSummaryAuth) teamCommandSummaryAuth.textContent = formatCommandValue(commandPerms.auth);
+
+    if (teamTicketingStatus) {
+      if (!canManage) {
+        hideNotice(teamTicketingStatus);
+      } else if (!hasSettings) {
+        showNotice(teamTicketingStatus, 'Link the Main Bot before saving ticket settings.', 'warning');
+      }
+    }
+  }
+
+  function updateTeamTicketingState() {
+    const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
+    const ticketing = { ...(current.ticketing || DEFAULT_DISCORD_TICKETING_CONFIG) };
+    ticketing.enabled = Boolean(discordTicketingEnabledInput?.checked);
+    ticketing.categoryId = (discordTicketingCategoryInput?.value || '').trim();
+    ticketing.logChannelId = (discordTicketingLogInput?.value || '').trim();
+    ticketing.staffRoleId = (discordTicketingRoleInput?.value || '').trim();
+    ticketing.pingStaffOnOpen = Boolean(discordTicketingPingInput?.checked);
+    ticketing.panelChannelId = (discordTicketingPanelChannelInput?.value || '').trim();
+    ticketing.panelMessageId = (discordTicketingPanelMessageInput?.value || '').trim();
+    const updated = normalizeTeamDiscordConfig({ ...current, ticketing });
+    state.teamDiscord.config = updated;
+    hideNotice(teamTicketingStatus);
+    updateTeamDiscordConfigUi(updated);
+  }
+
+  function updateTeamCommandPermissionsState() {
+    const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
+    const commandPermissions = normalizeTeamCommandPermissions({
+      status: teamCommandStatusInput?.value,
+      ticket: teamCommandTicketInput?.value,
+      rustlookup: teamCommandLookupInput?.value,
+      auth: teamCommandAuthInput?.value
+    });
+    const updated = normalizeTeamDiscordConfig({ ...current, commandPermissions });
+    state.teamDiscord.config = updated;
+    hideNotice(teamTicketingStatus);
+    updateTeamDiscordConfigUi(updated);
+  }
   function updateTeamDiscordUi() {
     if (!teamDiscordSection) return;
     const canManage = canManageTeamDiscord();
@@ -8660,6 +8816,14 @@
       : null;
     teamDiscordSection.classList.toggle('hidden', !canManage);
     teamDiscordSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    if (teamTicketingSection) {
+      teamTicketingSection.classList.toggle('hidden', !canManage);
+      teamTicketingSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    }
+    if (teamAuthSection) {
+      teamAuthSection.classList.toggle('hidden', !canManage);
+      teamAuthSection.setAttribute('aria-hidden', canManage ? 'false' : 'true');
+    }
     if (teamDiscordGuildId) {
       teamDiscordGuildId.placeholder = hasSettings ? 'Guild ID stored — enter to replace' : 'Enter Discord guild ID';
       teamDiscordGuildId.disabled = !canManage || loading;
@@ -8690,6 +8854,7 @@
       discordStatusServerSelect.value = '';
       discordStatusServerSelect.disabled = true;
     }
+    updateTeamDiscordConfigUi();
     updateTeamAuthUi();
   }
 
@@ -8777,6 +8942,8 @@
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig());
+      state.teamDiscord.configLoaded = true;
       if (!state.teamDiscord.hasToken && teamDiscordToken) {
         teamDiscordToken.value = '';
       }
@@ -8799,10 +8966,50 @@
       if (!state.teamDiscord.hasToken) {
         state.teamDiscord.tokenPreview = null;
       }
+      if (!state.teamDiscord.configLoaded) {
+        setTeamDiscordConfig(defaultTeamDiscordConfig());
+      }
       updateTeamDiscordUi();
       if (canManageTeamDiscord()) {
         loadTeamAuthSettings({ force: true }).catch(() => {});
       }
+    }
+    if (unauthorized) return;
+  }
+
+  async function handleTeamTicketingSubmit(ev) {
+    ev?.preventDefault();
+    if (!canManageTeamDiscord()) return;
+    const hasSettings = Boolean(state.teamDiscord?.hasToken || state.teamDiscord?.guildId);
+    if (!hasSettings) {
+      showNotice(teamTicketingStatus, 'Link the Main Bot before saving ticket settings.', 'error');
+      return;
+    }
+
+    state.teamDiscord.loading = true;
+    updateTeamDiscordUi();
+    hideNotice(teamTicketingStatus);
+
+    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}) };
+    let unauthorized = false;
+    try {
+      const data = await api('/team/discord', payload, 'POST');
+      setTeamDiscordConfig(data?.config || payload.config);
+      state.teamDiscord.hasToken = Boolean(data?.hasToken ?? state.teamDiscord.hasToken);
+      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : state.teamDiscord.guildId;
+      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      showNotice(teamTicketingStatus, 'Ticketing settings saved for the Main Bot.', 'success');
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        unauthorized = true;
+        handleUnauthorized();
+      } else {
+        showNotice(teamTicketingStatus, describeError(err), 'error');
+      }
+    } finally {
+      state.teamDiscord.loading = false;
+      updateTeamDiscordUi();
     }
     if (unauthorized) return;
   }
@@ -8827,11 +9034,18 @@
     hideNotice(teamDiscordStatus);
     let unauthorized = false;
     try {
-      const data = await api('/team/discord', { token: value, guildId: cleanedGuildId }, 'POST');
+      const data = await api(
+        '/team/discord',
+        { token: value, guildId: cleanedGuildId, config: state.teamDiscord?.config || {} },
+        'POST'
+      );
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : cleanedGuildId;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      if (data?.config) {
+        setTeamDiscordConfig(data.config);
+      }
       teamDiscordToken.value = '';
       if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = state.teamDiscord.guildId || '';
@@ -8848,61 +9062,9 @@
       state.teamDiscord.loading = false;
       if (!state.teamDiscord.hasToken) {
         state.teamDiscord.tokenPreview = null;
-    }
-  if (state.teamAuth) {
-      if (context.teamAuth && typeof context.teamAuth === 'object') {
-        state.teamAuth.enabled = Boolean(context.teamAuth.enabled);
-        state.teamAuth.roleId =
-          context.teamAuth.roleId != null && context.teamAuth.roleId !== ''
-            ? String(context.teamAuth.roleId)
-            : null;
-        state.teamAuth.logChannelId =
-          context.teamAuth.logChannelId != null && context.teamAuth.logChannelId !== ''
-            ? String(context.teamAuth.logChannelId)
-            : null;
-        state.teamAuth.loaded = true;
-        state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
-      } else if (typeof context.activeTeamRequiresDiscordAuth !== 'undefined') {
-        state.teamAuth.enabled = Boolean(context.activeTeamRequiresDiscordAuth);
-        if (typeof context.activeTeamDiscordRoleId !== 'undefined') {
-          state.teamAuth.roleId =
-            context.activeTeamDiscordRoleId != null && context.activeTeamDiscordRoleId !== ''
-              ? String(context.activeTeamDiscordRoleId)
-              : null;
-        }
-        if (typeof context.activeTeamDiscordAuthLogChannelId !== 'undefined') {
-          const channel = context.activeTeamDiscordAuthLogChannelId;
-          state.teamAuth.logChannelId = channel != null && channel !== '' ? String(channel) : null;
-        }
-        state.teamAuth.loaded = true;
-        state.teamAuth.loadedTeamId = state.activeTeamId ?? null;
       }
-      if (state.activeTeamId !== previousTeamId) {
-        const hasAuthContext = !!(context.teamAuth && typeof context.teamAuth === 'object');
-        const hasLegacyAuthContext = typeof context.activeTeamRequiresDiscordAuth !== 'undefined';
-        state.teamAuth.loading = false;
-        if (!hasAuthContext && !hasLegacyAuthContext) {
-          state.teamAuth.loaded = false;
-          state.teamAuth.loadedTeamId = null;
-          state.teamAuth.enabled = false;
-          state.teamAuth.roleId = null;
-          state.teamAuth.logChannelId = null;
-          if (teamAuthEnabledInput && !teamAuthEnabledInput.matches(':focus')) {
-            teamAuthEnabledInput.checked = false;
-          }
-          if (teamAuthRoleInput && document.activeElement !== teamAuthRoleInput) {
-            teamAuthRoleInput.value = '';
-          }
-          if (teamAuthLogChannelInput && document.activeElement !== teamAuthLogChannelInput) {
-            teamAuthLogChannelInput.value = '';
-          }
-        }
-        hideNotice(teamAuthStatus);
-      }
+      updateTeamDiscordUi();
     }
-    updateTeamDiscordUi();
-    updateTeamAuthUi();
-  }
     if (unauthorized) return;
   }
 
@@ -8930,6 +9092,7 @@
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig());
       if (teamDiscordToken) teamDiscordToken.value = '';
       if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = state.teamDiscord.guildId || '';
@@ -8946,6 +9109,9 @@
       state.teamDiscord.loading = false;
       if (!state.teamDiscord.hasToken) {
         state.teamDiscord.tokenPreview = null;
+      }
+      if (!state.teamDiscord.hasToken) {
+        setTeamDiscordConfig(defaultTeamDiscordConfig());
       }
       updateTeamDiscordUi();
     }
@@ -9833,6 +9999,7 @@
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     teamSelect?.addEventListener('change', onTeamSelectionChange);
     teamDiscordForm?.addEventListener('submit', handleTeamDiscordSubmit);
+    teamTicketingForm?.addEventListener('submit', handleTeamTicketingSubmit);
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
