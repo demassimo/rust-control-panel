@@ -1,0 +1,34 @@
+<main id="dashboardPanel" class="dashboard">
+  <section class="servers-section">
+    <div class="section-head">
+      <div>
+        <h2>Servers</h2>
+        <p class="muted">Monitor uptime and player population at a glance.</p>
+      </div>
+      <div class="section-actions">
+        <button id="btnRefreshServers" class="ghost icon" title="Refresh servers">⟳</button>
+      </div>
+    </div>
+    <div id="servers" class="server-grid">
+      <button id="addServerPrompt" type="button" class="server-card add-server-prompt" aria-controls="addServerCard" aria-expanded="false">
+        <span class="add-icon" aria-hidden="true">＋</span>
+        <span class="add-text">Add a server</span>
+        <span class="add-subtext muted small">Connect a Rust server to monitor it here.</span>
+      </button>
+    </div>
+    <p id="serversEmpty" class="empty-state hidden">No servers added yet. Connect your first Rust server to get started.</p>
+    <div id="addServerCard" class="add-server-card hidden">
+      <h3>Add server</h3>
+      <div class="grid2">
+        <input id="svName" placeholder="Name">
+        <input id="svHost" placeholder="Host/IP">
+        <input id="svPort" type="number" placeholder="RCON Port" value="28017">
+        <input id="svPass" placeholder="Password">
+      </div>
+      <label class="inline"><input type="checkbox" id="svTLS"> Use TLS (wss)</label>
+      <div class="row">
+        <button id="btnAddServer" class="accent">Save server</button>
+      </div>
+    </div>
+  </section>
+</main>

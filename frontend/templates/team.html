@@ -1,0 +1,120 @@
+<section id="teamPanel" class="team-panel hidden" aria-labelledby="teamPanelTitle">
+  <div class="team-panel-head section-head">
+    <div>
+      <h2 id="teamPanelTitle">Team</h2>
+      <p class="muted">Invite trusted admins, assign roles and manage access.</p>
+    </div>
+  </div>
+  <div id="userCard" class="team-card">
+    <div class="team-card-body">
+      <aside id="userCreateSection" class="team-card-sidebar">
+        <div class="team-card-sidebar-head">
+          <h3>Invite a teammate</h3>
+          <p class="muted small">Generate credentials and assign a role in one place.</p>
+        </div>
+        <div class="team-card-sidebar-body">
+          <div class="grid2 stack-sm">
+            <input id="newUserName" placeholder="Username">
+            <input id="newUserPassword" type="password" placeholder="Temporary password">
+          </div>
+          <label>Role
+            <select id="newUserRole"></select>
+          </label>
+          <div class="row">
+            <button id="btnCreateUser" class="accent">Create user</button>
+          </div>
+          <p id="userFeedback" class="notice hidden"></p>
+          <div class="team-card-divider" aria-hidden="true"><span>Or add existing user</span></div>
+          <input id="existingUserName" placeholder="Existing username">
+          <label>Role
+            <select id="existingUserRole"></select>
+          </label>
+          <div class="row">
+            <button id="btnAddExistingUser" class="ghost">Add to team</button>
+          </div>
+          <p id="existingUserFeedback" class="notice hidden"></p>
+        </div>
+      </aside>
+      <div class="team-card-main">
+        <section class="team-section">
+          <div class="team-section-head">
+            <h4>Existing users</h4>
+            <p class="muted small">Manage passwords and roles for your operators.</p>
+          </div>
+          <ul id="userList" class="users"></ul>
+        </section>
+        <section class="team-section">
+          <div class="team-section-head">
+            <h4 class="roles-header" id="rolesHeader">Roles</h4>
+            <p id="rolesDescription" class="muted small">Define reusable access levels for your team.</p>
+          </div>
+          <div id="roleManager" class="roles-manager">
+            <section id="roleCreateSection" class="role-section-card">
+              <div class="role-section-head">
+                <h5>Create a role</h5>
+                <p class="muted small">Define the basics for a new role before assigning permissions.</p>
+              </div>
+              <div class="grid2 stack-sm">
+                <input id="newRoleKey" placeholder="New role key">
+                <input id="newRoleName" placeholder="Name">
+              </div>
+              <p class="muted small">Role keys use letters, numbers, dashes or underscores and cannot be changed later.</p>
+              <div class="row">
+                <button id="btnCreateRole" class="ghost">Create role</button>
+              </div>
+            </section>
+            <section id="roleEditSection" class="role-section-card">
+              <div class="role-section-head">
+                <h5>Edit a role</h5>
+                <p id="roleEditorEmpty" class="muted small hidden">Select a role to review and adjust its settings.</p>
+              </div>
+              <div id="roleEditor" class="role-editor hidden" aria-hidden="true">
+                <p id="roleLockedNotice" class="notice warning small hidden">
+                  You cannot edit a role that is currently assigned to you. Switch to another role to make changes.
+                </p>
+                <label for="roleSelect">Role
+                  <select id="roleSelect"></select>
+                </label>
+                <label for="roleName">Role name
+                  <input id="roleName" placeholder="Display name">
+                  <span class="muted small">Shown wherever the role is referenced in the panel.</span>
+                </label>
+                <label for="roleDescription">Role description
+                  <input id="roleDescription" placeholder="Description (optional)">
+                  <span class="muted small">Give teammates context about what this role is for.</span>
+                </label>
+                <div class="role-access">
+                  <div class="role-access-head">
+                    <h5>Server access</h5>
+                    <p class="muted small">Choose which servers this role can access.</p>
+                  </div>
+                  <div id="roleServersList" class="role-checkbox-list" role="group" aria-label="Allowed servers"></div>
+                </div>
+                <fieldset class="role-fieldset">
+                  <legend>Server capabilities</legend>
+                  <p class="muted small">Decide which actions this role can take on the servers they can reach.</p>
+                  <div id="roleCapabilities" class="role-checkbox-list" role="group" aria-label="Server capabilities"></div>
+                </fieldset>
+                <fieldset class="role-fieldset">
+                  <legend>Global permissions</legend>
+                  <p class="muted small">Grant access to panel-wide tools and management features.</p>
+                  <div
+                    id="roleGlobalPermissions"
+                    class="role-checkbox-list"
+                    role="group"
+                    aria-label="Global permissions"
+                  ></div>
+                </fieldset>
+                <div class="row space-between">
+                  <button id="btnSaveRole" class="accent">Save changes</button>
+                  <button id="btnDeleteRole" class="ghost danger">Delete role</button>
+                </div>
+                <p id="roleFeedback" class="notice hidden"></p>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>

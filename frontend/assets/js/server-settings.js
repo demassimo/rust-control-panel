@@ -1,5 +1,19 @@
 (() => {
-  const settingsRoot = document.getElementById('discord-settings');
+  const whenTemplatesReady = async () => {
+    if (document.readyState === 'loading') {
+      await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+    }
+    if (window.loadTemplatesPromise) {
+      try {
+        await window.loadTemplatesPromise;
+      } catch (err) {
+        console.error('Template load failed', err);
+      }
+    }
+  };
+
+  const start = () => {
+    const settingsRoot = document.getElementById('discord-settings');
   if (!settingsRoot) return;
 
   const serverIdFromDataset = document.body?.dataset?.serverId || null;
@@ -685,4 +699,7 @@
     resetView();
     setStatusNotice(describeError('missing_server'), 'error');
   }
+  };
+
+  whenTemplatesReady().then(start).catch((err) => console.error('Server settings init failed', err));
 })();

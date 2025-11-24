@@ -1,0 +1,76 @@
+<div id="userDetailsOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
+<aside
+  id="userDetailsPanel"
+  class="user-details-panel hidden"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="userDetailsName"
+  tabindex="-1"
+>
+  <div class="user-details-head">
+    <div>
+      <p id="userDetailsSubtitle" class="muted small">Team member details</p>
+      <h3 id="userDetailsName"></h3>
+    </div>
+    <button id="userDetailsClose" type="button" class="ghost icon" aria-label="Close user details">✕</button>
+  </div>
+  <div class="user-details-body">
+    <div class="user-details-badges">
+      <span id="userDetailsRoleBadge" class="badge">Role</span>
+    </div>
+    <dl class="user-details-meta">
+      <div>
+        <dt>Role</dt>
+        <dd id="userDetailsRole">—</dd>
+      </div>
+      <div>
+        <dt>Joined</dt>
+        <dd id="userDetailsCreated">—</dd>
+      </div>
+      <div>
+        <dt>User ID</dt>
+        <dd id="userDetailsId">—</dd>
+      </div>
+    </dl>
+    <p id="userDetailsSelfNotice" class="notice small hidden">
+      This is your account. Role changes and removal are disabled here.
+    </p>
+    <div class="user-details-actions">
+      <div class="user-role-editor">
+        <label class="inline">Role
+          <select id="userDetailsRoleSelect"></select>
+        </label>
+        <button id="userDetailsSaveRole" type="button" class="ghost">Update role</button>
+      </div>
+      <p id="userDetailsRoleStatus" class="notice small hidden"></p>
+      <button id="userDetailsResetPassword" type="button" class="ghost">Reset password</button>
+      <button id="userDetailsDelete" type="button" class="ghost danger">Remove user</button>
+    </div>
+  </div>
+</aside>
+
+<div id="dialogOverlay" class="modal-overlay hidden" aria-hidden="true"></div>
+<form
+  id="dialogModal"
+  class="dialog hidden"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="dialogTitle"
+  aria-hidden="true"
+  tabindex="-1"
+  novalidate
+>
+  <div class="dialog-content">
+    <h3 id="dialogTitle">Confirm</h3>
+    <p id="dialogMessage" class="dialog-message"></p>
+    <label id="dialogInputWrap" class="dialog-field hidden">
+      <span id="dialogInputLabel">Value</span>
+      <input id="dialogInput" type="text" autocomplete="off" />
+    </label>
+    <p id="dialogError" class="dialog-error hidden" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="dialogCancel" class="ghost">Cancel</button>
+      <button type="submit" id="dialogConfirm" class="accent">Confirm</button>
+    </div>
+  </div>
+</form>

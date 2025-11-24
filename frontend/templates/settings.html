@@ -1,0 +1,123 @@
+<section id="settingsPanel" class="hidden settings-panel">
+        <div class="profile-grid">
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>Profile Information</h3>
+              <p class="muted small">Manage your personal details.</p>
+            </div>
+            <div class="profile-card-body">
+              <div class="profile-field">
+                <span class="label">Username</span>
+                <span id="profileUsername" class="value muted">—</span>
+              </div>
+              <div class="profile-field">
+                <span class="label">Role</span>
+                <span id="profileRole" class="value muted">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>RustMaps Integration</h3>
+              <p class="muted small">Paste your API key to enable live map rendering.</p>
+            </div>
+            <div class="profile-card-body">
+              <label>RustMaps API key
+                <input id="rustMapsKey" placeholder="pk_live_..." autocomplete="off">
+              </label>
+              <div class="row">
+                <button id="btnSaveSettings" class="accent">Save settings</button>
+              </div>
+              <p id="settingsStatus" class="notice hidden"></p>
+            </div>
+          </div>
+
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>Change Password</h3>
+              <p class="muted small">Update your password regularly to keep access secure.</p>
+            </div>
+            <div class="profile-card-body">
+              <label>Current Password
+                <input type="password" id="currentPassword" placeholder="Enter current password" autocomplete="current-password">
+              </label>
+              <label>New Password
+                <input type="password" id="newPassword" placeholder="Minimum 8 characters" autocomplete="new-password">
+              </label>
+              <label>Confirm Password
+                <input type="password" id="confirmPassword" placeholder="Repeat new password" autocomplete="new-password">
+              </label>
+              <div class="row">
+                <button id="btnChangePassword" class="accent">Update password</button>
+              </div>
+              <p id="passwordStatus" class="notice hidden"></p>
+            </div>
+          </div>
+
+          <div class="profile-card">
+            <div class="profile-card-head">
+              <h3>Two-Factor Authentication</h3>
+              <p class="muted small">Add an extra layer of security to your account.</p>
+            </div>
+            <div class="profile-card-body">
+              <div class="profile-field">
+                <span class="label">2FA Status</span>
+                <span id="mfaStatus" class="value muted">Checking…</span>
+              </div>
+              <div class="mfa-section">
+                <h4>Authenticator app</h4>
+                <p class="muted small">Use a TOTP app such as Google Authenticator, 1Password, or Authy.</p>
+                <div id="totpSetupFields" class="mfa-setup hidden">
+                  <div class="mfa-field mfa-qr-row">
+                    <div>
+                      <span class="label">Scan code</span>
+                      <p class="muted small">Scan this with Google Authenticator, Bitwarden, or any other TOTP manager.</p>
+                    </div>
+                    <img id="totpQr" class="mfa-qr hidden" alt="Authenticator QR code" />
+                  </div>
+                  <div class="mfa-field mfa-secret-row">
+                    <div>
+                      <span class="label">Secret key</span>
+                      <p class="muted small">Use this key if your app cannot scan the QR code.</p>
+                    </div>
+                    <div class="mfa-secret-wrap">
+                      <code id="totpSecret" class="mfa-secret"></code>
+                      <button id="btnCopyTotpSecret" class="ghost">Copy</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="mfa-field mfa-backup-row">
+                  <div>
+                    <span class="label">Backup codes</span>
+                    <p class="muted small">Store these one-time codes safely in case you lose your authenticator.</p>
+                    <p id="backupCodesInfo" class="muted small"></p>
+                  </div>
+                  <div class="backup-code-container">
+                    <ul id="backupCodesList" class="backup-code-list"></ul>
+                    <button id="btnGenerateBackupCodes" class="ghost hidden">Generate backup codes</button>
+                  </div>
+                </div>
+                <label>Authenticator or backup code<input id="totpCode" inputmode="text" autocomplete="one-time-code" placeholder="123456 or BACKUP-CODE"></label>
+                <div class="row">
+                  <button id="btnStartTotp" class="ghost">Get setup code</button>
+                  <button id="btnEnableTotp" class="accent hidden">Enable 2FA</button>
+                  <button id="btnDisableTotp" class="ghost danger hidden">Disable 2FA</button>
+                </div>
+                <p id="mfaStatusMessage" class="notice hidden"></p>
+              </div>
+              <div class="passkey-section">
+                <div class="passkey-head">
+                  <div>
+                    <h4>Passkeys</h4>
+                    <p class="muted small">Use device-based verification as your second factor.</p>
+                  </div>
+                  <button id="btnRegisterPasskey" class="ghost">Add passkey</button>
+                </div>
+                <ul id="passkeyList" class="passkey-list"></ul>
+                <p id="passkeyStatus" class="notice hidden"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
