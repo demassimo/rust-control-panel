@@ -36,7 +36,8 @@ import {
   renderPresenceTemplate,
   describePresenceTemplateUsage,
   formatColorHex,
-  parseColorString
+  parseColorString,
+  normalizeCommandPermissions
 } from './discord-config.js';
 
 const MIN_REFRESH_MS = 10000;
@@ -240,7 +241,7 @@ function setTeamConfig(state, config) {
 
 function getCommandPermissions(state) {
   const config = getTeamConfig(state);
-  return config.commandPermissions || {};
+  return normalizeCommandPermissions(config.commandPermissions || {});
 }
 
 function formatChannelMention(id, fallback = 'Not set') {
@@ -633,7 +634,12 @@ function createCommandClient(state) {
   return client;
 }
 
-function buildCommandDefinitions() {
+
+function buildServerCommandDefinitions() {
+  return [];
+}
+
+function buildTeamCommandDefinitions() {
   return [
     {
       name: 'help',
@@ -642,7 +648,7 @@ function buildCommandDefinitions() {
     },
     {
       name: 'ruststatus',
-      description: 'Manage the Rust server status message',
+      description: 'Show Rust server status snapshots',
       dm_permission: false,
       options: [
         {
@@ -672,111 +678,8 @@ function buildCommandDefinitions() {
         },
         {
           type: ApplicationCommandOptionType.Subcommand,
-          name: 'setchannel',
-          description: 'Select the channel used for status updates',
-          options: [
-            {
-              type: ApplicationCommandOptionType.Channel,
-              name: 'channel',
-              description: 'Channel to post the status message in',
-              channel_types: [ChannelType.GuildText, ChannelType.GuildAnnouncement],
-              required: false
-            }
-          ]
-        },
-        {
-          type: ApplicationCommandOptionType.Subcommand,
           name: 'refresh',
           description: 'Force an immediate status refresh'
-        },
-        {
-          type: ApplicationCommandOptionType.SubcommandGroup,
-          name: 'config',
-          description: 'Configure the status message and presence',
-          options: [
-            {
-              type: ApplicationCommandOptionType.Subcommand,
-              name: 'show',
-              description: 'Show the current bot configuration'
-            },
-            {
-              type: ApplicationCommandOptionType.Subcommand,
-              name: 'setpresence',
-              description: 'Update the presence template',
-              options: [
-                {
-                  type: ApplicationCommandOptionType.String,
-                  name: 'template',
-                  description: 'Template for the presence text',
-                  required: false,
-                  min_length: 3,
-                  max_length: 190
-                },
-                {
-                  type: ApplicationCommandOptionType.Boolean,
-                  name: 'reset',
-                  description: 'Reset to the default template',
-                  required: false
-                }
-              ]
-            },
-            {
-              type: ApplicationCommandOptionType.Subcommand,
-              name: 'setcolors',
-              description: 'Change the embed colours',
-              options: [
-                {
-                  type: ApplicationCommandOptionType.String,
-                  name: 'online',
-                  description: 'Hex colour for the online state (e.g. #57F287)',
-                  required: false
-                },
-                {
-                  type: ApplicationCommandOptionType.String,
-                  name: 'offline',
-                  description: 'Hex colour for the offline state',
-                  required: false
-                },
-                {
-                  type: ApplicationCommandOptionType.String,
-                  name: 'stale',
-                  description: 'Hex colour for the stale state',
-                  required: false
-                },
-                {
-                  type: ApplicationCommandOptionType.Boolean,
-                  name: 'reset',
-                  description: 'Reset all colours to defaults',
-                  required: false
-                }
-              ]
-            },
-            {
-              type: ApplicationCommandOptionType.Subcommand,
-              name: 'toggle',
-              description: 'Enable or disable fields in the status embed',
-              options: [
-                {
-                  type: ApplicationCommandOptionType.String,
-                  name: 'field',
-                  description: 'Field to configure',
-                  required: true,
-                  choices: CONFIG_FIELD_CHOICES.map((choice) => ({ name: choice.name, value: choice.value }))
-                },
-                {
-                  type: ApplicationCommandOptionType.Boolean,
-                  name: 'enabled',
-                  description: 'Whether the field should be shown',
-                  required: true
-                }
-              ]
-            },
-            {
-              type: ApplicationCommandOptionType.Subcommand,
-              name: 'reset',
-              description: 'Reset all configuration to defaults'
-            }
-          ]
         }
       ]
     },
@@ -1063,7 +966,7 @@ function buildCommandDefinitions() {
   ];
 }
 
-async function registerCommandsForClient(client, guildId, { logContext } = {}) {
+async function registerCommandsForClient(client, guildId, commands, { logContext } = {}) {
   if (!client?.application || !guildId) return;
   if (!clientsWithClearedGlobalCommands.has(client)) {
     try {
@@ -1074,12 +977,12 @@ async function registerCommandsForClient(client, guildId, { logContext } = {}) {
       console.error(`failed to clear global slash commands${contextLabel}`, err);
     }
   }
-  const commands = buildCommandDefinitions();
-  await client.application.commands.set(commands, guildId);
+  await client.application.commands.set(commands ?? [], guildId);
 }
 
 async function registerCommands(state) {
-  await registerCommandsForClient(state.commandClient, state.guildId, {
+  const commands = buildServerCommandDefinitions();
+  await registerCommandsForClient(state.commandClient, state.guildId, commands, {
     logContext: `server ${state.serverId}`
   });
 }
@@ -1136,7 +1039,8 @@ async function ensureTeamGuildRegistration(teamState, guildId) {
   if (!teamState?.client?.application || !guildId) return;
   const registered = teamState.guildRegistrations.get(guildId);
   if (registered) return;
-  await registerCommandsForClient(teamState.client, guildId, {
+  const commands = buildTeamCommandDefinitions();
+  await registerCommandsForClient(teamState.client, guildId, commands, {
     logContext: `team ${teamState.teamId}`
   });
   teamState.guildRegistrations.set(guildId, true);
@@ -1468,10 +1372,12 @@ async function ensureCommandPermission(state, interaction) {
   const commandKey = commandKeyForInteraction(interaction);
   if (!commandKey) return true;
   const permissions = getCommandPermissions(state) || {};
-  const requiredRole = sanitizeId(permissions[commandKey]);
-  if (!requiredRole) return true;
+  const requiredRoles = Array.isArray(permissions[commandKey])
+    ? permissions[commandKey].map((role) => sanitizeId(role)).filter(Boolean)
+    : [];
+  if (requiredRoles.length === 0) return true;
   if (hasAdminPermission(interaction)) return true;
-  if (memberHasRole(interaction, requiredRole)) return true;
+  if (requiredRoles.some((roleId) => memberHasRole(interaction, roleId))) return true;
   const message = 'You do not have permission to use this command.';
   const canReply = typeof interaction.isRepliable === 'function'
     ? interaction.isRepliable()

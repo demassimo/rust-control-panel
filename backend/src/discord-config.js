@@ -22,10 +22,10 @@ export const DEFAULT_TICKETING_CONFIG = Object.freeze({
 });
 
 export const DEFAULT_COMMAND_PERMISSIONS = Object.freeze({
-  status: null,
-  ticket: null,
-  rustlookup: null,
-  auth: null
+  status: Object.freeze([]),
+  ticket: Object.freeze([]),
+  rustlookup: Object.freeze([]),
+  auth: Object.freeze([])
 });
 
 export const DEFAULT_TEAM_DISCORD_CONFIG = Object.freeze({
@@ -105,14 +105,28 @@ function normalizeCommandRole(value) {
   return str.length ? str : null;
 }
 
+function normalizeCommandRoleList(value) {
+  const roles = new Set();
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const id = normalizeCommandRole(entry);
+      if (id) roles.add(id);
+    }
+  } else {
+    const id = normalizeCommandRole(value);
+    if (id) roles.add(id);
+  }
+  return Array.from(roles);
+}
+
 export function normalizeCommandPermissions(permissions = {}) {
   const source = permissions && typeof permissions === 'object' ? permissions : {};
   const base = DEFAULT_COMMAND_PERMISSIONS;
   return {
-    status: normalizeCommandRole(source.status ?? source.ruststatus),
-    ticket: normalizeCommandRole(source.ticket),
-    rustlookup: normalizeCommandRole(source.rustlookup ?? source.lookup),
-    auth: normalizeCommandRole(source.auth)
+    status: normalizeCommandRoleList(source.status ?? source.ruststatus ?? base.status),
+    ticket: normalizeCommandRoleList(source.ticket ?? base.ticket),
+    rustlookup: normalizeCommandRoleList(source.rustlookup ?? source.lookup ?? base.rustlookup),
+    auth: normalizeCommandRoleList(source.auth ?? base.auth)
   };
 }
 
@@ -272,7 +286,12 @@ export function cloneTeamDiscordConfig(config = DEFAULT_TEAM_DISCORD_CONFIG) {
   const normalised = normaliseTeamDiscordConfig(config);
   return {
     ticketing: { ...normalised.ticketing },
-    commandPermissions: { ...normalised.commandPermissions }
+    commandPermissions: {
+      status: [...normalised.commandPermissions.status],
+      ticket: [...normalised.commandPermissions.ticket],
+      rustlookup: [...normalised.commandPermissions.rustlookup],
+      auth: [...normalised.commandPermissions.auth]
+    }
   };
 }
 
