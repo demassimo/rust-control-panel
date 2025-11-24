@@ -11,6 +11,20 @@ USER_NAME="rustadmin"
 GROUP_NAME="rustadmin"
 NGINX_SITE="/etc/nginx/sites-available/rustadmin.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/rustadmin.conf"
+NGINX_SSL_DIR="/etc/nginx/ssl"
+
+prompt_with_default() {
+  local prompt="$1"
+  local default="$2"
+  local response=""
+  if [ -t 0 ]; then
+    read -r -p "$prompt [$default]: " response || response=""
+  fi
+  if [ -z "$response" ]; then
+    response="$default"
+  fi
+  echo "$response"
+}
 
 log() {
   echo "[*] $*"
@@ -48,6 +62,55 @@ ensure_command() {
   if ! command -v "$cmd" >/dev/null 2>&1; then
     ensure_packages "$pkg"
   fi
+}
+
+ensure_tls_certificate() {
+  local backend_env="$INSTALL_DIR/backend/.env"
+  local panel_public_url panel_host san_target cert_file key_file needs_cert default_host
+
+  if [ -f "$backend_env" ]; then
+    panel_public_url="$(awk -F '=' '/^PANEL_PUBLIC_URL=/{print $2}' "$backend_env" | tail -n1 | tr -d '[:space:]')"
+  else
+    panel_public_url=""
+  fi
+
+  panel_host="$(printf '%s' "${panel_public_url:-}" | sed -E 's#^[a-zA-Z]+://##' | cut -d/ -f1 | cut -d: -f1)"
+  cert_file="$NGINX_SSL_DIR/rustadmin.crt"
+  key_file="$NGINX_SSL_DIR/rustadmin.key"
+
+  needs_cert="false"
+  if [[ ! -f "$cert_file" || ! -f "$key_file" ]]; then
+    needs_cert="true"
+  fi
+
+  if [[ "$needs_cert" == "false" ]]; then
+    log "Using existing TLS certificate at $cert_file"
+    return
+  fi
+
+  default_host="$(hostname -f 2>/dev/null || echo localhost)"
+  if [[ -z "$panel_host" && -t 0 ]]; then
+    panel_host="$(prompt_with_default "Hostname for self-signed TLS certificate" "$default_host")"
+  fi
+
+  if [[ -z "$panel_host" ]]; then
+    panel_host="$default_host"
+  fi
+
+  if [[ "$panel_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    san_target="IP:${panel_host}"
+  else
+    san_target="DNS:${panel_host}"
+  fi
+
+  ensure_packages openssl
+  mkdir -p "$NGINX_SSL_DIR"
+  log "Generating self-signed TLS certificate for $panel_host"
+  openssl req -x509 -nodes -newkey rsa:4096 -days 825 \
+    -keyout "$key_file" -out "$cert_file" \
+    -subj "/CN=${panel_host}" -addext "subjectAltName=${san_target}"
+  chmod 600 "$key_file"
+  chmod 644 "$cert_file"
 }
 
 clone_latest() {
@@ -144,6 +207,7 @@ update_nginx() {
   local tmp_conf
   tmp_conf="$(mktemp)"
   sed "s/__BACKEND_PORT__/$backend_port/g" "$nginx_template" >"$tmp_conf"
+  ensure_tls_certificate
   install -m 644 "$tmp_conf" "$NGINX_SITE"
   rm -f "$tmp_conf"
   ln -sf "$NGINX_SITE" "$NGINX_LINK"
