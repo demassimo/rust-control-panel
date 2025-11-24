@@ -349,6 +349,15 @@
         : 'Paste the Discord bot token';
     }
 
+    if (connectionStatusEl) {
+      connectionStatusEl.textContent = integration
+        ? 'Update the guild, status channel, or bot token for this workspace.'
+        : "Add this workspace's Server Bot token and guild ID to enable status updates.";
+      connectionStatusEl.classList.remove('hidden', 'error', 'success');
+      if (integration) connectionStatusEl.classList.add('success');
+      else connectionStatusEl.classList.add('error');
+    }
+
     setConnectionStatus(
       integration
         ? 'Update the guild, status channel, or bot token for this workspace.'

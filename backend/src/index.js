@@ -6635,7 +6635,7 @@ app.post('/api/me/passkeys/options', auth, async (req, res) => {
     const options = await generateRegistrationOptions({
       rpID: getPasskeyRpId(req),
       rpName: PASSKEY_RP_NAME,
-      userID: String(user.id),
+      userID: Buffer.from(String(user.id)),
       userName: user.username,
       userDisplayName: user.username,
       attestationType: 'none',
