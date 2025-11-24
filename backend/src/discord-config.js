@@ -30,7 +30,19 @@ export const DEFAULT_COMMAND_PERMISSIONS = Object.freeze({
 
 export const DEFAULT_TEAM_DISCORD_CONFIG = Object.freeze({
   ticketing: Object.freeze({ ...DEFAULT_TICKETING_CONFIG }),
-  commandPermissions: Object.freeze({ ...DEFAULT_COMMAND_PERMISSIONS })
+  commandPermissions: Object.freeze({ ...DEFAULT_COMMAND_PERMISSIONS }),
+  oauth: Object.freeze({
+    discord: Object.freeze({
+      clientId: null,
+      clientSecret: null,
+      redirectUri: null
+    }),
+    steam: Object.freeze({
+      apiKey: null,
+      realm: null,
+      returnUrl: null
+    })
+  })
 });
 
 export const DEFAULT_DISCORD_BOT_CONFIG = Object.freeze({
@@ -269,12 +281,54 @@ export function normaliseDiscordBotConfig(value = {}) {
   }
 }
 
+function sanitizeUrl(value, maxLength = 500) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trimmed.match(/^https?:\/\//i)) return null;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeSecret(value, maxLength = 256) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
+  return trimmed.slice(0, maxLength);
+}
+
+function normalizeTeamOAuthConfig(oauth = {}) {
+  const source = oauth && typeof oauth === 'object' ? oauth : {};
+  const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
+  const steam = source.steam && typeof source.steam === 'object' ? source.steam : {};
+  const discordClientId = sanitizeDiscordSnowflake(discord.clientId ?? discord.client_id);
+  const discordClientSecret = sanitizeSecret(discord.clientSecret ?? discord.client_secret, 400);
+  const discordRedirectUri = sanitizeUrl(discord.redirectUri ?? discord.redirect_uri, 800);
+  const steamApiKey = sanitizeSecret(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120);
+  const steamRealm = sanitizeUrl(steam.realm ?? steam.realmUrl, 800);
+  const steamReturnUrl = sanitizeUrl(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800);
+  return {
+    discord: {
+      clientId: discordClientId,
+      clientSecret: discordClientSecret,
+      redirectUri: discordRedirectUri
+    },
+    steam: {
+      apiKey: steamApiKey,
+      realm: steamRealm,
+      returnUrl: steamReturnUrl
+    }
+  };
+}
+
 export function normaliseTeamDiscordConfig(value = {}) {
   const hasSource = typeof value === 'object' && value != null;
   const source = hasSource ? value : {};
   const ticketing = normalizeTicketingConfig(source.ticketing);
   const commandPermissions = normalizeCommandPermissions(source.commandPermissions ?? source.command_permissions);
-  return { ticketing, commandPermissions };
+  const oauth = normalizeTeamOAuthConfig(source.oauth);
+  return { ticketing, commandPermissions, oauth };
 }
 
 export function cloneDiscordBotConfig(config = DEFAULT_DISCORD_BOT_CONFIG) {
@@ -291,6 +345,10 @@ export function cloneTeamDiscordConfig(config = DEFAULT_TEAM_DISCORD_CONFIG) {
       ticket: [...normalised.commandPermissions.ticket],
       rustlookup: [...normalised.commandPermissions.rustlookup],
       auth: [...normalised.commandPermissions.auth]
+    },
+    oauth: {
+      discord: { ...normalised.oauth.discord },
+      steam: { ...normalised.oauth.steam }
     }
   };
 }

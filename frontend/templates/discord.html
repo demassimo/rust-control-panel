@@ -66,6 +66,61 @@
         </p>
       </aside>
     </div>
+    <form id="teamOAuthForm" class="team-discord-form discord-card" autocomplete="off">
+      <span class="discord-chip" aria-hidden="true">OAuth</span>
+      <h5>Discord &amp; Steam OAuth</h5>
+      <p class="muted small">Set the credentials used for Discord login and Steam lookups during authentication.</p>
+      <label for="teamDiscordOauthClientId">Discord OAuth client ID
+        <input
+          type="text"
+          id="teamDiscordOauthClientId"
+          name="teamDiscordOauthClientId"
+          inputmode="numeric"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          placeholder="Enter Discord OAuth client ID"
+        />
+      </label>
+      <label for="teamDiscordOauthClientSecret">Discord OAuth client secret
+        <input
+          type="password"
+          id="teamDiscordOauthClientSecret"
+          name="teamDiscordOauthClientSecret"
+          autocomplete="new-password"
+          autocapitalize="none"
+          spellcheck="false"
+          placeholder="Paste Discord OAuth client secret"
+        />
+      </label>
+      <label for="teamDiscordOauthRedirectUri">Discord redirect URI
+        <input
+          type="url"
+          id="teamDiscordOauthRedirectUri"
+          name="teamDiscordOauthRedirectUri"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          placeholder="Optional: override the default redirect"
+        />
+      </label>
+      <label for="teamSteamApiKey">Steam Web API key
+        <input
+          type="password"
+          id="teamSteamApiKey"
+          name="teamSteamApiKey"
+          autocomplete="new-password"
+          autocapitalize="none"
+          spellcheck="false"
+          placeholder="Optional: Steam API key for profile lookups"
+        />
+      </label>
+      <div class="row">
+        <button type="submit" class="accent" id="btnSaveTeamOAuth">Save OAuth settings</button>
+        <button type="button" class="ghost" id="btnClearTeamOAuth">Clear stored values</button>
+      </div>
+      <p id="teamOAuthStatus" class="notice hidden"></p>
+    </form>
     <div class="discord-layout-grid">
       <section id="teamAuthSection" class="team-discord-auth discord-card discord-section-card">
         <div class="discord-card-header">
