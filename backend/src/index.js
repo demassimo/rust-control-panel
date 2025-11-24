@@ -6190,8 +6190,18 @@ const passkeyLoginChallenges = new Map();
 
 authenticator.options = { window: 1 };
 
-const encodeBase64Url = (input) => Buffer.from(input).toString('base64url');
-const decodeBase64Url = (input) => Buffer.from(input, 'base64url');
+const encodeBase64Url = (input) => {
+  return Buffer.from(input)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+};
+const decodeBase64Url = (input = '') => {
+  const normalised = String(input).replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalised.padEnd(Math.ceil(normalised.length / 4) * 4, '=');
+  return Buffer.from(padded, 'base64');
+};
 const normaliseTransports = (value) => {
   if (Array.isArray(value)) return value.map((t) => String(t)).filter(Boolean);
   if (typeof value === 'string') {
