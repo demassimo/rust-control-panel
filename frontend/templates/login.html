@@ -1,0 +1,50 @@
+<section id="loginPanel" class="login-layout">
+  <div class="login-hero">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <img src="assets/icons/shield.svg" alt="" />
+      </span>
+      <div>
+        <h1>Rust Admin Dashboard</h1>
+        <p>Stay on top of every wipe with live server telemetry, team management and rapid response tools.</p>
+      </div>
+    </div>
+    <ul class="hero-points">
+      <li>Realtime console streaming with quick commands</li>
+      <li>Live map overlays with player and team syncing</li>
+      <li>Role-based access control for trusted operators</li>
+    </ul>
+  </div>
+  <div class="login-grid">
+    <div class="login-card">
+      <h2>Sign in</h2>
+      <p class="muted">Enter your credentials to continue.</p>
+      <label>Username<input id="username" autocomplete="username" placeholder="Username"></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" placeholder="Password"></label>
+      <button id="btnLogin" class="accent">Sign in</button>
+      <div id="mfaStep" class="login-mfa hidden">
+        <p class="muted small">Enter a verification code or use a passkey to finish signing in.</p>
+        <label>Authenticator code<input id="loginMfaCode" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"></label>
+        <div class="row">
+          <button id="btnSubmitMfa" class="accent">Verify code</button>
+          <button id="btnMfaUsePasskey" class="ghost">Use a passkey</button>
+        </div>
+        <p id="loginMfaStatus" class="notice hidden"></p>
+      </div>
+      <p id="loginError" class="notice hidden"></p>
+      <p class="muted small">Default credentials are for first boot only — change them once you are inside.</p>
+    </div>
+    <div class="login-card" id="registerCard">
+      <h2>Create an account</h2>
+      <p id="registerInfo" class="muted">Registration is disabled by the administrator.</p>
+      <div id="registerForm" class="hidden">
+        <label>Username<input id="regUsername" autocomplete="username" placeholder="yourname"></label>
+        <label>Password<input id="regPassword" type="password" autocomplete="new-password" placeholder="Minimum 8 characters"></label>
+        <label>Confirm password<input id="regConfirm" type="password" autocomplete="new-password"></label>
+        <button id="btnRegister" class="ghost">Register</button>
+        <p id="registerError" class="notice hidden"></p>
+        <p id="registerSuccess" class="notice success hidden"></p>
+      </div>
+    </div>
+  </div>
+</section>

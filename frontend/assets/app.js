@@ -1,4 +1,18 @@
 (() => {
+  const whenTemplatesReady = async () => {
+    if (document.readyState === 'loading') {
+      await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+    }
+    if (window.loadTemplatesPromise) {
+      try {
+        await window.loadTemplatesPromise;
+      } catch (err) {
+        console.error('Template load failed', err);
+      }
+    }
+  };
+
+  const start = () => {
   const $ = (sel) => document.querySelector(sel);
 
   const serversEl = $('#servers');
@@ -10401,4 +10415,7 @@
   }
 
   init();
+  };
+
+  whenTemplatesReady().then(start).catch((err) => console.error('App init failed', err));
 })();

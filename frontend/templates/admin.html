@@ -1,0 +1,146 @@
+<section id="adminPanel" class="hidden admin-panel global-admin" aria-labelledby="adminPanelTitle">
+  <div class="section-head global-admin-head">
+    <div>
+      <p class="badge strong">Superuser tools</p>
+      <h2 id="adminPanelTitle">Global administration</h2>
+      <p class="muted">Edit every organization without switching teams. Changes apply everywhere.</p>
+    </div>
+    <div class="admin-scope-pill" id="adminScopeBadge">Global editing enabled</div>
+  </div>
+
+  <div class="admin-global-banner">
+    <div>
+      <p class="muted small">Superuser workspace</p>
+      <h3>System-wide user controls</h3>
+      <p class="muted">Promote, demote, or reset accounts without leaving the global view.</p>
+    </div>
+    <div class="admin-banner-actions">
+      <p class="muted small">Guidance</p>
+      <p class="muted">Global changes bypass team restrictions. Use search and filters to stay precise.</p>
+    </div>
+  </div>
+
+  <div class="admin-overview-grid">
+    <article class="admin-stat-card">
+      <p class="muted small">Accounts</p>
+      <h3 id="adminUserCount">0</h3>
+      <p class="muted small">Global users</p>
+    </article>
+    <article class="admin-stat-card">
+      <p class="muted small">Superusers</p>
+      <h3 id="adminSuperuserCount">0</h3>
+      <p class="muted small">Full control</p>
+    </article>
+    <article class="admin-stat-card">
+      <p class="muted small">Organizations</p>
+      <h3 id="adminOrgCount">0</h3>
+      <p class="muted small">Managed teams</p>
+    </article>
+  </div>
+
+  <section class="team-section admin-teams">
+    <div class="team-section-head">
+      <h4>Organizations</h4>
+      <p class="muted small">Review every team and their membership counts without switching context.</p>
+    </div>
+    <ul id="adminTeamList" class="admin-team-list plain-list"></ul>
+  </section>
+
+  <div id="adminUsersCard" class="team-card">
+    <div class="team-card-body">
+      <aside class="team-card-sidebar">
+        <div class="team-card-sidebar-head">
+          <h3>Create a user</h3>
+          <p class="muted small">Provision credentials and optionally place the user into an organization.</p>
+        </div>
+        <div class="team-card-sidebar-body">
+          <div class="grid2 stack-sm">
+            <input id="adminNewUserName" placeholder="Username">
+            <input id="adminNewUserPassword" type="password" placeholder="Temporary password">
+          </div>
+          <label>Role
+            <select id="adminNewUserRole"></select>
+          </label>
+          <label class="inline">
+            <input id="adminNewUserSuperuser" type="checkbox"> Grant superuser access
+          </label>
+          <label>Assign to organization (optional)
+            <select id="adminNewUserTeam"></select>
+          </label>
+          <div class="row">
+            <button id="btnAdminCreateUser" class="accent">Create user</button>
+          </div>
+          <p id="adminUserFeedback" class="notice hidden"></p>
+        </div>
+      </aside>
+      <div class="team-card-main">
+        <section class="team-section">
+          <div class="team-section-head admin-users-head">
+            <div>
+              <h4>All users</h4>
+              <p class="muted small">Admins can see every user, regardless of organization.</p>
+            </div>
+            <label class="admin-user-search">
+              <span class="muted small">Search across orgs</span>
+              <input id="adminUserSearch" type="search" placeholder="Filter by username, role, or organization" />
+            </label>
+          </div>
+          <ul id="adminUserList" class="users"></ul>
+          <p id="adminUserEmpty" class="empty-state hidden">No users found.</p>
+        </section>
+        <section class="team-section">
+          <div class="team-section-head">
+            <h4>Selected user</h4>
+            <p class="muted small">Adjust global role, credentials, and org memberships.</p>
+          </div>
+          <div id="adminUserDetails" class="card admin-user-details">
+            <div class="grid2 stack-sm">
+              <div>
+                <p class="muted small">Username</p>
+                <p id="adminDetailUsername" class="user-item-name">—</p>
+              </div>
+              <div>
+                <p class="muted small">Created</p>
+                <p id="adminDetailCreated" class="muted">—</p>
+              </div>
+            </div>
+            <div class="grid2 stack-sm">
+              <label class="inline">Global role
+                <select id="adminUserRoleSelect"></select>
+              </label>
+              <button id="adminUserSaveRole" type="button" class="ghost">Update role</button>
+            </div>
+            <label class="inline">
+              <input id="adminUserSuperuser" type="checkbox"> Superuser access (all organizations)
+            </label>
+            <p id="adminUserRoleStatus" class="notice small hidden"></p>
+            <div class="grid2 stack-sm">
+              <button id="adminUserResetPassword" type="button" class="ghost">Reset password</button>
+              <button id="adminUserDelete" type="button" class="ghost danger">Delete user</button>
+            </div>
+            <p id="adminUserDangerStatus" class="notice small hidden"></p>
+            <div class="admin-memberships">
+              <div class="team-section-head">
+                <h5>Organization access</h5>
+                <p class="muted small">Add or remove this user from any organization.</p>
+              </div>
+              <ul id="adminUserTeams" class="plain-list"></ul>
+              <div class="grid2 stack-sm">
+                <label>Organization
+                  <select id="adminAssignTeam"></select>
+                </label>
+                <label>Org role
+                  <select id="adminAssignRole"></select>
+                </label>
+              </div>
+              <div class="row">
+                <button id="btnAdminAssignTeam" type="button" class="ghost">Add to organization</button>
+              </div>
+              <p id="adminAssignStatus" class="notice small hidden"></p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>

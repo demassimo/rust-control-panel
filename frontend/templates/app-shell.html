@@ -1,0 +1,47 @@
+<section id="appPanel" class="hidden app-layout">
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <img src="assets/icons/shield.svg" alt="" />
+      </span>
+      <div class="brand-meta">
+        <h1>Rust Admin Dashboard</h1>
+        <div class="brand-account">
+          <span class="muted">Welcome back,</span>
+          <button id="profileMenuTrigger" type="button" class="brand-profile" aria-haspopup="true" aria-expanded="false" aria-controls="userBox">
+            <span id="welcomeName" class="profile-name">operator</span>
+            <span class="chevron" aria-hidden="true">▾</span>
+          </button>
+          <div id="userBox" class="user-box hidden" role="menu" aria-labelledby="profileMenuTrigger" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+    <div class="header-controls">
+      <div id="teamSwitcher" class="team-switcher hidden" aria-hidden="true">
+        <div class="team-select-group">
+          <span id="teamSelectLabel" class="team-select-label">Team Selector</span>
+          <div class="team-select-wrap">
+            <select id="teamSelect" aria-labelledby="teamSelectLabel"></select>
+            <span class="team-select-arrow" aria-hidden="true">▾</span>
+          </div>
+        </div>
+      </div>
+      <nav id="mainNav" class="topnav hidden" aria-label="Application navigation">
+        <button id="navDashboard" type="button" class="nav-btn active">Dashboard</button>
+        <button id="navLinked" type="button" class="nav-btn">Linked Accounts</button>
+        <button id="navTeam" type="button" class="nav-btn">Team</button>
+        <button id="navAdmin" type="button" class="nav-btn">Administration</button>
+        <button id="navDiscord" type="button" class="nav-btn">Discord</button>
+      </nav>
+    </div>
+  </header>
+
+  <div data-template-target="dashboard"></div>
+  <div data-template-target="linked"></div>
+  <div data-template-target="team"></div>
+  <div data-template-target="discord"></div>
+  <div data-template-target="admin"></div>
+  <div data-template-target="dialogs"></div>
+  <div data-template-target="workspace"></div>
+  <div data-template-target="settings"></div>
+</section>

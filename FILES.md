@@ -26,13 +26,15 @@ This document summarizes the purpose of the key files and directories that make 
 - `src/discord-bot-service.js` – Optional background worker that syncs server status to Discord, exposes team-wide status commands, and now provisions a configurable ticketing workflow with a dedicated command token and persistent ticket panel via slash commands.【F:backend/src/discord-bot-service.js†L1-L200】【F:backend/src/discord-bot-service.js†L840-L1508】
 
 ## Frontend assets (`frontend/`)
-- `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI.
+- `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI, now populated by modular templates for each route-friendly view.【F:frontend/index.html†L1-L23】
+- `templates/` – Route-oriented HTML snippets (`login.html`, `app-shell.html`, `dashboard.html`, etc.) that the loader injects into `index.html` so each major page lives in its own file.【F:frontend/templates/app-shell.html†L1-L26】【F:frontend/templates/dashboard.html†L1-L28】
 - `ticket-preview.html` – Standalone shareable page that fetches ticket transcripts from the API and renders a Discord-style preview for the selected team ticket.【F:frontend/ticket-preview.html†L1-L217】
 - `request.html` – Standalone account-linking page that walks Discord users through completing `/auth/requests/:token` invites by submitting their SteamID64 so the panel can generate a player profile and confirm completion.【F:frontend/request.html†L1-L414】
-- `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, chat and kill feed rendering, and orchestrates dynamic modules within the dashboard.【F:frontend/assets/app.js†L1-L80】【F:frontend/assets/app.js†L958-L1174】
+- `assets/app.js` – Main browser bundle that drives authentication, server management, role administration, chat and kill feed rendering, and orchestrates dynamic modules within the dashboard. Waits for the template loader to finish before wiring DOM handlers.【F:frontend/assets/app.js†L1-L23】【F:frontend/assets/app.js†L10405-L10418】
 - `assets/styles.css` – Core stylesheet for layout, dashboard panels, and responsive styling.
 - `assets/css/dark-theme.css` – Overrides enabling a dark theme presentation for the control panel.
-- `assets/js/server-settings.js` – Client-side logic for updating server configuration, credentials, and map metadata from the settings panel.
+- `assets/js/template-loader.js` – Loads the view templates into the base HTML and exposes a promise other scripts can await so they attach listeners after the DOM is ready.【F:frontend/assets/js/template-loader.js†L1-L44】
+- `assets/js/server-settings.js` – Client-side logic for updating server configuration, credentials, and map metadata from the settings panel; now waits for templates to load before binding events.【F:frontend/assets/js/server-settings.js†L1-L37】【F:frontend/assets/js/server-settings.js†L403-L440】
 - `assets/modules/module-loader.js` – Lightweight module registry used by the dashboard to dynamically enable widgets in the workspace view.
 - `assets/modules/live-players.js` – Displays the live player list and syncs statuses from the backend.
 - `assets/modules/players-graph.js` – Visualises historical player counts for the selected server.
