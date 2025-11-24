@@ -6,10 +6,19 @@
     if (window.loadTemplatesPromise) {
       try {
         await window.loadTemplatesPromise;
+        return;
       } catch (err) {
         console.error('Template load failed', err);
       }
     }
+
+    await new Promise((resolve) => {
+      const onReady = () => {
+        document.removeEventListener('templates:ready', onReady);
+        resolve();
+      };
+      document.addEventListener('templates:ready', onReady, { once: true });
+    });
   };
 
   const start = () => {
