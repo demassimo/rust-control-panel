@@ -12,6 +12,11 @@
   --accent: #f43f5e;
   --accent-strong: #fb7185;
   --accent-soft: rgba(244, 63, 94, 0.18);
+  --surface-1: rgba(255, 255, 255, 0.04);
+  --surface-2: rgba(16, 4, 9, 0.85);
+  --surface-3: rgba(25, 7, 13, 0.92);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
   --success: #4ade80;
   --warning: #facc15;
   --danger: #f87171;
@@ -84,7 +89,7 @@ body.modal-open { overflow: hidden; }
 
 h1, h2, h3, h4, h5 { margin: 0; font-weight: 600; }
 
-button, input, select {
+button, input, select, textarea {
   font-family: inherit;
   font-size: 1rem;
   color: inherit;
@@ -173,19 +178,20 @@ button.icon {
   font-size: 1.1rem;
 }
 
-input, select {
+input, select, textarea {
   width: 100%;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(12, 2, 5, 0.75);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
   color: var(--text);
   outline: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
-  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.08), 0 12px 28px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
 }
 
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   border-color: rgba(251, 113, 133, 0.45);
   box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.15);
 }
@@ -196,6 +202,15 @@ select {
   background-repeat: no-repeat;
   background-position: right 14px center;
   padding-right: 40px;
+}
+
+select option {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+input[list]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
 }
 
 label { display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; color: var(--muted); }
@@ -919,6 +934,79 @@ label.inline input[type="checkbox"]:focus-visible,
 .team-panel { display: flex; flex-direction: column; gap: 32px; }
 .discord-panel { display: flex; flex-direction: column; gap: 32px; }
 
+.discord-card-grid {
+  display: grid;
+  gap: 18px;
+  align-items: start;
+}
+
+@media (min-width: 1080px) {
+  .discord-card-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  }
+}
+
+.discord-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border-radius: var(--radius-md);
+  background: radial-gradient(520px 320px at 120% -10%, rgba(244, 63, 94, 0.15), transparent 68%), var(--surface-3);
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(244, 63, 94, 0.06);
+  overflow: hidden;
+}
+
+.discord-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.08), transparent 55%);
+  pointer-events: none;
+}
+
+.discord-card > * { position: relative; z-index: 1; }
+
+.discord-card h4,
+.discord-card h5 { margin: 0; }
+
+.discord-card.small {
+  gap: 10px;
+  padding: 20px;
+  background: var(--surface-2);
+}
+
+.discord-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border-strong);
+}
+
+.discord-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: rgba(244, 63, 94, 0.14);
+  border: 1px solid rgba(244, 63, 94, 0.32);
+  color: var(--accent-strong);
+  width: fit-content;
+}
+
+.discord-summary-list {
+  display: grid;
+  gap: 10px;
+}
+
+.discord-summary-list div { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.discord-summary-list dt { margin: 0; color: var(--muted); font-size: 0.85rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.discord-summary-list dd { margin: 0; font-weight: 700; color: var(--text); text-align: right; }
+
 .team-card {
   position: relative;
   overflow: hidden;
@@ -1144,8 +1232,9 @@ label.inline input[type="checkbox"]:focus-visible,
 .team-discord-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 420px;
+  gap: 14px;
+  max-width: 820px;
+  width: 100%;
 }
 
 .team-discord-form label {
@@ -1160,26 +1249,75 @@ label.inline input[type="checkbox"]:focus-visible,
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  padding: 11px 12px;
   color: var(--text);
   font-size: 0.95rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .team-discord-form small {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.82rem;
 }
 
 .team-discord-form input:focus,
 .team-discord-form textarea:focus,
 .team-discord-form select:focus {
-  outline: 2px solid rgba(59, 130, 246, 0.35);
+  outline: 2px solid rgba(251, 113, 133, 0.4);
   outline-offset: 2px;
+  border-color: rgba(251, 113, 133, 0.5);
 }
 
 .team-discord-form textarea {
   resize: vertical;
   min-height: 64px;
+}
+
+.team-discord-form .input-combo {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.08), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 0 1px rgba(244, 63, 94, 0.06);
+}
+
+.team-discord-form .input-combo-select {
+  min-width: min(220px, 100%);
+  max-width: 280px;
+  flex: 1 1 220px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.team-discord-form .input-combo input {
+  flex: 2 1 260px;
+  border-color: var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.team-discord-form .input-combo-select:focus,
+.team-discord-form .input-combo input:focus {
+  border-color: rgba(251, 113, 133, 0.6);
+  box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.18);
+}
+
+@media (max-width: 720px) {
+  .team-discord-form .input-combo {
+    flex-direction: column;
+    padding: 10px 12px;
+  }
+
+  .team-discord-form .input-combo-select,
+  .team-discord-form .input-combo input {
+    max-width: none;
+    width: 100%;
+    flex-basis: 100%;
+  }
 }
 
 .team-discord-form h5 {
@@ -1210,6 +1348,79 @@ label.inline input[type="checkbox"]:focus-visible,
   gap: 18px;
 }
 
+.discord-layout-grid {
+  display: grid;
+  gap: 18px;
+}
+
+@media (min-width: 1080px) {
+  .discord-layout-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+.discord-section-card {
+  border-left: 3px solid rgba(244, 63, 94, 0.55);
+  background: radial-gradient(640px 280px at 100% -30%, rgba(244, 63, 94, 0.18), transparent 60%), var(--surface-2);
+  border-radius: var(--radius-md);
+  padding: 22px 22px 24px;
+  border: 1px solid var(--border);
+  box-shadow: 0 16px 52px rgba(0, 0, 0, 0.45);
+}
+
+.discord-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.discord-meta {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 160px;
+  text-align: right;
+}
+
+.discord-meta .meta-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.discord-meta .meta-value {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.discord-field-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
+}
+
+.discord-ticketing-columns {
+  display: grid;
+  gap: 18px;
+}
+
+@media (min-width: 1080px) {
+  .discord-ticketing-columns {
+    grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+    align-items: start;
+  }
+}
+
 .team-discord-panels {
   display: grid;
   gap: 24px;
@@ -1218,7 +1429,6 @@ label.inline input[type="checkbox"]:focus-visible,
 .team-discord-panels .team-discord-form {
   max-width: none;
 }
-
 @media (min-width: 960px) {
   .team-discord-panels {
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1227,9 +1437,8 @@ label.inline input[type="checkbox"]:focus-visible,
 }
 
 .team-discord-form .row {
-  margin-top: 0;
+  margin-top: 4px;
 }
-
 .roles-manager {
   display: grid;
   gap: 24px;
