@@ -356,6 +356,7 @@
                     type="text"
                     inputmode="numeric"
                     autocomplete="off"
+                    list="discord-channel-options"
                     placeholder="Optional: 123456789012345678"
                   />
                 </label>
@@ -424,6 +425,7 @@
                         type="text"
                         inputmode="numeric"
                         autocomplete="off"
+                        list="discord-category-options"
                         placeholder="e.g. 123456789012345678"
                       />
                     </label>
@@ -433,6 +435,7 @@
                         type="text"
                         inputmode="numeric"
                         autocomplete="off"
+                        list="discord-channel-options"
                         placeholder="Optional: 123456789012345678"
                       />
                     </label>
@@ -459,6 +462,7 @@
                         type="text"
                         inputmode="numeric"
                         autocomplete="off"
+                        list="discord-channel-options"
                         placeholder="Channel containing the ticket panel"
                       />
                     </label>
@@ -474,24 +478,32 @@
                   </div>
                   <fieldset class="role-fieldset">
                     <legend>Slash command roles</legend>
-                    <p class="muted small">Limit who can run the Main Bot's commands.</p>
+                    <p class="muted small">Limit who can run the Main Bot's commands. Hold Ctrl/Cmd to select multiple roles or leave empty to allow everyone.</p>
                     <div class="grid2 stack-sm">
-                      <label for="team-command-status-role">/status role ID
-                        <input id="team-command-status-role" type="text" inputmode="numeric" autocomplete="off" />
+                      <label for="team-command-status-role">/status roles
+                        <select id="team-command-status-role" multiple size="6"></select>
                       </label>
-                      <label for="team-command-ticket-role">/ticket role ID
-                        <input id="team-command-ticket-role" type="text" inputmode="numeric" autocomplete="off" />
+                      <label for="team-command-ticket-role">/ticket roles
+                        <select id="team-command-ticket-role" multiple size="6"></select>
                       </label>
                     </div>
                     <div class="grid2 stack-sm">
-                      <label for="team-command-lookup-role">/rustlookup role ID
-                        <input id="team-command-lookup-role" type="text" inputmode="numeric" autocomplete="off" />
+                      <label for="team-command-lookup-role">/rustlookup roles
+                        <select id="team-command-lookup-role" multiple size="6"></select>
                       </label>
-                      <label for="team-command-auth-role">/auth role ID
-                        <input id="team-command-auth-role" type="text" inputmode="numeric" autocomplete="off" />
+                      <label for="team-command-auth-role">/auth roles
+                        <select id="team-command-auth-role" multiple size="6"></select>
                       </label>
+                    </div>
+                    <div class="row space-between align-center">
+                      <p id="teamCommandRolesStatus" class="notice hidden"></p>
+                      <button type="button" id="team-command-refresh-roles" class="ghost">Refresh Discord roles</button>
                     </div>
                   </fieldset>
+                  <div class="row space-between align-center">
+                    <p id="teamDiscordChannelsStatus" class="notice hidden"></p>
+                    <button type="button" id="team-discord-refresh-channels" class="ghost">Refresh Discord channels</button>
+                  </div>
                   <div class="row">
                     <button type="submit" class="accent">Save ticketing settings</button>
                   </div>
@@ -502,9 +514,12 @@
           </div>
         </section>
 
-      </section>
+        </section>
 
-      <section id="adminPanel" class="hidden admin-panel global-admin" aria-labelledby="adminPanelTitle">
+        <datalist id="discord-category-options"></datalist>
+        <datalist id="discord-channel-options"></datalist>
+
+        <section id="adminPanel" class="hidden admin-panel global-admin" aria-labelledby="adminPanelTitle">
         <div class="section-head global-admin-head">
           <div>
             <p class="badge strong">Superuser tools</p>

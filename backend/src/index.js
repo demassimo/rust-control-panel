@@ -5285,6 +5285,34 @@ function sanitizeDiscordSnowflake(value, maxLength = 64) {
   return digits.slice(0, maxLength);
 }
 
+function projectDiscordRole(role) {
+  if (!role || !role.id) return null;
+  const id = sanitizeDiscordSnowflake(role.id);
+  if (!id) return null;
+  return {
+    id,
+    name: typeof role.name === 'string' && role.name.trim() ? role.name.trim() : '(Unnamed role)',
+    position: Number.isFinite(role.position) ? Number(role.position) : 0,
+    managed: Boolean(role.managed),
+    mentionable: Boolean(role.mentionable)
+  };
+}
+
+function projectDiscordChannel(channel) {
+  if (!channel || !channel.id) return null;
+  const id = sanitizeDiscordSnowflake(channel.id);
+  if (!id) return null;
+  return {
+    id,
+    name: typeof channel.name === 'string' && channel.name.trim() ? channel.name.trim() : '(Unnamed channel)',
+    type: typeof channel.type === 'number' ? channel.type : null,
+    parentId: sanitizeDiscordSnowflake(channel.parent_id),
+    position: Number.isFinite(channel.position)
+      ? Number(channel.position)
+      : (Number.isFinite(channel.raw_position) ? Number(channel.raw_position) : 0)
+  };
+}
+
 function sanitizeSteamId(value) {
   if (value == null) return null;
   const raw = typeof value === 'string' ? value.trim() : String(value || '').trim();
@@ -5599,6 +5627,94 @@ async function ensureDiscordMemberRole({ token, guildId, userId, roleId }) {
   } catch (err) {
     console.error('error assigning discord auth role', err);
     return { ok: false, error: err };
+  }
+}
+
+async function fetchDiscordGuildRoles(token, guildId) {
+  const authToken = sanitizeDiscordToken(token);
+  const guild = sanitizeDiscordSnowflake(guildId);
+  if (!authToken || !guild) {
+    const err = new Error('missing_discord_settings');
+    err.code = 'missing_discord_settings';
+    throw err;
+  }
+  const endpoint = `${DISCORD_API_BASE}/guilds/${guild}/roles`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bot ${authToken}`
+      }
+    });
+    if (!response.ok) {
+      const err = new Error('discord_roles_fetch_failed');
+      err.status = response.status;
+      err.body = await response.text().catch(() => null);
+      return Promise.reject(err);
+    }
+    const data = await response.json().catch(() => null);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((role) => projectDiscordRole(role))
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (Number.isFinite(b.position) && Number.isFinite(a.position) && b.position !== a.position) {
+          return b.position - a.position;
+        }
+        return a.name.localeCompare(b.name);
+      });
+  } catch (err) {
+    err.message = err.message || 'discord_roles_fetch_failed';
+    throw err;
+  }
+}
+
+async function fetchDiscordGuildChannels(token, guildId) {
+  const authToken = sanitizeDiscordToken(token);
+  const guild = sanitizeDiscordSnowflake(guildId);
+  if (!authToken || !guild) {
+    const err = new Error('missing_discord_settings');
+    err.code = 'missing_discord_settings';
+    throw err;
+  }
+  const endpoint = `${DISCORD_API_BASE}/guilds/${guild}/channels`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bot ${authToken}`
+      }
+    });
+    if (!response.ok) {
+      const err = new Error('discord_channels_fetch_failed');
+      err.status = response.status;
+      err.body = await response.text().catch(() => null);
+      return Promise.reject(err);
+    }
+    const data = await response.json().catch(() => null);
+    if (!Array.isArray(data)) return { categories: [], channels: [] };
+    const projected = data.map((channel) => projectDiscordChannel(channel)).filter(Boolean);
+    const categories = projected
+      .filter((channel) => channel.type === 4)
+      .sort((a, b) => {
+        if (Number.isFinite(a.position) && Number.isFinite(b.position) && a.position !== b.position) {
+          return a.position - b.position;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    const textChannelTypes = new Set([0, 5, 15]);
+    const channels = projected
+      .filter((channel) => textChannelTypes.has(channel.type))
+      .sort((a, b) => {
+        if (Number.isFinite(a.position) && Number.isFinite(b.position) && a.position !== b.position) {
+          return a.position - b.position;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    return { categories, channels };
+  } catch (err) {
+    err.message = err.message || 'discord_channels_fetch_failed';
+    throw err;
   }
 }
 
@@ -6756,6 +6872,56 @@ app.get('/api/team/discord', auth, async (req, res) => {
   } catch (err) {
     console.error('failed to load team discord token', err);
     res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/team/discord/roles', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.getTeamDiscordSettings !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const settings = await db.getTeamDiscordSettings(teamId);
+    const roles = await fetchDiscordGuildRoles(settings?.token, settings?.guildId);
+    res.json({ roles });
+  } catch (err) {
+    console.error('failed to fetch discord roles', err);
+    if (err?.code === 'missing_discord_settings') {
+      return res.status(400).json({ error: 'missing_discord_settings' });
+    }
+    if (err?.status === 401 || err?.status === 403) {
+      return res.status(400).json({ error: 'discord_roles_unauthorized' });
+    }
+    res.status(502).json({ error: 'discord_roles_fetch_failed' });
+  }
+});
+
+app.get('/api/team/discord/channels', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.getTeamDiscordSettings !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  try {
+    const settings = await db.getTeamDiscordSettings(teamId);
+    const channels = await fetchDiscordGuildChannels(settings?.token, settings?.guildId);
+    res.json(channels);
+  } catch (err) {
+    console.error('failed to fetch discord channels', err);
+    if (err?.code === 'missing_discord_settings') {
+      return res.status(400).json({ error: 'missing_discord_settings' });
+    }
+    if (err?.status === 401 || err?.status === 403) {
+      return res.status(400).json({ error: 'discord_channels_unauthorized' });
+    }
+    res.status(502).json({ error: 'discord_channels_fetch_failed' });
   }
 });
 

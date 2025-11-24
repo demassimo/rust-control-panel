@@ -112,10 +112,10 @@
     panelMessageId: ''
   };
   const DEFAULT_DISCORD_COMMAND_PERMISSIONS = {
-    status: '',
-    ticket: '',
-    rustlookup: '',
-    auth: ''
+    status: [],
+    ticket: [],
+    rustlookup: [],
+    auth: []
   };
   const DISCORD_STATUS_FIELD_LABELS = {
     joining: 'Joining players',
@@ -179,6 +179,8 @@
       config: defaultTeamDiscordConfig(),
       configLoaded: false
     },
+    teamDiscordRoles: defaultTeamDiscordRolesState(),
+    teamDiscordChannels: defaultTeamDiscordChannelsState(),
     teamAuth: { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null },
     workspaceDiscord: {
       serverId: null,
@@ -348,6 +350,8 @@
   const discordTicketingPingInput = $('#discord-ticketing-ping');
   const discordTicketingPanelChannelInput = $('#discord-ticketing-panel-channel');
   const discordTicketingPanelMessageInput = $('#discord-ticketing-panel-message');
+  const discordCategoryOptions = $('#discord-category-options');
+  const discordChannelOptions = $('#discord-channel-options');
   const teamCommandStatusInput = $('#team-command-status-role');
   const teamCommandTicketInput = $('#team-command-ticket-role');
   const teamCommandLookupInput = $('#team-command-lookup-role');
@@ -356,6 +360,10 @@
   const teamCommandSummaryTicket = $('#team-command-summary-ticket');
   const teamCommandSummaryLookup = $('#team-command-summary-lookup');
   const teamCommandSummaryAuth = $('#team-command-summary-auth');
+  const teamCommandRolesStatus = $('#teamCommandRolesStatus');
+  const btnRefreshTeamCommandRoles = $('#team-command-refresh-roles');
+  const teamDiscordChannelsStatus = $('#teamDiscordChannelsStatus');
+  const btnRefreshTeamDiscordChannels = $('#team-discord-refresh-channels');
   const aqTicketsList = $('#aqTicketsList');
   const aqTicketsLoading = $('#aqTicketsLoading');
   const aqTicketsError = $('#aqTicketsError');
@@ -3834,7 +3842,11 @@
     input?.addEventListener('input', updateTeamTicketingState);
   });
   teamCommandInputs.forEach((input) => {
-    input?.addEventListener('input', updateTeamCommandPermissionsState);
+    input?.addEventListener('change', updateTeamCommandPermissionsState);
+  });
+
+  btnRefreshTeamCommandRoles?.addEventListener('click', () => {
+    loadTeamDiscordRoles({ force: true, showStatus: true }).catch(() => {});
   });
 
   if (typeof window !== 'undefined') {
@@ -4170,6 +4182,8 @@
         if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
           teamDiscordGuildId.value = state.teamDiscord.guildId || '';
         }
+        state.teamDiscordRoles = defaultTeamDiscordRolesState();
+        state.teamDiscordChannels = defaultTeamDiscordChannelsState();
       }
     }
     if (state.teamAuth) {
@@ -5194,6 +5208,11 @@
     discord_post_failed: 'Discord rejected the reply. Check the bot permissions and try again.',
     discord_unreachable: 'Unable to reach Discord right now. Try again shortly.',
     discord_rate_limited: 'Discord rate limited the bot. Wait a few moments and try again.',
+    missing_discord_settings: 'Link the Main Bot before loading Discord roles or channels.',
+    discord_roles_fetch_failed: 'Failed to load Discord roles. Check the bot token permissions and try again.',
+    discord_roles_unauthorized: 'The Main Bot cannot read guild roles. Verify its guild ID and permissions.',
+    discord_channels_fetch_failed: 'Failed to load Discord channels. Check the bot token permissions and try again.',
+    discord_channels_unauthorized: 'The Main Bot cannot read guild channels. Verify its guild ID and permissions.',
     mfa_required: 'Two-factor authentication required. Complete verification to continue.',
     invalid_mfa_code: 'The verification code was not accepted.',
     mfa_expired: 'Your verification window expired. Please sign in again.',
@@ -5838,8 +5857,21 @@
   function defaultTeamDiscordConfig() {
     return {
       ticketing: { ...DEFAULT_DISCORD_TICKETING_CONFIG },
-      commandPermissions: { ...DEFAULT_DISCORD_COMMAND_PERMISSIONS }
+      commandPermissions: {
+        status: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.status],
+        ticket: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.ticket],
+        rustlookup: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.rustlookup],
+        auth: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.auth]
+      }
     };
+  }
+
+  function defaultTeamDiscordRolesState() {
+    return { loading: false, roles: [], error: null, loadedTeamId: null };
+  }
+
+  function defaultTeamDiscordChannelsState() {
+    return { loading: false, categories: [], channels: [], error: null, loadedTeamId: null };
   }
 
   function sanitizePresenceValue(value, key) {
@@ -5890,6 +5922,20 @@
     return digits.slice(0, 64);
   }
 
+  function normalizeCommandRoleList(value) {
+    const roles = new Set();
+    if (Array.isArray(value)) {
+      value.forEach((entry) => {
+        const id = normalizeCommandRoleValue(entry);
+        if (id) roles.add(id);
+      });
+    } else {
+      const id = normalizeCommandRoleValue(value);
+      if (id) roles.add(id);
+    }
+    return Array.from(roles);
+  }
+
   function normalizeWorkspaceTicketing(ticketing = {}) {
     const source = ticketing && typeof ticketing === 'object' ? ticketing : {};
     const base = DEFAULT_DISCORD_TICKETING_CONFIG;
@@ -5908,10 +5954,10 @@
     const source = commandPermissions && typeof commandPermissions === 'object' ? commandPermissions : {};
     const base = DEFAULT_DISCORD_COMMAND_PERMISSIONS;
     return {
-      status: normalizeCommandRoleValue(source.status ?? source.ruststatus ?? base.status),
-      ticket: normalizeCommandRoleValue(source.ticket ?? base.ticket),
-      rustlookup: normalizeCommandRoleValue(source.rustlookup ?? source.lookup ?? base.rustlookup),
-      auth: normalizeCommandRoleValue(source.auth ?? base.auth)
+      status: normalizeCommandRoleList(source.status ?? source.ruststatus ?? base.status),
+      ticket: normalizeCommandRoleList(source.ticket ?? base.ticket),
+      rustlookup: normalizeCommandRoleList(source.rustlookup ?? source.lookup ?? base.rustlookup),
+      auth: normalizeCommandRoleList(source.auth ?? base.auth)
     };
   }
 
@@ -8665,6 +8711,66 @@
     updateTeamDiscordConfigUi();
   }
 
+  function selectedRolesFromSelect(select) {
+    if (!select) return [];
+    return Array.from(select.selectedOptions || [])
+      .map((option) => option.value)
+      .filter(Boolean);
+  }
+
+  function syncCommandRoleSelect(select, roles, selectedValues = [], disabled = false) {
+    if (!select) return;
+    const selectedSet = new Set(normalizeCommandRoleList(selectedValues));
+    const roleList = Array.isArray(roles) ? roles : [];
+    select.innerHTML = '';
+    if (!roleList.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No Discord roles found';
+      select.append(option);
+      select.disabled = true;
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    roleList.forEach((role) => {
+      const option = document.createElement('option');
+      option.value = role.id;
+      option.textContent = role.name;
+      option.selected = selectedSet.has(role.id);
+      fragment.append(option);
+    });
+    select.append(fragment);
+    select.disabled = disabled;
+  }
+
+  function syncDiscordCategoryOptions(list, categories) {
+    if (!list) return;
+    const fragment = document.createDocumentFragment();
+    (Array.isArray(categories) ? categories : []).forEach((category) => {
+      const option = document.createElement('option');
+      option.value = category.id;
+      option.label = category.name ? `${category.name} (${category.id})` : category.id;
+      option.textContent = option.label;
+      fragment.append(option);
+    });
+    list.innerHTML = '';
+    list.append(fragment);
+  }
+
+  function syncDiscordChannelOptions(list, channels) {
+    if (!list) return;
+    const fragment = document.createDocumentFragment();
+    (Array.isArray(channels) ? channels : []).forEach((channel) => {
+      const option = document.createElement('option');
+      option.value = channel.id;
+      option.label = channel.name ? `${channel.name} (${channel.id})` : channel.id;
+      option.textContent = option.label;
+      fragment.append(option);
+    });
+    list.innerHTML = '';
+    list.append(fragment);
+  }
+
   function updateTeamDiscordConfigUi(config = state.teamDiscord?.config) {
     if (!teamDiscordSection) return;
     const canManage = canManageTeamDiscord();
@@ -8697,6 +8803,24 @@
     if (discordTicketingPanelMessageInput && document.activeElement !== discordTicketingPanelMessageInput) {
       discordTicketingPanelMessageInput.value = ticketing.panelMessageId || '';
     }
+    const availableCategories = Array.isArray(state.teamDiscordChannels?.categories)
+      ? state.teamDiscordChannels.categories
+      : [];
+    const availableChannels = Array.isArray(state.teamDiscordChannels?.channels)
+      ? state.teamDiscordChannels.channels
+      : [];
+    const categoryLookup = new Map(availableCategories.map((category) => [String(category.id), category]));
+    const channelLookup = new Map(availableChannels.map((channel) => [String(channel.id), channel]));
+    const channelsLoading = Boolean(state.teamDiscordChannels?.loading);
+    const channelsLoadedForTeam = state.teamDiscordChannels?.loadedTeamId === state.activeTeamId;
+    const channelErrorMessage = state.teamDiscordChannels?.error || '';
+    syncDiscordCategoryOptions(discordCategoryOptions, availableCategories);
+    syncDiscordChannelOptions(discordChannelOptions, availableChannels);
+    const availableRoles = Array.isArray(state.teamDiscordRoles?.roles) ? state.teamDiscordRoles.roles : [];
+    const roleLookup = new Map(availableRoles.map((role) => [String(role.id), role]));
+    const rolesLoading = Boolean(state.teamDiscordRoles?.loading);
+    const roleErrorMessage = state.teamDiscordRoles?.error || '';
+
     const ticketingInputs = [
       discordTicketingCategoryInput,
       discordTicketingLogInput,
@@ -8706,54 +8830,82 @@
     ];
     ticketingInputs.forEach((input) => {
       if (!input) return;
-      input.disabled = !canManage || loading || !hasSettings || !ticketingEnabled;
+      input.disabled = !canManage || loading || !hasSettings || !ticketingEnabled || channelsLoading;
     });
     if (discordTicketingEnabledInput) {
       discordTicketingEnabledInput.disabled = !canManage || loading || !hasSettings;
     }
-    const formatTicketValue = (value) => {
+    const formatTicketValue = (value, lookup) => {
       const text = typeof value === 'string' ? value.trim() : '';
-      return text ? text : 'Not set';
+      if (!text) return 'Not set';
+      if (lookup?.has(text)) {
+        const item = lookup.get(text);
+        if (item?.name) return item.name;
+      }
+      return text;
     };
     if (discordTicketingSummaryStatus) {
       discordTicketingSummaryStatus.textContent = ticketingEnabled ? 'Enabled' : 'Disabled';
     }
     if (discordTicketingSummaryCategory) {
-      discordTicketingSummaryCategory.textContent = formatTicketValue(ticketing.categoryId);
+      discordTicketingSummaryCategory.textContent = formatTicketValue(ticketing.categoryId, categoryLookup);
     }
     if (discordTicketingSummaryLog) {
-      discordTicketingSummaryLog.textContent = formatTicketValue(ticketing.logChannelId);
+      discordTicketingSummaryLog.textContent = formatTicketValue(ticketing.logChannelId, channelLookup);
     }
     if (discordTicketingSummaryRole) {
-      discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId);
+      discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId, roleLookup);
     }
 
-    const commandPerms = details.commandPermissions || DEFAULT_DISCORD_COMMAND_PERMISSIONS;
-    if (teamCommandStatusInput && document.activeElement !== teamCommandStatusInput) {
-      teamCommandStatusInput.value = commandPerms.status || '';
+    if (btnRefreshTeamDiscordChannels) {
+      btnRefreshTeamDiscordChannels.disabled = !canManage || loading || !hasSettings || channelsLoading;
     }
-    if (teamCommandTicketInput && document.activeElement !== teamCommandTicketInput) {
-      teamCommandTicketInput.value = commandPerms.ticket || '';
+
+    if (teamDiscordChannelsStatus) {
+      if (!hasSettings || (!channelsLoadedForTeam && !channelsLoading)) {
+        hideNotice(teamDiscordChannelsStatus);
+      } else if (channelsLoading) {
+        showNotice(teamDiscordChannelsStatus, 'Loading Discord channels…', 'info');
+      } else if (channelErrorMessage) {
+        showNotice(teamDiscordChannelsStatus, channelErrorMessage, 'error');
+      } else if (!availableChannels.length && !availableCategories.length) {
+        showNotice(teamDiscordChannelsStatus, 'No channels found in the linked Discord guild.', 'warning');
+      } else if (!availableChannels.length) {
+        showNotice(teamDiscordChannelsStatus, 'No text channels found in the linked Discord guild.', 'warning');
+      } else {
+        hideNotice(teamDiscordChannelsStatus);
+      }
     }
-    if (teamCommandLookupInput && document.activeElement !== teamCommandLookupInput) {
-      teamCommandLookupInput.value = commandPerms.rustlookup || '';
+
+    const commandPerms = normalizeTeamCommandPermissions(details.commandPermissions || {});
+    const disableCommandSelects = !canManage || loading || !hasSettings || rolesLoading || !availableRoles.length;
+
+    syncCommandRoleSelect(teamCommandStatusInput, availableRoles, commandPerms.status, disableCommandSelects);
+    syncCommandRoleSelect(teamCommandTicketInput, availableRoles, commandPerms.ticket, disableCommandSelects);
+    syncCommandRoleSelect(teamCommandLookupInput, availableRoles, commandPerms.rustlookup, disableCommandSelects);
+    syncCommandRoleSelect(teamCommandAuthInput, availableRoles, commandPerms.auth, disableCommandSelects);
+
+    if (btnRefreshTeamCommandRoles) {
+      btnRefreshTeamCommandRoles.disabled = !canManage || loading || !hasSettings || rolesLoading;
     }
-    if (teamCommandAuthInput && document.activeElement !== teamCommandAuthInput) {
-      teamCommandAuthInput.value = commandPerms.auth || '';
+
+    if (teamCommandRolesStatus) {
+      if (!hasSettings || (!rolesLoading && !roleErrorMessage && availableRoles.length)) {
+        hideNotice(teamCommandRolesStatus);
+      } else if (rolesLoading) {
+        showNotice(teamCommandRolesStatus, 'Loading Discord roles…', 'info');
+      } else if (roleErrorMessage) {
+        showNotice(teamCommandRolesStatus, roleErrorMessage, 'error');
+      } else if (!availableRoles.length) {
+        showNotice(teamCommandRolesStatus, 'No roles found in the linked Discord guild.', 'warning');
+      }
     }
-    const commandInputs = [
-      teamCommandStatusInput,
-      teamCommandTicketInput,
-      teamCommandLookupInput,
-      teamCommandAuthInput
-    ];
-    commandInputs.forEach((input) => {
-      if (!input) return;
-      input.disabled = !canManage || loading || !hasSettings;
-    });
+
     const formatCommandValue = (value) => {
-      const text = typeof value === 'string' ? value.trim() : '';
-      return text ? text : 'Everyone';
+      const ids = normalizeCommandRoleList(value);
+      if (!ids.length) return 'Everyone';
+      const names = ids.map((id) => roleLookup.get(id)?.name || id);
+      return names.join(', ');
     };
     if (teamCommandSummaryStatus) teamCommandSummaryStatus.textContent = formatCommandValue(commandPerms.status);
     if (teamCommandSummaryTicket) teamCommandSummaryTicket.textContent = formatCommandValue(commandPerms.ticket);
@@ -8766,6 +8918,97 @@
       } else if (!hasSettings) {
         showNotice(teamTicketingStatus, 'Link the Main Bot before saving ticket settings.', 'warning');
       }
+    }
+  }
+
+  async function loadTeamDiscordRoles({ force = false, showStatus = false } = {}) {
+    if (!canManageTeamDiscord()) return;
+    const activeTeamId = state.activeTeamId ?? null;
+    const hasSettings = Boolean(state.teamDiscord?.hasToken) || Boolean(state.teamDiscord?.guildId);
+    if (!hasSettings) {
+      state.teamDiscordRoles = defaultTeamDiscordRolesState();
+      updateTeamDiscordConfigUi();
+      return;
+    }
+    if (!force && state.teamDiscordRoles.loadedTeamId === activeTeamId && state.teamDiscordRoles.roles.length) {
+      return;
+    }
+    state.teamDiscordRoles.loading = true;
+    state.teamDiscordRoles.error = null;
+    if (!showStatus && teamCommandRolesStatus) hideNotice(teamCommandRolesStatus);
+    updateTeamDiscordConfigUi();
+    try {
+      const data = await api('/team/discord/roles');
+      const roles = Array.isArray(data?.roles)
+        ? data.roles.map((role) => ({
+          id: role?.id != null ? String(role.id) : '',
+          name: typeof role?.name === 'string' && role.name.trim() ? role.name.trim() : (role?.id ? String(role.id) : 'Unknown'),
+          position: Number.isFinite(role?.position) ? Number(role.position) : 0
+        })).filter((role) => role.id)
+        : [];
+      state.teamDiscordRoles.roles = roles;
+      state.teamDiscordRoles.loadedTeamId = activeTeamId;
+    } catch (err) {
+      state.teamDiscordRoles.roles = [];
+      state.teamDiscordRoles.error = describeError(err);
+      if (showStatus && teamCommandRolesStatus) {
+        showNotice(teamCommandRolesStatus, state.teamDiscordRoles.error, 'error');
+      }
+    } finally {
+      state.teamDiscordRoles.loading = false;
+      updateTeamDiscordConfigUi();
+    }
+  }
+
+  async function loadTeamDiscordChannels({ force = false, showStatus = false } = {}) {
+    if (!canManageTeamDiscord()) return;
+    const activeTeamId = state.activeTeamId ?? null;
+    const hasSettings = Boolean(state.teamDiscord?.hasToken) || Boolean(state.teamDiscord?.guildId);
+    if (!hasSettings) {
+      state.teamDiscordChannels = defaultTeamDiscordChannelsState();
+      updateTeamDiscordConfigUi();
+      return;
+    }
+    if (!force && state.teamDiscordChannels.loadedTeamId === activeTeamId && state.teamDiscordChannels.channels.length) {
+      return;
+    }
+    state.teamDiscordChannels.loading = true;
+    state.teamDiscordChannels.error = null;
+    if (!showStatus && teamDiscordChannelsStatus) hideNotice(teamDiscordChannelsStatus);
+    updateTeamDiscordConfigUi();
+    try {
+      const data = await api('/team/discord/channels');
+      const categories = Array.isArray(data?.categories)
+        ? data.categories.map((category) => ({
+          id: category?.id != null ? String(category.id) : '',
+          name: typeof category?.name === 'string' && category.name.trim()
+            ? category.name.trim()
+            : (category?.id ? String(category.id) : 'Unknown'),
+          position: Number.isFinite(category?.position) ? Number(category.position) : 0
+        })).filter((category) => category.id)
+        : [];
+      const channels = Array.isArray(data?.channels)
+        ? data.channels.map((channel) => ({
+          id: channel?.id != null ? String(channel.id) : '',
+          name: typeof channel?.name === 'string' && channel.name.trim()
+            ? channel.name.trim()
+            : (channel?.id ? String(channel.id) : 'Unknown'),
+          position: Number.isFinite(channel?.position) ? Number(channel.position) : 0
+        })).filter((channel) => channel.id)
+        : [];
+      state.teamDiscordChannels.categories = categories;
+      state.teamDiscordChannels.channels = channels;
+      state.teamDiscordChannels.loadedTeamId = activeTeamId;
+    } catch (err) {
+      state.teamDiscordChannels.categories = [];
+      state.teamDiscordChannels.channels = [];
+      state.teamDiscordChannels.error = describeError(err);
+      if (showStatus && teamDiscordChannelsStatus) {
+        showNotice(teamDiscordChannelsStatus, state.teamDiscordChannels.error, 'error');
+      }
+    } finally {
+      state.teamDiscordChannels.loading = false;
+      updateTeamDiscordConfigUi();
     }
   }
 
@@ -8788,10 +9031,10 @@
   function updateTeamCommandPermissionsState() {
     const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
     const commandPermissions = normalizeTeamCommandPermissions({
-      status: teamCommandStatusInput?.value,
-      ticket: teamCommandTicketInput?.value,
-      rustlookup: teamCommandLookupInput?.value,
-      auth: teamCommandAuthInput?.value
+      status: selectedRolesFromSelect(teamCommandStatusInput),
+      ticket: selectedRolesFromSelect(teamCommandTicketInput),
+      rustlookup: selectedRolesFromSelect(teamCommandLookupInput),
+      auth: selectedRolesFromSelect(teamCommandAuthInput)
     });
     const updated = normalizeTeamDiscordConfig({ ...current, commandPermissions });
     state.teamDiscord.config = updated;
@@ -8917,6 +9160,9 @@
       state.teamDiscord.guildId = null;
       state.teamDiscord.tokenPreview = null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      state.teamDiscordRoles = defaultTeamDiscordRolesState();
+      state.teamDiscordChannels = defaultTeamDiscordChannelsState();
+      updateTeamDiscordConfigUi();
       updateTeamDiscordUi();
       state.teamAuth.loading = false;
       state.teamAuth.enabled = false;
@@ -8930,6 +9176,12 @@
     }
     if (!force && state.teamDiscord.loadedTeamId === state.activeTeamId) {
       updateTeamDiscordUi();
+      if (!state.teamDiscordRoles.roles.length && !state.teamDiscordRoles.loading) {
+        loadTeamDiscordRoles().catch(() => {});
+      }
+      if (!state.teamDiscordChannels.channels.length && !state.teamDiscordChannels.loading) {
+        loadTeamDiscordChannels().catch(() => {});
+      }
       return;
     }
     state.teamDiscord.loading = true;
@@ -8953,12 +9205,16 @@
       if (!state.teamDiscord.guildId && teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = '';
       }
+      await loadTeamDiscordRoles({ force: true });
+      await loadTeamDiscordChannels({ force: true });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
         handleUnauthorized();
       } else {
         state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+        state.teamDiscordRoles = defaultTeamDiscordRolesState();
+        state.teamDiscordChannels = defaultTeamDiscordChannelsState();
         showNotice(teamDiscordStatus, describeError(err), 'error');
       }
     } finally {
@@ -9046,6 +9302,8 @@
       if (data?.config) {
         setTeamDiscordConfig(data.config);
       }
+      await loadTeamDiscordRoles({ force: true });
+      await loadTeamDiscordChannels({ force: true });
       teamDiscordToken.value = '';
       if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = state.teamDiscord.guildId || '';
@@ -9093,6 +9351,9 @@
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig());
+      state.teamDiscordRoles = defaultTeamDiscordRolesState();
+      state.teamDiscordChannels = defaultTeamDiscordChannelsState();
+      updateTeamDiscordConfigUi();
       if (teamDiscordToken) teamDiscordToken.value = '';
       if (teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = state.teamDiscord.guildId || '';
@@ -9112,6 +9373,9 @@
       }
       if (!state.teamDiscord.hasToken) {
         setTeamDiscordConfig(defaultTeamDiscordConfig());
+        state.teamDiscordRoles = defaultTeamDiscordRolesState();
+        state.teamDiscordChannels = defaultTeamDiscordChannelsState();
+        updateTeamDiscordConfigUi();
       }
       updateTeamDiscordUi();
     }
@@ -10003,6 +10267,9 @@
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
+    btnRefreshTeamDiscordChannels?.addEventListener('click', () => {
+      loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
+    });
     teamAuthForm?.addEventListener('submit', handleTeamAuthSubmit);
     teamAuthEnabledInput?.addEventListener('change', () => {
       state.teamAuth.enabled = !!teamAuthEnabledInput.checked;
