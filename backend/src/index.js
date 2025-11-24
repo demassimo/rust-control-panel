@@ -6846,7 +6846,9 @@ app.get('/api/teams', auth, async (req, res) => {
 });
 
 app.get('/api/team/discord', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -6876,7 +6878,9 @@ app.get('/api/team/discord', auth, async (req, res) => {
 });
 
 app.get('/api/team/discord/roles', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -6901,7 +6905,9 @@ app.get('/api/team/discord/roles', auth, async (req, res) => {
 });
 
 app.get('/api/team/discord/channels', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -6926,7 +6932,9 @@ app.get('/api/team/discord/channels', auth, async (req, res) => {
 });
 
 app.post('/api/team/discord', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -7051,7 +7059,9 @@ app.post('/api/team/discord', auth, async (req, res) => {
 });
 
 app.delete('/api/team/discord', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -7160,7 +7170,9 @@ app.delete('/api/team/discord', auth, async (req, res) => {
 });
 
 app.get('/api/team/auth/settings', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -7188,7 +7200,9 @@ app.get('/api/team/auth/settings', auth, async (req, res) => {
 });
 
 app.post('/api/team/auth/settings', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const teamId = req.authUser?.activeTeamId;
@@ -7257,7 +7271,9 @@ app.post('/api/team/auth/settings', auth, async (req, res) => {
 });
 
 app.post('/api/team/auth/requests', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   if (typeof db.createTeamAuthRequest !== 'function') {
@@ -7299,7 +7315,9 @@ app.post('/api/team/auth/requests', auth, async (req, res) => {
 });
 
 app.get('/api/team/auth/profiles', auth, async (req, res) => {
-  if (!hasGlobalPermission(req.authUser, 'manageUsers') && !hasGlobalPermission(req.authUser, 'manageRoles')) {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
     return res.status(403).json({ error: 'forbidden' });
   }
   if (typeof db.listTeamAuthProfiles !== 'function') {

@@ -8633,7 +8633,9 @@
   }
 
   function canManageTeamDiscord() {
-    return hasGlobalPermission('manageUsers') || hasGlobalPermission('manageRoles');
+    return hasGlobalPermission('manageUsers')
+      || hasGlobalPermission('manageRoles')
+      || hasGlobalPermission('manageServers');
   }
 
   function normalizeTeamAuthRoleId(value) {
