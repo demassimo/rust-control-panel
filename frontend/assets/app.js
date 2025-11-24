@@ -9344,22 +9344,25 @@
     const secretTouched = teamDiscordOauthClientSecret?.dataset?.touched === 'true';
     const steamKeyTouched = teamSteamApiKeyInput?.dataset?.touched === 'true';
 
+    const discordSecret = clearSecrets
+      ? null
+      : (secretTouched
+        ? teamDiscordOauthClientSecret?.value
+        : (secrets.discordClientSecret ? undefined : baseOauth.discord.clientSecret));
+    const steamApiKey = clearSecrets
+      ? null
+      : (steamKeyTouched
+        ? teamSteamApiKeyInput?.value
+        : (secrets.steamApiKey ? undefined : baseOauth.steam.apiKey));
+
     const oauth = normalizeTeamOAuthConfig({
       discord: {
         clientId: clientIdTouched ? teamDiscordOauthClientId?.value : baseOauth.discord.clientId,
-        clientSecret: clearSecrets
-          ? null
-          : (secretTouched
-            ? teamDiscordOauthClientSecret?.value
-            : (secrets.discordClientSecret ? undefined : baseOauth.discord.clientSecret)),
+        ...(discordSecret !== undefined ? { clientSecret: discordSecret } : {}),
         redirectUri: redirectTouched ? teamDiscordOauthRedirectUri?.value : baseOauth.discord.redirectUri
       },
       steam: {
-        apiKey: clearSecrets
-          ? null
-          : (steamKeyTouched
-            ? teamSteamApiKeyInput?.value
-            : (secrets.steamApiKey ? undefined : baseOauth.steam.apiKey)),
+        ...(steamApiKey !== undefined ? { apiKey: steamApiKey } : {}),
         realm: baseOauth.steam.realm,
         returnUrl: baseOauth.steam.returnUrl
       }
