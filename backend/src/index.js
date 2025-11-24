@@ -6794,6 +6794,17 @@ app.post('/api/me/passkeys/register', auth, async (req, res) => {
     });
     if (!verification.verified) return res.status(400).json({ error: 'invalid_passkey' });
     const info = verification.registrationInfo;
+    const missingFields = [];
+    if (!info?.credentialID) missingFields.push('credentialID');
+    if (!info?.credentialPublicKey) missingFields.push('credentialPublicKey');
+    if (missingFields.length > 0) {
+      console.warn('passkey registration missing credentials', {
+        userId: req.user?.uid,
+        missing: missingFields
+      });
+      passkeyRegistrationChallenges.delete(req.user.uid);
+      return res.status(400).json({ error: 'invalid_passkey', reason: 'missing_credentials' });
+    }
     await db.addUserPasskey({
       userId: req.user.uid,
       credentialId: encodeBase64Url(info.credentialID),
