@@ -255,7 +255,9 @@
   const teamAuthForm = $('#teamAuthForm');
   const teamAuthEnabledInput = $('#teamAuthEnabled');
   const teamAuthRoleInput = $('#teamAuthRole');
+  const teamAuthRoleSelect = $('#teamAuthRoleSelect');
   const teamAuthLogChannelInput = $('#teamAuthLogChannel');
+  const teamAuthLogChannelSelect = $('#teamAuthLogChannelSelect');
   const teamAuthStatus = $('#teamAuthStatus');
   const btnSaveTeamAuth = $('#teamAuthSave');
   const teamTicketingSection = $('#teamTicketingSection');
@@ -364,8 +366,13 @@
   const discordTicketingPingInput = $('#discord-ticketing-ping');
   const discordTicketingPanelChannelInput = $('#discord-ticketing-panel-channel');
   const discordTicketingPanelMessageInput = $('#discord-ticketing-panel-message');
+  const discordTicketingCategorySelect = $('#discord-ticketing-category-select');
+  const discordTicketingLogSelect = $('#discord-ticketing-log-select');
+  const discordTicketingRoleSelect = $('#discord-ticketing-role-select');
+  const discordTicketingPanelChannelSelect = $('#discord-ticketing-panel-channel-select');
   const discordCategoryOptions = $('#discord-category-options');
   const discordChannelOptions = $('#discord-channel-options');
+  const discordRoleOptions = $('#discord-role-options');
   const teamCommandStatusInput = $('#team-command-status-role');
   const teamCommandTicketInput = $('#team-command-ticket-role');
   const teamCommandLookupInput = $('#team-command-lookup-role');
@@ -3842,6 +3849,12 @@
     discordTicketingPanelChannelInput,
     discordTicketingPanelMessageInput
   ];
+  const ticketingSelectBindings = [
+    [discordTicketingCategorySelect, discordTicketingCategoryInput],
+    [discordTicketingLogSelect, discordTicketingLogInput],
+    [discordTicketingRoleSelect, discordTicketingRoleInput],
+    [discordTicketingPanelChannelSelect, discordTicketingPanelChannelInput]
+  ];
 
   const teamCommandInputs = [
     teamCommandStatusInput,
@@ -3854,6 +3867,12 @@
   discordTicketingPingInput?.addEventListener('change', updateTeamTicketingState);
   ticketingInputs.forEach((input) => {
     input?.addEventListener('input', updateTeamTicketingState);
+  });
+  ticketingSelectBindings.forEach(([select, input]) => {
+    select?.addEventListener('change', () => {
+      if (input) input.value = select.value;
+      updateTeamTicketingState();
+    });
   });
   teamCommandInputs.forEach((input) => {
     input?.addEventListener('change', updateTeamCommandPermissionsState);
@@ -4244,8 +4263,14 @@
           if (teamAuthRoleInput && document.activeElement !== teamAuthRoleInput) {
             teamAuthRoleInput.value = '';
           }
+          if (teamAuthRoleSelect) {
+            teamAuthRoleSelect.value = '';
+          }
           if (teamAuthLogChannelInput && document.activeElement !== teamAuthLogChannelInput) {
             teamAuthLogChannelInput.value = '';
+          }
+          if (teamAuthLogChannelSelect) {
+            teamAuthLogChannelSelect.value = '';
           }
         }
         state.teamAuth.loading = false;
@@ -8657,6 +8682,17 @@
       }
     }
 
+    if (teamAuthRoleSelect) {
+      const storedRoleId = normalizeTeamAuthRoleId(authState.roleId);
+      const checkboxChecked = teamAuthEnabledInput ? !!teamAuthEnabledInput.checked : enabled;
+      teamAuthRoleSelect.disabled = !canManage || loading || !checkboxChecked;
+      if (storedRoleId && teamAuthRoleSelect.querySelector(`option[value="${storedRoleId}"]`)) {
+        teamAuthRoleSelect.value = storedRoleId;
+      } else {
+        teamAuthRoleSelect.value = '';
+      }
+    }
+
     if (teamAuthLogChannelInput) {
       const storedLogChannel = normalizeTeamAuthLogChannelId(authState.logChannelId);
       if (document.activeElement !== teamAuthLogChannelInput) {
@@ -8666,6 +8702,17 @@
       teamAuthLogChannelInput.disabled = !canManage || loading || !checkboxChecked;
       if (teamAuthLogChannelInput.disabled && document.activeElement === teamAuthLogChannelInput) {
         teamAuthLogChannelInput.blur();
+      }
+    }
+
+    if (teamAuthLogChannelSelect) {
+      const storedLogChannel = normalizeTeamAuthLogChannelId(authState.logChannelId);
+      const checkboxChecked = teamAuthEnabledInput ? !!teamAuthEnabledInput.checked : enabled;
+      teamAuthLogChannelSelect.disabled = !canManage || loading || !checkboxChecked;
+      if (storedLogChannel && teamAuthLogChannelSelect.querySelector(`option[value="${storedLogChannel}"]`)) {
+        teamAuthLogChannelSelect.value = storedLogChannel;
+      } else {
+        teamAuthLogChannelSelect.value = '';
       }
     }
 
@@ -8785,6 +8832,44 @@
     list.append(fragment);
   }
 
+  function syncDiscordRoleOptions(list, roles) {
+    if (!list) return;
+    const fragment = document.createDocumentFragment();
+    (Array.isArray(roles) ? roles : []).forEach((role) => {
+      const option = document.createElement('option');
+      option.value = role.id;
+      option.label = role.name ? `${role.name} (${role.id})` : role.id;
+      option.textContent = option.label;
+      fragment.append(option);
+    });
+    list.innerHTML = '';
+    list.append(fragment);
+  }
+
+  function syncIdSelectOptions(select, items, currentValue, placeholder) {
+    if (!select) return;
+    const fragment = document.createDocumentFragment();
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = placeholder || 'Select an option';
+    fragment.append(empty);
+
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      const option = document.createElement('option');
+      option.value = item?.id || '';
+      option.textContent = item?.name ? `${item.name}` : (item?.id || 'Unknown');
+      fragment.append(option);
+    });
+
+    select.innerHTML = '';
+    select.append(fragment);
+    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
+      select.value = currentValue;
+    } else {
+      select.value = '';
+    }
+  }
+
   function updateTeamDiscordConfigUi(config = state.teamDiscord?.config) {
     if (!teamDiscordSection) return;
     const canManage = canManageTeamDiscord();
@@ -8823,6 +8908,10 @@
     const availableChannels = Array.isArray(state.teamDiscordChannels?.channels)
       ? state.teamDiscordChannels.channels
       : [];
+    const availableRoles = Array.isArray(state.teamDiscordRoles?.roles) ? state.teamDiscordRoles.roles : [];
+    const roleLookup = new Map(availableRoles.map((role) => [String(role.id), role]));
+    const rolesLoading = Boolean(state.teamDiscordRoles?.loading);
+    const roleErrorMessage = state.teamDiscordRoles?.error || '';
     const categoryLookup = new Map(availableCategories.map((category) => [String(category.id), category]));
     const channelLookup = new Map(availableChannels.map((channel) => [String(channel.id), channel]));
     const channelsLoading = Boolean(state.teamDiscordChannels?.loading);
@@ -8830,10 +8919,15 @@
     const channelErrorMessage = state.teamDiscordChannels?.error || '';
     syncDiscordCategoryOptions(discordCategoryOptions, availableCategories);
     syncDiscordChannelOptions(discordChannelOptions, availableChannels);
-    const availableRoles = Array.isArray(state.teamDiscordRoles?.roles) ? state.teamDiscordRoles.roles : [];
-    const roleLookup = new Map(availableRoles.map((role) => [String(role.id), role]));
-    const rolesLoading = Boolean(state.teamDiscordRoles?.loading);
-    const roleErrorMessage = state.teamDiscordRoles?.error || '';
+    syncDiscordRoleOptions(discordRoleOptions, availableRoles);
+    syncIdSelectOptions(discordTicketingCategorySelect, availableCategories, ticketing.categoryId, 'Select a category');
+    syncIdSelectOptions(discordTicketingLogSelect, availableChannels, ticketing.logChannelId, 'Select a channel');
+    syncIdSelectOptions(discordTicketingRoleSelect, availableRoles, ticketing.staffRoleId, 'Select a role');
+    syncIdSelectOptions(discordTicketingPanelChannelSelect, availableChannels, ticketing.panelChannelId, 'Select a channel');
+    const authRoleValue = normalizeTeamAuthRoleId(state.teamAuth?.roleId);
+    const authLogChannel = normalizeTeamAuthLogChannelId(state.teamAuth?.logChannelId);
+    syncIdSelectOptions(teamAuthRoleSelect, availableRoles, authRoleValue, 'Select a role');
+    syncIdSelectOptions(teamAuthLogChannelSelect, availableChannels, authLogChannel, 'Select a channel');
 
     const ticketingInputs = [
       discordTicketingCategoryInput,
@@ -8842,9 +8936,19 @@
       discordTicketingPanelChannelInput,
       discordTicketingPanelMessageInput
     ];
+    const ticketingSelects = [
+      discordTicketingCategorySelect,
+      discordTicketingLogSelect,
+      discordTicketingRoleSelect,
+      discordTicketingPanelChannelSelect
+    ];
     ticketingInputs.forEach((input) => {
       if (!input) return;
       input.disabled = !canManage || loading || !hasSettings || !ticketingEnabled || channelsLoading;
+    });
+    ticketingSelects.forEach((select) => {
+      if (!select) return;
+      select.disabled = !canManage || loading || !hasSettings || !ticketingEnabled || channelsLoading;
     });
     if (discordTicketingEnabledInput) {
       discordTicketingEnabledInput.disabled = !canManage || loading || !hasSettings;
@@ -10295,10 +10399,24 @@
       state.teamAuth.roleId = value ? value : null;
       hideNotice(teamAuthStatus);
     });
+    teamAuthRoleSelect?.addEventListener('change', () => {
+      const value = normalizeTeamAuthRoleId(teamAuthRoleSelect.value);
+      if (teamAuthRoleInput) teamAuthRoleInput.value = value;
+      state.teamAuth.roleId = value ? value : null;
+      hideNotice(teamAuthStatus);
+      updateTeamAuthUi();
+    });
     teamAuthLogChannelInput?.addEventListener('input', () => {
       const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelInput.value);
       state.teamAuth.logChannelId = value ? value : null;
       hideNotice(teamAuthStatus);
+    });
+    teamAuthLogChannelSelect?.addEventListener('change', () => {
+      const value = normalizeTeamAuthLogChannelId(teamAuthLogChannelSelect.value);
+      if (teamAuthLogChannelInput) teamAuthLogChannelInput.value = value;
+      state.teamAuth.logChannelId = value ? value : null;
+      hideNotice(teamAuthStatus);
+      updateTeamAuthUi();
     });
     btnAdminCreateUser?.addEventListener('click', (event) => { event.preventDefault(); handleAdminCreateUser(); });
     adminUserSaveRole?.addEventListener('click', handleAdminRoleSave);

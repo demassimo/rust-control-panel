@@ -1145,7 +1145,8 @@ label.inline input[type="checkbox"]:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 420px;
+  max-width: 760px;
+  width: 100%;
 }
 
 .team-discord-form label {
@@ -1180,6 +1181,39 @@ label.inline input[type="checkbox"]:focus-visible,
 .team-discord-form textarea {
   resize: vertical;
   min-height: 64px;
+}
+
+.team-discord-form .input-combo {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.team-discord-form .input-combo-select {
+  min-width: min(220px, 100%);
+  max-width: 280px;
+  flex: 1 1 220px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.team-discord-form .input-combo input {
+  flex: 2 1 260px;
+}
+
+@media (max-width: 720px) {
+  .team-discord-form .input-combo {
+    flex-direction: column;
+  }
+
+  .team-discord-form .input-combo-select,
+  .team-discord-form .input-combo input {
+    max-width: none;
+    width: 100%;
+    flex-basis: 100%;
+  }
 }
 
 .team-discord-form h5 {
