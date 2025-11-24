@@ -7007,15 +7007,19 @@ app.post('/api/team/discord', auth, async (req, res) => {
       : { config: DEFAULT_TEAM_DISCORD_CONFIG };
     const currentConfig = parseTeamDiscordConfig(existingSettings?.config ?? null);
     const nextConfig = normaliseTeamDiscordConfig({ ...currentConfig, ...incomingConfig });
-    const finalToken = token || (existingSettings?.hasToken ? sanitizeDiscordToken(existingSettings.token) : null);
+    const hadStoredToken = Boolean(existingSettings?.hasToken);
+    const finalToken = token || (hadStoredToken ? sanitizeDiscordToken(existingSettings.token) : null);
     const finalGuildId = guildId || (existingSettings?.guildId ? String(existingSettings.guildId) : null);
-    if (!finalToken) return res.status(400).json({ error: 'missing_token' });
-    if (!finalGuildId) return res.status(400).json({ error: 'missing_guild_id' });
-    await db.setTeamDiscordToken(teamId, finalToken, finalGuildId);
+    const wantsTokenUpdate = token != null || guildId != null;
+    if (hadStoredToken || wantsTokenUpdate) {
+      if (!finalToken) return res.status(400).json({ error: 'missing_token' });
+      if (!finalGuildId) return res.status(400).json({ error: 'missing_guild_id' });
+      await db.setTeamDiscordToken(teamId, finalToken, finalGuildId);
+    }
     if (typeof db.setTeamDiscordConfig === 'function') {
       await db.setTeamDiscordConfig(teamId, nextConfig);
     }
-    let hasToken = true;
+    let hasToken = hadStoredToken || wantsTokenUpdate;
     let responseGuildId = finalGuildId || null;
     let responseTokenPreview = finalToken ? previewDiscordToken(finalToken) : null;
     let responseConfig = nextConfig;
