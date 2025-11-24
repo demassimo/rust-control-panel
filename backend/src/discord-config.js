@@ -298,6 +298,44 @@ function sanitizeSecret(value, maxLength = 256) {
   return trimmed.slice(0, maxLength);
 }
 
+export function normalizeTeamOAuthConfigPatch(oauth = {}) {
+  const source = oauth && typeof oauth === 'object' ? oauth : {};
+  const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
+  const steam = source.steam && typeof source.steam === 'object' ? source.steam : {};
+
+  const discordPatch = {};
+  if (Object.prototype.hasOwnProperty.call(discord, 'clientId')
+    || Object.prototype.hasOwnProperty.call(discord, 'client_id')) {
+    discordPatch.clientId = sanitizeDiscordSnowflake(discord.clientId ?? discord.client_id);
+  }
+  if (Object.prototype.hasOwnProperty.call(discord, 'clientSecret')
+    || Object.prototype.hasOwnProperty.call(discord, 'client_secret')) {
+    discordPatch.clientSecret = sanitizeSecret(discord.clientSecret ?? discord.client_secret, 400);
+  }
+  if (Object.prototype.hasOwnProperty.call(discord, 'redirectUri')
+    || Object.prototype.hasOwnProperty.call(discord, 'redirect_uri')) {
+    discordPatch.redirectUri = sanitizeUrl(discord.redirectUri ?? discord.redirect_uri, 800);
+  }
+
+  const steamPatch = {};
+  if (Object.prototype.hasOwnProperty.call(steam, 'apiKey')
+    || Object.prototype.hasOwnProperty.call(steam, 'api_key')
+    || Object.prototype.hasOwnProperty.call(steam, 'webApiKey')) {
+    steamPatch.apiKey = sanitizeSecret(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120);
+  }
+  if (Object.prototype.hasOwnProperty.call(steam, 'realm')
+    || Object.prototype.hasOwnProperty.call(steam, 'realmUrl')) {
+    steamPatch.realm = sanitizeUrl(steam.realm ?? steam.realmUrl, 800);
+  }
+  if (Object.prototype.hasOwnProperty.call(steam, 'returnUrl')
+    || Object.prototype.hasOwnProperty.call(steam, 'return_url')
+    || Object.prototype.hasOwnProperty.call(steam, 'callbackUrl')) {
+    steamPatch.returnUrl = sanitizeUrl(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800);
+  }
+
+  return { discord: discordPatch, steam: steamPatch };
+}
+
 function normalizeTeamOAuthConfig(oauth = {}) {
   const source = oauth && typeof oauth === 'object' ? oauth : {};
   const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
@@ -329,6 +367,72 @@ export function normaliseTeamDiscordConfig(value = {}) {
   const commandPermissions = normalizeCommandPermissions(source.commandPermissions ?? source.command_permissions);
   const oauth = normalizeTeamOAuthConfig(source.oauth);
   return { ticketing, commandPermissions, oauth };
+}
+
+export function mergeTeamOAuthConfig(base = {}, patch = {}) {
+  const starting = normalizeTeamOAuthConfig(base);
+  const next = {
+    discord: { ...starting.discord },
+    steam: { ...starting.steam }
+  };
+  const hasDiscordPatch = patch.discord && typeof patch.discord === 'object';
+  const hasSteamPatch = patch.steam && typeof patch.steam === 'object';
+
+  if (hasDiscordPatch) {
+    const discordPatch = patch.discord;
+    if (Object.prototype.hasOwnProperty.call(discordPatch, 'clientId')) {
+      next.discord.clientId = sanitizeDiscordSnowflake(discordPatch.clientId);
+    }
+    if (Object.prototype.hasOwnProperty.call(discordPatch, 'clientSecret')) {
+      next.discord.clientSecret = sanitizeSecret(discordPatch.clientSecret, 400);
+    }
+    if (Object.prototype.hasOwnProperty.call(discordPatch, 'redirectUri')) {
+      next.discord.redirectUri = sanitizeUrl(discordPatch.redirectUri, 800);
+    }
+  }
+
+  if (hasSteamPatch) {
+    const steamPatch = patch.steam;
+    if (Object.prototype.hasOwnProperty.call(steamPatch, 'apiKey')) {
+      next.steam.apiKey = sanitizeSecret(steamPatch.apiKey, 120);
+    }
+    if (Object.prototype.hasOwnProperty.call(steamPatch, 'realm')) {
+      next.steam.realm = sanitizeUrl(steamPatch.realm, 800);
+    }
+    if (Object.prototype.hasOwnProperty.call(steamPatch, 'returnUrl')) {
+      next.steam.returnUrl = sanitizeUrl(steamPatch.returnUrl, 800);
+    }
+  }
+
+  return normalizeTeamOAuthConfig(next);
+}
+
+export function redactTeamDiscordConfig(config = {}) {
+  const normalised = normaliseTeamDiscordConfig(config);
+  const discordSecretStored = Boolean(normalised.oauth.discord.clientSecret);
+  const steamApiKeyStored = Boolean(normalised.oauth.steam.apiKey);
+  const redactedConfig = {
+    ...normalised,
+    oauth: {
+      discord: {
+        clientId: normalised.oauth.discord.clientId,
+        clientSecret: null,
+        redirectUri: normalised.oauth.discord.redirectUri
+      },
+      steam: {
+        apiKey: null,
+        realm: normalised.oauth.steam.realm,
+        returnUrl: normalised.oauth.steam.returnUrl
+      }
+    }
+  };
+  return {
+    config: redactedConfig,
+    oauthSecrets: {
+      discordClientSecret: discordSecretStored,
+      steamApiKey: steamApiKeyStored
+    }
+  };
 }
 
 export function cloneDiscordBotConfig(config = DEFAULT_DISCORD_BOT_CONFIG) {

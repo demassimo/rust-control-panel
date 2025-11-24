@@ -191,6 +191,7 @@
       loading: false,
       loadedTeamId: null,
       config: defaultTeamDiscordConfig(),
+      oauthSecrets: defaultTeamOAuthSecrets(),
       configLoaded: false
     },
     teamDiscordRoles: defaultTeamDiscordRolesState(),
@@ -5925,6 +5926,18 @@
     };
   }
 
+  function defaultTeamOAuthSecrets() {
+    return { discordClientSecret: false, steamApiKey: false };
+  }
+
+  function normalizeTeamOAuthSecrets(value = {}) {
+    if (!value || typeof value !== 'object') return defaultTeamOAuthSecrets();
+    return {
+      discordClientSecret: value.discordClientSecret === true,
+      steamApiKey: value.steamApiKey === true
+    };
+  }
+
   function defaultTeamDiscordRolesState() {
     return { loading: false, roles: [], error: null, loadedTeamId: null };
   }
@@ -6042,27 +6055,52 @@
     return digits.slice(0, 64);
   }
 
-  function normalizeTeamOAuthConfig(oauth = {}) {
+  function normalizeTeamOAuthConfig(oauth = {}, { preserveUndefined = false } = {}) {
     const source = oauth && typeof oauth === 'object' ? oauth : {};
     const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
     const steam = source.steam && typeof source.steam === 'object' ? source.steam : {};
+
+    const hasDiscordClientId = Object.prototype.hasOwnProperty.call(discord, 'clientId')
+      || Object.prototype.hasOwnProperty.call(discord, 'client_id');
+    const hasDiscordClientSecret = Object.prototype.hasOwnProperty.call(discord, 'clientSecret')
+      || Object.prototype.hasOwnProperty.call(discord, 'client_secret');
+    const hasDiscordRedirect = Object.prototype.hasOwnProperty.call(discord, 'redirectUri')
+      || Object.prototype.hasOwnProperty.call(discord, 'redirect_uri');
+
+    const hasSteamApiKey = Object.prototype.hasOwnProperty.call(steam, 'apiKey')
+      || Object.prototype.hasOwnProperty.call(steam, 'api_key')
+      || Object.prototype.hasOwnProperty.call(steam, 'webApiKey');
+    const hasSteamRealm = Object.prototype.hasOwnProperty.call(steam, 'realm')
+      || Object.prototype.hasOwnProperty.call(steam, 'realmUrl');
+    const hasSteamReturn = Object.prototype.hasOwnProperty.call(steam, 'returnUrl')
+      || Object.prototype.hasOwnProperty.call(steam, 'return_url')
+      || Object.prototype.hasOwnProperty.call(steam, 'callbackUrl');
+
+    const fallback = preserveUndefined ? undefined : null;
+
     return {
       discord: {
-        clientId: normalizeDiscordClientId(discord.clientId ?? discord.client_id),
-        clientSecret: normalizeSecretValue(discord.clientSecret ?? discord.client_secret, 400),
-        redirectUri: normalizeUrlConfig(discord.redirectUri ?? discord.redirect_uri, 800)
+        clientId: hasDiscordClientId
+          ? normalizeDiscordClientId(discord.clientId ?? discord.client_id)
+          : fallback,
+        clientSecret: hasDiscordClientSecret
+          ? normalizeSecretValue(discord.clientSecret ?? discord.client_secret, 400)
+          : fallback,
+        redirectUri: hasDiscordRedirect
+          ? normalizeUrlConfig(discord.redirectUri ?? discord.redirect_uri, 800)
+          : fallback
       },
       steam: {
-        apiKey: normalizeSecretValue(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120),
-        realm: normalizeUrlConfig(steam.realm ?? steam.realm_url, 800),
-        returnUrl: normalizeUrlConfig(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800)
+        apiKey: hasSteamApiKey ? normalizeSecretValue(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120) : fallback,
+        realm: hasSteamRealm ? normalizeUrlConfig(steam.realm ?? steam.realm_url, 800) : fallback,
+        returnUrl: hasSteamReturn ? normalizeUrlConfig(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800) : fallback
       }
     };
   }
 
-  function normalizeTeamDiscordConfig(config = {}) {
+  function normalizeTeamDiscordConfig(config = {}, options = {}) {
     const source = config && typeof config === 'object' ? config : {};
-    const oauth = normalizeTeamOAuthConfig(source.oauth || {});
+    const oauth = normalizeTeamOAuthConfig(source.oauth || {}, options);
     return {
       ticketing: normalizeWorkspaceTicketing(source.ticketing || {}),
       commandPermissions: normalizeTeamCommandPermissions(
@@ -8825,13 +8863,14 @@
     }
   }
 
-  function setTeamDiscordConfig(config) {
+  function setTeamDiscordConfig(config, { oauthSecrets } = {}) {
     const normalized = normalizeTeamDiscordConfig(config);
     if (!state.teamDiscord) {
       state.teamDiscord = { config: normalized };
     } else {
       state.teamDiscord.config = normalized;
     }
+    state.teamDiscord.oauthSecrets = normalizeTeamOAuthSecrets(oauthSecrets);
     state.teamDiscord.configLoaded = true;
     resetTeamOAuthInputs();
     updateTeamDiscordConfigUi();
@@ -8996,6 +9035,9 @@
     const channelsLoading = Boolean(state.teamDiscordChannels?.loading);
     const channelsLoadedForTeam = state.teamDiscordChannels?.loadedTeamId === state.activeTeamId;
     const channelErrorMessage = state.teamDiscordChannels?.error || '';
+    const oauthSecrets = state.teamDiscord?.oauthSecrets || defaultTeamOAuthSecrets();
+    const hasDiscordSecretStored = oauthSecrets.discordClientSecret;
+    const hasSteamApiKeyStored = oauthSecrets.steamApiKey;
     syncDiscordCategoryOptions(discordCategoryOptions, availableCategories);
     syncDiscordChannelOptions(discordChannelOptions, availableChannels);
     syncDiscordRoleOptions(discordRoleOptions, availableRoles);
@@ -9105,7 +9147,7 @@
     }
     if (teamDiscordOauthClientSecret) {
       teamDiscordOauthClientSecret.disabled = !canManage || loading;
-      teamDiscordOauthClientSecret.placeholder = discordOauth.clientSecret
+      teamDiscordOauthClientSecret.placeholder = hasDiscordSecretStored
         ? 'Secret stored — enter to replace'
         : 'Paste Discord OAuth client secret';
     }
@@ -9120,7 +9162,7 @@
     if (teamSteamApiKeyInput) {
       teamSteamApiKeyInput.disabled = !canManage || loading;
       if (!teamSteamApiKeyInput.matches(':focus')) {
-        teamSteamApiKeyInput.placeholder = steamOauth.apiKey
+        teamSteamApiKeyInput.placeholder = hasSteamApiKeyStored
           ? 'Key stored — enter to replace or clear'
           : 'Optional: Steam Web API key';
       }
@@ -9296,6 +9338,7 @@
   function updateTeamOAuthState({ clearSecrets = false } = {}) {
     const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
     const baseOauth = current.oauth || defaultTeamDiscordConfig().oauth;
+    const secrets = state.teamDiscord?.oauthSecrets || defaultTeamOAuthSecrets();
     const clientIdTouched = teamDiscordOauthClientId?.dataset?.touched === 'true';
     const redirectTouched = teamDiscordOauthRedirectUri?.dataset?.touched === 'true';
     const secretTouched = teamDiscordOauthClientSecret?.dataset?.touched === 'true';
@@ -9306,16 +9349,28 @@
         clientId: clientIdTouched ? teamDiscordOauthClientId?.value : baseOauth.discord.clientId,
         clientSecret: clearSecrets
           ? null
-          : (secretTouched ? teamDiscordOauthClientSecret?.value : baseOauth.discord.clientSecret),
+          : (secretTouched
+            ? teamDiscordOauthClientSecret?.value
+            : (secrets.discordClientSecret ? undefined : baseOauth.discord.clientSecret)),
         redirectUri: redirectTouched ? teamDiscordOauthRedirectUri?.value : baseOauth.discord.redirectUri
       },
       steam: {
-        apiKey: clearSecrets ? null : (steamKeyTouched ? teamSteamApiKeyInput?.value : baseOauth.steam.apiKey),
+        apiKey: clearSecrets
+          ? null
+          : (steamKeyTouched
+            ? teamSteamApiKeyInput?.value
+            : (secrets.steamApiKey ? undefined : baseOauth.steam.apiKey)),
         realm: baseOauth.steam.realm,
         returnUrl: baseOauth.steam.returnUrl
       }
-    });
-    const updated = normalizeTeamDiscordConfig({ ...current, oauth });
+    }, { preserveUndefined: true });
+    const updated = normalizeTeamDiscordConfig({ ...current, oauth }, { preserveUndefined: true });
+    const nextSecrets = { ...secrets };
+    if (clearSecrets) {
+      nextSecrets.discordClientSecret = false;
+      nextSecrets.steamApiKey = false;
+    }
+    state.teamDiscord.oauthSecrets = nextSecrets;
     state.teamDiscord.config = updated;
     hideNotice(teamOAuthStatus);
     updateTeamDiscordConfigUi(updated);
@@ -9474,7 +9529,7 @@
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
-      setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig());
+      setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig(), { oauthSecrets: data?.oauthSecrets });
       state.teamDiscord.configLoaded = true;
       if (!state.teamDiscord.hasToken && teamDiscordToken) {
         teamDiscordToken.value = '';
@@ -9503,7 +9558,7 @@
         state.teamDiscord.tokenPreview = null;
       }
       if (!state.teamDiscord.configLoaded) {
-        setTeamDiscordConfig(defaultTeamDiscordConfig());
+        setTeamDiscordConfig(defaultTeamDiscordConfig(), { oauthSecrets: defaultTeamOAuthSecrets() });
       }
       updateTeamDiscordUi();
       if (canManageTeamDiscord()) {
@@ -9526,11 +9581,11 @@
     updateTeamDiscordUi();
     hideNotice(teamTicketingStatus);
 
-    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}) };
+    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}, { preserveUndefined: true }) };
     let unauthorized = false;
     try {
       const data = await api('/team/discord', payload, 'POST');
-      setTeamDiscordConfig(data?.config || payload.config);
+      setTeamDiscordConfig(data?.config || payload.config, { oauthSecrets: data?.oauthSecrets });
       state.teamDiscord.hasToken = Boolean(data?.hasToken ?? state.teamDiscord.hasToken);
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : state.teamDiscord.guildId;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
@@ -9557,11 +9612,11 @@
     state.teamDiscord.loading = true;
     updateTeamDiscordUi();
     hideNotice(teamOAuthStatus);
-    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}) };
+    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}, { preserveUndefined: true }) };
     let unauthorized = false;
     try {
       const data = await api('/team/discord', payload, 'POST');
-      setTeamDiscordConfig(data?.config || payload.config);
+      setTeamDiscordConfig(data?.config || payload.config, { oauthSecrets: data?.oauthSecrets });
       state.teamDiscord.hasToken = Boolean(data?.hasToken ?? state.teamDiscord.hasToken);
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : state.teamDiscord.guildId;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
@@ -9622,11 +9677,12 @@
     state.teamDiscord.loading = true;
     updateTeamDiscordUi();
     hideNotice(teamDiscordStatus);
+    const payloadConfig = normalizeTeamDiscordConfig(state.teamDiscord?.config || {}, { preserveUndefined: true });
     let unauthorized = false;
     try {
       const data = await api(
         '/team/discord',
-        { token: value, guildId: cleanedGuildId, config: state.teamDiscord?.config || {} },
+        { token: value, guildId: cleanedGuildId, config: payloadConfig },
         'POST'
       );
       state.teamDiscord.hasToken = Boolean(data?.hasToken);
@@ -9634,7 +9690,7 @@
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       if (data?.config) {
-        setTeamDiscordConfig(data.config);
+        setTeamDiscordConfig(data.config, { oauthSecrets: data?.oauthSecrets });
       }
       await loadTeamDiscordRoles({ force: true });
       await loadTeamDiscordChannels({ force: true });
@@ -9684,7 +9740,7 @@
       state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : null;
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : null;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
-      setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig());
+      setTeamDiscordConfig(data?.config || defaultTeamDiscordConfig(), { oauthSecrets: data?.oauthSecrets });
       state.teamDiscordRoles = defaultTeamDiscordRolesState();
       state.teamDiscordChannels = defaultTeamDiscordChannelsState();
       updateTeamDiscordConfigUi();
@@ -9706,7 +9762,7 @@
         state.teamDiscord.tokenPreview = null;
       }
       if (!state.teamDiscord.hasToken) {
-        setTeamDiscordConfig(defaultTeamDiscordConfig());
+        setTeamDiscordConfig(defaultTeamDiscordConfig(), { oauthSecrets: defaultTeamOAuthSecrets() });
         state.teamDiscordRoles = defaultTeamDiscordRolesState();
         state.teamDiscordChannels = defaultTeamDiscordChannelsState();
         updateTeamDiscordConfigUi();
