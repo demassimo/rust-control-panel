@@ -1827,6 +1827,7 @@ label.inline input[type="checkbox"]:focus-visible,
 
 .workspace-menu {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
 }
 
@@ -5799,6 +5800,7 @@ pre {
   .workspace-title { width: 100%; }
   .workspace-title h2 { font-size: 1.4rem; }
   .workspace-menu {
+    flex-wrap: nowrap;
     gap: 10px;
     overflow-x: auto;
     padding-bottom: 8px;
