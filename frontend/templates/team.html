@@ -117,4 +117,31 @@
       </div>
     </div>
   </div>
+  <section id="auditLogPanel" class="team-card audit-log-card">
+    <div class="team-card-body">
+      <div class="team-section">
+        <div class="team-section-head">
+          <h4>Audit log</h4>
+          <p class="muted small">Review recent actions across the team. Use the search box to filter by user, action, or keyword.</p>
+        </div>
+        <div id="auditLogContainer" class="audit-log-container">
+          <div class="audit-log-controls">
+            <input id="auditSearchInput" class="audit-search-input" placeholder="Search by user, action, or text">
+            <label class="audit-page-size-label">
+              <span class="muted small">Per page</span>
+              <select id="auditPageSize">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+              </select>
+            </label>
+          </div>
+          <div id="auditLogList" class="audit-log-list" aria-live="polite"></div>
+          <div class="audit-log-pagination">
+            <button id="auditLoadMore" type="button" class="ghost small hidden">Load more</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 </section>

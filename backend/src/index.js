@@ -20,6 +20,7 @@ import {
   verifyRegistrationResponse
 } from '@simplewebauthn/server';
 import { db, initDb } from './db/index.js';
+import { recordAuditEvent } from './audit-log.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
 import {
@@ -65,6 +66,7 @@ import {
   filterStatusMapByPermission,
   describeRoleTemplates
 } from './permissions.js';
+import { createAuditRouter } from './audit-routes.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -6518,11 +6520,37 @@ app.post('/api/login', async (req, res) => {
     const row = await findUserCaseInsensitive(userName);
     if (!row) {
       console.warn('login failed: user not found', { username: userName });
+      recordAuditEvent({
+        team_id: null,
+        server_id: null,
+        source: 'panel',
+        actor_type: 'panel_user',
+        actor_id: null,
+        actor_name: userName,
+        action: 'auth.login_failed',
+        metadata: {
+          reason: 'user_not_found',
+          ip: req.ip || null
+        }
+      }).catch(() => {});
       return res.status(401).json({ error: 'invalid_login' });
     }
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) {
       console.warn('login failed: invalid password', { username: userName, userId: row.id });
+      recordAuditEvent({
+        team_id: null,
+        server_id: null,
+        source: 'panel',
+        actor_type: 'panel_user',
+        actor_id: row.id,
+        actor_name: userName,
+        action: 'auth.login_failed',
+        metadata: {
+          reason: 'invalid_password',
+          ip: req.ip || null
+        }
+      }).catch(() => {});
       return res.status(401).json({ error: 'invalid_login' });
     }
     const hasTotp = Boolean(row.mfa_enabled && row.mfa_secret);
@@ -6556,12 +6584,55 @@ app.post('/api/login', async (req, res) => {
     }
     const payload = await buildAuthPayload(row);
     console.info('login successful', { username: userName, userId: row.id });
+    recordAuditEvent({
+      team_id: payload.activeTeamId ?? null,
+      server_id: null,
+      source: 'panel',
+      actor_type: 'panel_user',
+      actor_id: row.id,
+      actor_name: userName,
+      action: 'auth.login_success',
+      metadata: {
+        ip: req.ip || null,
+        activeTeamId: payload.activeTeamId ?? null
+      }
+    }).catch(() => {});
     res.json(payload);
   } catch (e) {
     console.error('login error', { username: userName, error: e });
     res.status(500).json({ error: 'db_error' });
   }
 });
+
+app.use(async (req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    if (!req.authUser) return;
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
+    if (res.statusCode < 200 || res.statusCode >= 400) return;
+    const path = req.path || req.originalUrl || '';
+    if (path === '/api/login') return;
+    recordAuditEvent({
+      team_id: req.authUser.activeTeamId ?? null,
+      server_id: null,
+      source: 'panel',
+      actor_type: 'panel_user',
+      actor_id: req.authUser.id,
+      actor_name: req.authUser.username ?? null,
+      action: 'api.request',
+      metadata: {
+        method: req.method,
+        path,
+        status: res.statusCode,
+        durationMs: Date.now() - start
+      }
+    }).catch(() => {});
+  });
+  next();
+});
+
+app.locals.db = db;
+app.use('/api/audit', auth, createAuditRouter());
 
 app.post('/api/login/mfa/totp', async (req, res) => {
   const { ticket, code } = req.body || {};

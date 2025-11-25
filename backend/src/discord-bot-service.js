@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { setTimeout as delay } from 'node:timers/promises';
 import { once } from 'node:events';
 import process from 'node:process';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   Client,
   GatewayIntentBits,
@@ -39,6 +39,18 @@ import {
   parseColorString,
   normalizeCommandPermissions
 } from './discord-config.js';
+import {
+  parseDate,
+  sanitizeId,
+  safeNumber,
+  formatCount,
+  formatDiscordTimestamp,
+  sanitizeTicketText,
+  normalizeBaseUrl
+} from './discord-bot-utils.js';
+import { handleAuthCommand } from './discord-bot-auth.js';
+import { handleRustLookupCommand } from './discord-bot-lookup.js';
+import { recordAuditEvent } from './audit-log.js';
 
 const MIN_REFRESH_MS = 10000;
 const DEFAULT_REFRESH_MS = 60000;
@@ -60,16 +72,8 @@ const TICKET_PANEL_BUTTON_ID = 'ticket:panel:open';
 const TICKET_MODAL_PREFIX = 'ticket:modal:';
 const TICKET_SELECT_PREFIX = 'ticket:select:';
 const MAX_PENDING_REQUEST_AGE_MS = 10 * 60 * 1000;
-const TEAM_AUTH_LINK_TTL_MS = (() => {
-  const value = Number(process.env.TEAM_AUTH_LINK_TTL_MS);
-  if (Number.isFinite(value) && value >= 60 * 1000) return Math.floor(value);
-  return 15 * 60 * 1000;
-})();
 const TICKET_PREVIEW_PAGE = process.env.TICKET_PREVIEW_PAGE || '/ticket-preview.html';
 const PANEL_PUBLIC_URL = normalizeBaseUrl(process.env.PANEL_PUBLIC_URL);
-const APP_URL_FROM_ENV = normalizeBaseUrl(process.env.APP_URL);
-const LEGACY_PUBLIC_APP_URL = normalizeBaseUrl(process.env.PUBLIC_APP_URL);
-const TEAM_AUTH_APP_URL = APP_URL_FROM_ENV || PANEL_PUBLIC_URL || LEGACY_PUBLIC_APP_URL || '';
 
 // Server-specific Discord bots are limited to presence/status updates only. All
 // interactive slash commands are handled by the team-level bot instead.
@@ -107,52 +111,6 @@ function getPendingTicketRequest(id) {
 function deletePendingTicketRequest(id) {
   if (!id) return;
   pendingTicketRequests.delete(id);
-}
-
-function parseDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function sanitizeId(value) {
-  if (value == null) return '';
-  return String(value).trim();
-}
-
-function safeNumber(value) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-}
-
-function formatCount(value, fallback = '—') {
-  const num = safeNumber(value);
-  if (num == null) return fallback;
-  return String(num);
-}
-
-function formatDiscordTimestamp(date, style = 'R') {
-  const parsed = parseDate(date);
-  if (!parsed) return 'unknown';
-  const seconds = Math.floor(parsed.getTime() / 1000);
-  return `<t:${seconds}:${style}>`;
-}
-
-function sanitizeTicketText(value, fallback = '') {
-  if (typeof value !== 'string') return fallback;
-  const trimmed = value.trim();
-  if (!trimmed) return fallback;
-  return trimmed.slice(0, 500);
-}
-
-function normalizeBaseUrl(value) {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return trimmed.replace(/\/+$/, '');
 }
 
 function resolvePreviewHref(relative) {
@@ -254,61 +212,6 @@ function formatRoleMention(id, fallback = 'Not set') {
   return value ? `<@&${value}>` : fallback;
 }
 
-const DEFAULT_TEAM_AUTH_SETTINGS = Object.freeze({
-  enabled: false,
-  roleId: null,
-  guildId: null,
-  token: null
-});
-
-function buildTeamAuthLink(token) {
-  const safe = typeof token === 'string' ? token.trim() : '';
-  if (!safe) return null;
-  if (TEAM_AUTH_APP_URL) return `${TEAM_AUTH_APP_URL}/request.html?token=${safe}`;
-  return `/request.html?token=${safe}`;
-}
-
-async function loadTeamAuthSettings(teamId) {
-  if (typeof db.getTeamAuthSettings !== 'function') {
-    return { ...DEFAULT_TEAM_AUTH_SETTINGS };
-  }
-  const numeric = Number(teamId);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return { ...DEFAULT_TEAM_AUTH_SETTINGS };
-  }
-  try {
-    const settings = await db.getTeamAuthSettings(numeric);
-    return {
-      enabled: Boolean(settings?.enabled),
-      roleId: sanitizeId(settings?.roleId),
-      guildId: sanitizeId(settings?.guildId),
-      token: sanitizeId(settings?.token)
-    };
-  } catch (err) {
-    console.error('failed to load team auth settings', err);
-    return { ...DEFAULT_TEAM_AUTH_SETTINGS };
-  }
-}
-
-async function saveTeamAuthSettings(teamId, updates) {
-  if (typeof db.setTeamAuthSettings !== 'function') return 0;
-  const numeric = Number(teamId);
-  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
-  try {
-    return await db.setTeamAuthSettings(numeric, updates);
-  } catch (err) {
-    console.error('failed to persist team auth settings', err);
-    throw err;
-  }
-}
-
-function generateTeamAuthToken() {
-  try {
-    return randomBytes(24).toString('hex');
-  } catch (err) {
-    console.error('failed to generate auth token with randomBytes, falling back to uuid', err);
-    return randomUUID().replace(/-/g, '');
-  }
 }
 
 function setStateConfig(state, config) {
@@ -2110,92 +2013,6 @@ function requireManageChannels(interaction) {
   return requireManageGuild(interaction);
 }
 
-function buildLookupListEntry(row) {
-  const displayName = row.forced_display_name ?? row.forcedDisplayName ?? row.display_name ?? row.displayName ?? row.persona ?? row.steamid;
-  const safeName = escapeMarkdown(displayName || 'Unknown player');
-  const profileUrl = row.profileurl ?? row.profileUrl;
-  const namePart = profileUrl ? `[${safeName}](${profileUrl})` : `**${safeName}**`;
-  const lastSeen = parseDate(row.last_seen ?? row.lastSeen);
-  const lastSeenText = lastSeen ? formatDiscordTimestamp(lastSeen, 'R') : 'unknown';
-  const extras = [];
-  if (row.country) extras.push(`Country: ${String(row.country).toUpperCase()}`);
-  const vacBanned = row.vac_banned ?? row.vacBanned;
-  if (vacBanned != null) extras.push(`VAC: ${Number(vacBanned) ? 'banned' : 'clean'}`);
-  const gameBans = Number(row.game_bans ?? row.gameBans);
-  if (Number.isFinite(gameBans) && gameBans > 0) extras.push(`${gameBans} game bans`);
-  const serverName = row.server_name ?? row.serverName;
-  const serverId = Number(row.server_id ?? row.serverId);
-  let serverSuffix = '';
-  if (serverName || Number.isFinite(serverId)) {
-    const label = serverName ? escapeMarkdown(serverName) : `Server ${serverId}`;
-    const idSuffix = Number.isFinite(serverId) ? ` (#${serverId})` : '';
-    serverSuffix = ` • Server: ${label}${idSuffix}`;
-  }
-  return `${namePart} • \`${row.steamid}\`\nLast seen ${lastSeenText}${extras.length ? ` • ${extras.join(' • ')}` : ''}${serverSuffix}`;
-}
-
-function buildDetailedPlayerEmbed(row) {
-  const displayName = row.forced_display_name ?? row.forcedDisplayName ?? row.display_name ?? row.displayName ?? row.persona ?? row.steamid;
-  const safeName = escapeMarkdown(displayName || 'Unknown player');
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle(safeName);
-
-  const profileUrl = row.profileurl ?? row.profileUrl;
-  if (profileUrl) embed.setURL(profileUrl);
-  if (row.avatar) embed.setThumbnail(row.avatar);
-
-  if (row.persona && row.persona !== displayName) {
-    embed.setDescription(`Persona: ${escapeMarkdown(row.persona)}`);
-  }
-
-  embed.addFields({ name: 'SteamID', value: `\`${row.steamid}\``, inline: true });
-
-  const serverName = row.server_name ?? row.serverName;
-  const serverId = Number(row.server_id ?? row.serverId);
-  if (serverName || Number.isFinite(serverId)) {
-    const label = serverName ? escapeMarkdown(serverName) : `Server ${serverId}`;
-    const value = Number.isFinite(serverId) ? `${label} (#${serverId})` : label;
-    embed.addFields({ name: 'Server', value, inline: true });
-  }
-
-  const lastSeen = parseDate(row.last_seen ?? row.lastSeen);
-  if (lastSeen) embed.addFields({ name: 'Last Seen', value: formatDiscordTimestamp(lastSeen, 'R'), inline: true });
-
-  const firstSeen = parseDate(row.first_seen ?? row.firstSeen);
-  if (firstSeen) embed.addFields({ name: 'First Seen', value: formatDiscordTimestamp(firstSeen, 'R'), inline: true });
-
-  if (row.country) embed.addFields({ name: 'Country', value: String(row.country).toUpperCase(), inline: true });
-
-  const vacBanned = row.vac_banned ?? row.vacBanned;
-  if (vacBanned != null) {
-    embed.addFields({ name: 'VAC Banned', value: Number(vacBanned) ? 'Yes' : 'No', inline: true });
-  }
-
-  const gameBans = Number(row.game_bans ?? row.gameBans);
-  if (Number.isFinite(gameBans)) {
-    embed.addFields({ name: 'Game Bans', value: String(gameBans), inline: true });
-  }
-
-  const playtimeMinutes = Number(row.rust_playtime_minutes ?? row.rustPlaytimeMinutes);
-  if (Number.isFinite(playtimeMinutes) && playtimeMinutes > 0) {
-    const hours = Math.round(playtimeMinutes / 60);
-    embed.addFields({ name: 'Rust Playtime', value: `${hours}h (${playtimeMinutes}m)`, inline: true });
-  }
-
-  const lastIp = row.last_ip ?? row.lastIp;
-  if (lastIp) embed.addFields({ name: 'Last IP', value: `\`${lastIp}\``, inline: true });
-
-  const lastPort = row.last_port ?? row.lastPort;
-  if (lastPort) embed.addFields({ name: 'Last Port', value: formatCount(lastPort), inline: true });
-
-  if (row.note) {
-    embed.setFooter({ text: row.note });
-  }
-
-  return embed;
-}
-
 function collectHelpServerSummaries({ state = null, teamState = null, guildId = null } = {}) {
   const entries = new Map();
 
@@ -2312,6 +2129,19 @@ async function handleRustStatusCommand(state, interaction) {
     } else {
       await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
+    recordAuditEvent({
+      team_id: state.teamId,
+      server_id: state.serverId,
+      source: 'discord',
+      actor_type: 'discord_user',
+      actor_id: interaction.user.id,
+      actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+      action: 'status.view',
+      metadata: {
+        guildId: interaction.guildId ?? null,
+        scope: 'self'
+      }
+    }).catch(() => {});
     return;
   }
 
@@ -2376,6 +2206,20 @@ async function handleRustStatusCommand(state, interaction) {
     const status = await loadServerStatus(serverId, state);
     const embed = buildStatusEmbed(status, getStateConfig(state));
     await interaction.editReply({ embeds: [embed] });
+    recordAuditEvent({
+      team_id: state.teamId,
+      server_id: serverId,
+      source: 'discord',
+      actor_type: 'discord_user',
+      actor_id: interaction.user.id,
+      actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+      action: 'status.view',
+      metadata: {
+        guildId: interaction.guildId ?? null,
+        scope: 'server',
+        targetServerId: serverId
+      }
+    }).catch(() => {});
     return;
   }
 
@@ -2388,6 +2232,18 @@ async function handleRustStatusCommand(state, interaction) {
       return;
     }
     await handleRustStatusConfigCommand(state, interaction, sub);
+    recordAuditEvent({
+      team_id: state.teamId,
+      server_id: state.serverId,
+      source: 'discord',
+      actor_type: 'discord_user',
+      actor_id: interaction.user.id,
+      actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+      action: `status.config.${sub}`,
+      metadata: {
+        guildId: interaction.guildId ?? null
+      }
+    }).catch(() => {});
     return;
   }
 
@@ -2423,6 +2279,19 @@ async function handleRustStatusCommand(state, interaction) {
     await updateBot(state, state.integration);
 
     await interaction.editReply(`Status updates will now be posted in ${channel}.`);
+    recordAuditEvent({
+      team_id: state.teamId,
+      server_id: state.serverId,
+      source: 'discord',
+      actor_type: 'discord_user',
+      actor_id: interaction.user.id,
+      actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+      action: 'status.setchannel',
+      metadata: {
+        guildId: interaction.guildId ?? null,
+        channelId: channel.id
+      }
+    }).catch(() => {});
     return;
   }
 
@@ -2430,195 +2299,22 @@ async function handleRustStatusCommand(state, interaction) {
     state.lastStatusEmbedKey = null;
     await updateBot(state, state.integration);
     await interaction.editReply('Triggered a manual refresh.');
+    recordAuditEvent({
+      team_id: state.teamId,
+      server_id: state.serverId,
+      source: 'discord',
+      actor_type: 'discord_user',
+      actor_id: interaction.user.id,
+      actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+      action: 'status.refresh',
+      metadata: {
+        guildId: interaction.guildId ?? null
+      }
+    }).catch(() => {});
     return;
   }
 
   await interaction.editReply('Unknown subcommand.');
-}
-
-async function handleAuthCommand(state, interaction) {
-  const rawTeamId = state?.teamId;
-  const numericTeamId = rawTeamId == null ? Number.NaN : Number(rawTeamId);
-  const teamId = Number.isFinite(numericTeamId) && numericTeamId > 0
-    ? Math.trunc(numericTeamId)
-    : null;
-  const supported =
-    teamId != null &&
-    typeof db.createTeamAuthRequest === 'function' &&
-    typeof db.getTeamAuthSettings === 'function';
-  if (!supported) {
-    const message = 'Account linking is not available right now. Ask a server admin to configure the control panel.';
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(message);
-    } else {
-      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
-    }
-    return;
-  }
-
-  if (!interaction.deferred && typeof interaction.deferReply === 'function') {
-    try {
-      await interaction.deferReply({ ephemeral: true });
-    } catch (err) {
-      console.error('failed to defer auth interaction', err);
-      if (!interaction.replied) {
-        try {
-          await interaction.reply({
-            content: 'Something went wrong before the command could start. Please try again.',
-            flags: MessageFlags.Ephemeral
-          });
-        } catch (replyErr) {
-          console.error('failed to reply after auth defer failure', replyErr);
-        }
-      }
-      return;
-    }
-  }
-
-  const sub = typeof interaction.options?.getSubcommand === 'function'
-    ? interaction.options.getSubcommand()
-    : null;
-  const settings = await loadTeamAuthSettings(teamId);
-  const hasManagePermission = Boolean(
-    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
-    interaction.memberPermissions?.has(PermissionFlagsBits.ManageRoles)
-  );
-
-  const ttlMinutes = Math.max(1, Math.round(TEAM_AUTH_LINK_TTL_MS / 60000));
-  const ttlLabel = ttlMinutes === 1 ? '1 minute' : `${ttlMinutes} minutes`;
-
-  try {
-    if (sub === 'status') {
-      const lines = [
-        `Status: ${settings.enabled ? '✅ Enabled' : '❌ Disabled'}`,
-        `Role: ${settings.roleId ? `<@&${settings.roleId}>` : 'Not configured'}`
-      ];
-      if (!settings.enabled) {
-        lines.push('Use `/auth enable` if you have Manage Server or Manage Roles permissions to turn it on.');
-      }
-      await interaction.editReply(lines.join('\n'));
-      return;
-    }
-
-    if (sub === 'enable') {
-      if (!hasManagePermission) {
-        await interaction.editReply('You need the **Manage Server** or **Manage Roles** permission to enable account linking.');
-        return;
-      }
-      if (typeof db.setTeamAuthSettings !== 'function') {
-        await interaction.editReply('Updating auth settings is not supported by the current database driver.');
-        return;
-      }
-      await saveTeamAuthSettings(teamId, { enabled: true });
-      const refreshed = await loadTeamAuthSettings(teamId);
-      const roleNotice = refreshed.roleId
-        ? `Linked players will receive <@&${refreshed.roleId}> after completing the flow.`
-        : 'No role is configured yet. Use `/auth setrole` if you want to grant one automatically.';
-      await interaction.editReply(
-        `Discord/Steam account linking is now **enabled** for this control panel. ${roleNotice}`
-      );
-      return;
-    }
-
-    if (sub === 'disable') {
-      if (!hasManagePermission) {
-        await interaction.editReply('You need the **Manage Server** or **Manage Roles** permission to disable account linking.');
-        return;
-      }
-      if (typeof db.setTeamAuthSettings !== 'function') {
-        await interaction.editReply('Updating auth settings is not supported by the current database driver.');
-        return;
-      }
-      await saveTeamAuthSettings(teamId, { enabled: false });
-      await interaction.editReply('Discord/Steam account linking has been disabled. Existing links remain valid, but new profiles cannot be created until it is re-enabled.');
-      return;
-    }
-
-    if (sub === 'setrole') {
-      if (!hasManagePermission) {
-        await interaction.editReply('You need the **Manage Server** or **Manage Roles** permission to update the granted role.');
-        return;
-      }
-      if (typeof db.setTeamAuthSettings !== 'function') {
-        await interaction.editReply('Updating auth settings is not supported by the current database driver.');
-        return;
-      }
-      let selectedRole = null;
-      if (typeof interaction.options?.getRole === 'function') {
-        selectedRole = interaction.options.getRole('role', false);
-      }
-      if (selectedRole && interaction.guildId && selectedRole.guild && selectedRole.guild.id !== interaction.guildId) {
-        await interaction.editReply('Please choose a role from this Discord server.');
-        return;
-      }
-      const roleId = selectedRole?.id ? String(selectedRole.id) : null;
-      await saveTeamAuthSettings(teamId, { roleId });
-      if (roleId) {
-        await interaction.editReply(`Linked players will now receive ${formatRoleMention(roleId, 'the selected role')}.`);
-      } else {
-        await interaction.editReply('Linked players will no longer receive a Discord role automatically.');
-      }
-      return;
-    }
-
-    if (sub === 'link') {
-      if (!settings.enabled) {
-        await interaction.editReply('Account linking is currently disabled. Ask a server admin to enable it with `/auth enable`.');
-        return;
-      }
-      const discordId = sanitizeId(interaction.user?.id);
-      if (!discordId) {
-        await interaction.editReply('Unable to determine your Discord ID. Please try again from within the server.');
-        return;
-      }
-      const displayName = interaction.user?.tag || interaction.user?.username || discordId;
-      const token = generateTeamAuthToken();
-      const expiresAt = new Date(Date.now() + TEAM_AUTH_LINK_TTL_MS);
-      let record;
-      try {
-        record = await db.createTeamAuthRequest({
-          team_id: teamId,
-          requested_by_user_id: null,
-          discord_id: discordId,
-          discord_username: displayName,
-          state_token: token,
-          expires_at: expiresAt.toISOString()
-        });
-      } catch (err) {
-        console.error('failed to create team auth request from discord command', err);
-        await interaction.editReply('Something went wrong while creating your link. Please try again in a moment.');
-        return;
-      }
-      const linkToken = record?.state_token || token;
-      const link = buildTeamAuthLink(linkToken);
-      if (!link) {
-        await interaction.editReply('Failed to build an auth link. Please let the staff team know.');
-        return;
-      }
-      const expiresStamp = `<t:${Math.floor(expiresAt.getTime() / 1000)}:R>`;
-      // Share a one-time link that pairs this Discord account with a Steam profile for alt-account tracking.
-      const response = [
-        'Use the link below to connect your Discord and Steam accounts so staff can identify alternate accounts and build your player profile:',
-        link,
-        `This link expires ${expiresStamp} (about ${ttlLabel}).`
-      ];
-      if (settings.roleId) {
-        response.push(`You will receive ${formatRoleMention(settings.roleId, 'the configured role')} after you finish.`);
-      }
-      response.push('Do **not** share this link with anyone else.');
-      await interaction.editReply(response.join('\n'));
-      return;
-    }
-
-    await interaction.editReply('Unknown subcommand.');
-  } catch (err) {
-    console.error('failed to handle auth command', err);
-    try {
-      await interaction.editReply('An unexpected error occurred while handling the command.');
-    } catch (replyErr) {
-      console.error('failed to send error reply for auth command', replyErr);
-    }
-  }
 }
 
 function buildConfigSummaryEmbed(state) {
@@ -3240,6 +2936,23 @@ async function handleTicketOpenCommand(state, interaction) {
     await interaction.editReply(result.message);
     return;
   }
+
+  recordAuditEvent({
+    team_id: state.teamId,
+    server_id: result.serverId,
+    source: 'discord',
+    actor_type: 'discord_user',
+    actor_id: interaction.user.id,
+    actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+    action: 'ticket.open',
+    metadata: {
+      guildId: interaction.guildId ?? null,
+      ticketChannelId: result.ticketChannelId,
+      ticketNumber: result.ticketNumber,
+      subject: subjectRaw,
+      serverName: result.serverName ?? null
+    }
+  }).catch(() => {});
 
   const extraInfo = result.serverName
     ? ` Linked server: ${result.serverName} (ID ${result.serverId}).`
@@ -3955,6 +3668,25 @@ async function handleTicketCloseCommand(state, interaction) {
   await interaction.editReply(
     `Closed ticket ${channelName} (#${ticketNumberDisplay}). ${transcriptStatusMessage} ${dmStatusMessage}`
   );
+
+  recordAuditEvent({
+    team_id: state.teamId,
+    server_id: ticketRecord.server_id ?? state.serverId ?? null,
+    source: 'discord',
+    actor_type: 'discord_user',
+    actor_id: interaction.user.id,
+    actor_name: interaction.user.tag ?? interaction.user.username ?? null,
+    action: 'ticket.close',
+    metadata: {
+      guildId: interaction.guildId ?? null,
+      channelId: targetChannel.id,
+      ticketId: ticketRecord.id ?? null,
+      ticketNumber: ticketNumberDisplay,
+      reason,
+      dmSuccess,
+      previewUrl: previewUrl ?? null
+    }
+  }).catch(() => {});
 }
 
 async function handleTicketCommand(state, interaction) {
@@ -4000,164 +3732,6 @@ async function handleTicketCommand(state, interaction) {
     content: 'Unknown ticket subcommand.',
     flags: MessageFlags.Ephemeral
   });
-}
-
-async function handleRustLookupCommand(state, interaction) {
-  if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  }
-
-  if (!state.guildId || interaction.guildId !== state.guildId) {
-    await interaction.editReply('This command can only be used in the configured guild.');
-    return;
-  }
-
-  try {
-    await loadTeamServers(state, { force: !state.teamServers || state.teamServerCacheUntil < Date.now() });
-  } catch (err) {
-    console.error(`failed to refresh team context before lookup for server ${state.serverId}`, err);
-  }
-
-  const serverIds = new Set();
-  serverIds.add(state.serverId);
-  if (state.teamServers instanceof Map) {
-    for (const id of state.teamServers.keys()) {
-      const numeric = Number(id);
-      if (Number.isFinite(numeric)) serverIds.add(numeric);
-    }
-  } else if (state.teamServerIds instanceof Set) {
-    for (const id of state.teamServerIds.values()) {
-      const numeric = Number(id);
-      if (Number.isFinite(numeric)) serverIds.add(numeric);
-    }
-  }
-
-  const resolveServerName = (id) => {
-    if (state.teamServers instanceof Map && state.teamServers.has(id)) {
-      return state.teamServers.get(id)?.name ?? `Server ${id}`;
-    }
-    if (id === state.serverId) {
-      return state.serverName ?? `Server ${id}`;
-    }
-    return `Server ${id}`;
-  };
-
-  const sub = interaction.options.getSubcommand();
-
-  if (sub === 'player') {
-    const queryRaw = interaction.options.getString('query', true);
-    const query = queryRaw.trim();
-    if (!query) {
-      await interaction.editReply('Please provide a search query.');
-      return;
-    }
-    if (typeof db.searchServerPlayers !== 'function') {
-      await interaction.editReply('Player search is not supported by the current database driver.');
-      return;
-    }
-
-    const aggregated = [];
-    for (const serverId of serverIds) {
-      try {
-        const rows = await db.searchServerPlayers(serverId, query, { limit: 10 });
-        for (const row of rows ?? []) {
-          aggregated.push({
-            ...row,
-            server_id: serverId,
-            serverId,
-            server_name: resolveServerName(serverId)
-          });
-        }
-      } catch (err) {
-        console.error(`failed to search players on server ${serverId}`, err);
-      }
-    }
-
-    const deduped = new Map();
-    for (const row of aggregated) {
-      if (!row?.steamid) continue;
-      const steamid = row.steamid;
-      const seen = parseDate(row.last_seen ?? row.lastSeen);
-      const ts = seen ? seen.getTime() : 0;
-      const existing = deduped.get(steamid);
-      if (!existing || ts > existing.ts) {
-        deduped.set(steamid, { row, ts });
-      }
-    }
-
-    const sorted = Array.from(deduped.values())
-      .sort((a, b) => b.ts - a.ts)
-      .map((entry) => entry.row)
-      .slice(0, 10);
-
-    const embed = new EmbedBuilder()
-      .setColor(0x5865f2)
-      .setTitle(`Player search: ${escapeMarkdown(query)}`);
-
-    if (!sorted.length) {
-      embed.setDescription('No matching players were found.');
-    } else {
-      const lines = sorted.map((row) => buildLookupListEntry(row)).join('\n\n');
-      embed.setDescription(lines.slice(0, 4000));
-    }
-
-    await interaction.editReply({ embeds: [embed] });
-    return;
-  }
-
-  if (sub === 'steamid') {
-    const idRaw = interaction.options.getString('id', true);
-    const id = idRaw.trim();
-    if (!id) {
-      await interaction.editReply('Please provide a SteamID64.');
-      return;
-    }
-
-    let best = null;
-    let bestTimestamp = -Infinity;
-    if (typeof db.getServerPlayer === 'function') {
-      for (const serverId of serverIds) {
-        try {
-          const candidate = await db.getServerPlayer(serverId, id);
-          if (candidate) {
-            const seen = parseDate(candidate.last_seen ?? candidate.lastSeen);
-            const ts = seen ? seen.getTime() : 0;
-            if (!best || ts > bestTimestamp) {
-              best = {
-                ...candidate,
-                server_id: serverId,
-                serverId,
-                server_name: resolveServerName(serverId)
-              };
-              bestTimestamp = ts;
-            }
-          }
-        } catch (err) {
-          console.error(`failed to lookup player ${id} on server ${serverId}`, err);
-        }
-      }
-    }
-
-    if (!best && typeof db.getPlayer === 'function') {
-      try {
-        best = await db.getPlayer(id);
-      } catch (err) {
-        console.error(`failed to lookup global player ${id}`, err);
-      }
-    }
-
-    if (!best) {
-      await interaction.editReply('No player was found for that SteamID64.');
-      return;
-    }
-
-    if (!best.steamid) best.steamid = id;
-    const embed = buildDetailedPlayerEmbed(best);
-    await interaction.editReply({ embeds: [embed] });
-    return;
-  }
-
-  await interaction.editReply('Unknown subcommand.');
 }
 
 async function handleAutocomplete(state, interaction) {
@@ -4209,17 +3783,29 @@ async function handleAutocomplete(state, interaction) {
       if (interaction.isChatInputCommand()) {
         const allowed = await ensureCommandPermission(state, interaction);
         if (!allowed) return;
+        recordAuditEvent({
+          team_id: state.teamId,
+          server_id: state.serverId,
+          source: 'discord',
+          actor_type: 'discord_user',
+          actor_id: interaction.user?.id ?? null,
+          actor_name: interaction.user?.tag ?? interaction.user?.username ?? null,
+          action: `command.${interaction.commandName}`,
+          metadata: {
+            guildId: interaction.guildId ?? null
+          }
+        }).catch(() => {});
         if (interaction.commandName === 'help') {
           await handleHelpCommand(interaction, { state, teamState: state.teamCommandState });
         } else if (interaction.commandName === 'ruststatus') {
           await handleRustStatusCommand(state, interaction);
         } else if (interaction.commandName === 'rustlookup') {
-        await handleRustLookupCommand(state, interaction);
-      } else if (interaction.commandName === 'auth') {
-        await handleAuthCommand(state, interaction);
-      } else if (interaction.commandName === 'ticket') {
-        await handleTicketCommand(state, interaction);
-      }
+          await handleRustLookupCommand(state, interaction, { loadTeamServers });
+        } else if (interaction.commandName === 'auth') {
+          await handleAuthCommand(state, interaction);
+        } else if (interaction.commandName === 'ticket') {
+          await handleTicketCommand(state, interaction);
+        }
       return;
     }
 

@@ -359,6 +359,22 @@ function createApi(dbh, dialect) {
         FOREIGN KEY(requested_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
         FOREIGN KEY(completed_profile_id) REFERENCES team_auth_profiles(id) ON DELETE SET NULL
       );
+      CREATE TABLE IF NOT EXISTS audit_events(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id INTEGER,
+        server_id INTEGER,
+        source TEXT NOT NULL,
+        actor_type TEXT,
+        actor_id TEXT,
+        actor_name TEXT,
+        action TEXT NOT NULL,
+        metadata TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE SET NULL,
+        FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_events_team_created ON audit_events(team_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_events_source_created ON audit_events(source, created_at);
       CREATE TABLE IF NOT EXISTS team_auth_cookies(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         team_id INTEGER NOT NULL,
@@ -2085,6 +2101,70 @@ function createApi(dbh, dialect) {
         [now, closed_by ?? null, closed_by_tag ?? null, close_reason ?? null, now, channelId]
       );
       return await dbh.get('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
+    },
+    async createAuditEvent(event){
+      if (!event || typeof event !== 'object') return null;
+      const {
+        team_id = null,
+        server_id = null,
+        source,
+        actor_type = null,
+        actor_id = null,
+        actor_name = null,
+        action,
+        metadata = null
+      } = event;
+      if (!source || !action) return null;
+      const now = new Date().toISOString();
+      let metadataJson = null;
+      if (metadata != null) {
+        try {
+          metadataJson = JSON.stringify(metadata);
+        } catch {
+          metadataJson = null;
+        }
+      }
+      const result = await dbh.run(
+        `INSERT INTO audit_events(team_id, server_id, source, actor_type, actor_id, actor_name, action, metadata, created_at)
+         VALUES(?,?,?,?,?,?,?,?,?)`,
+        [
+          Number.isFinite(Number(team_id)) ? Number(team_id) : null,
+          Number.isFinite(Number(server_id)) ? Number(server_id) : null,
+          String(source),
+          actor_type ? String(actor_type) : null,
+          actor_id != null ? String(actor_id) : null,
+          actor_name != null ? String(actor_name) : null,
+          String(action),
+          metadataJson,
+          now
+        ]
+      );
+      const id = result?.lastID;
+      if (!Number.isFinite(id)) return null;
+      return await dbh.get('SELECT * FROM audit_events WHERE id=?', [id]);
+    },
+    async listAuditEventsForTeam(teamId, { limit = 50, search = '', cursor = '' } = {}) {
+      const numericTeamId = Number(teamId);
+      if (!Number.isFinite(numericTeamId)) return { items: [], nextCursor: null };
+      const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+      const where = ['team_id=?'];
+      const params = [numericTeamId];
+      if (search && typeof search === 'string') {
+        const term = `%${escapeLike(search.trim())}%`;
+        where.push('(action LIKE ? OR source LIKE ? OR actor_name LIKE ? OR actor_id LIKE ? OR metadata LIKE ?)');
+        params.push(term, term, term, term, term);
+      }
+      if (cursor) {
+        where.push('id < ?');
+        params.push(Number(cursor));
+      }
+      params.push(safeLimit + 1);
+      const sql = `SELECT * FROM audit_events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`;
+      const rows = await dbh.all(sql, params);
+      const hasMore = rows.length > safeLimit;
+      const items = hasMore ? rows.slice(0, safeLimit) : rows;
+      const nextCursor = hasMore ? String(items[items.length - 1].id) : null;
+      return { items, nextCursor };
     },
     async replaceDiscordTicketDialogEntries(ticketId, entries = []){
       const numericTicketId = Number(ticketId);

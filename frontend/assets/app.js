@@ -713,6 +713,44 @@
     setWorkspaceView(workspaceViewDefault);
   }
 
+  const auditSearchInput = $('#auditSearchInput');
+  const auditPageSize = $('#auditPageSize');
+  const auditLoadMoreBtn = $('#auditLoadMore');
+
+  if (auditSearchInput) {
+    let auditTimer = null;
+    const commitSearch = () => {
+      const value = auditSearchInput.value || '';
+      if (value === auditState.search) return;
+      auditState.search = value;
+      loadAuditLog({ reset: true }).catch(() => {});
+    };
+    const onSearchInput = () => {
+      if (auditTimer) clearTimeout(auditTimer);
+      auditTimer = setTimeout(() => {
+        auditTimer = null;
+        commitSearch();
+      }, 250);
+    };
+    auditSearchInput.addEventListener('input', onSearchInput);
+    auditSearchInput.addEventListener('search', commitSearch);
+  }
+
+  if (auditPageSize) {
+    auditPageSize.addEventListener('change', () => {
+      const value = Number(auditPageSize.value);
+      const numeric = Number.isFinite(value) ? value : 50;
+      auditState.pageSize = Math.max(1, Math.min(200, numeric));
+      loadAuditLog({ reset: true }).catch(() => {});
+    });
+  }
+
+  if (auditLoadMoreBtn) {
+    auditLoadMoreBtn.addEventListener('click', () => {
+      loadAuditLog({ reset: false }).catch(() => {});
+    });
+  }
+
   function normalizeChatFilter(value) {
     const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (text === 'team') return 'team';
@@ -7140,6 +7178,68 @@
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
   }
 
+  const auditState = {
+    loading: false,
+    cursor: '',
+    search: '',
+    pageSize: 50
+  };
+
+  async function loadAuditLog({ reset = false } = {}) {
+    const listEl = $('#auditLogList');
+    const loadMoreBtn = $('#auditLoadMore');
+    const searchInput = $('#auditSearchInput');
+    const pageSizeSelect = $('#auditPageSize');
+    if (!listEl || !loadMoreBtn || !searchInput || !pageSizeSelect) return;
+    if (reset) {
+      auditState.cursor = '';
+      listEl.innerHTML = '';
+    }
+    if (auditState.loading) return;
+    auditState.loading = true;
+    loadMoreBtn.disabled = true;
+    loadMoreBtn.classList.add('hidden');
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(auditState.pageSize));
+      if (auditState.search) params.set('q', auditState.search);
+      if (auditState.cursor) params.set('cursor', auditState.cursor);
+      const result = await api(`/audit/events?${params.toString()}`);
+      const items = Array.isArray(result?.items) ? result.items : [];
+      for (const evt of items) {
+        const row = document.createElement('div');
+        row.className = 'audit-log-entry';
+        const meta = document.createElement('div');
+        meta.className = 'audit-log-entry-meta muted small';
+        const ts = document.createElement('span');
+        ts.textContent = evt.created_at || '';
+        const actor = document.createElement('span');
+        actor.textContent = evt.actor_name || evt.actor_id || 'Unknown user';
+        const action = document.createElement('span');
+        action.className = 'audit-log-entry-action';
+        action.textContent = evt.action || '';
+        meta.appendChild(ts);
+        meta.appendChild(actor);
+        meta.appendChild(action);
+        const text = document.createElement('div');
+        text.className = 'audit-log-entry-text';
+        text.textContent = evt.metadata || '';
+        row.appendChild(meta);
+        row.appendChild(text);
+        listEl.appendChild(row);
+      }
+      auditState.cursor = result.nextCursor || '';
+      if (auditState.cursor) {
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.classList.remove('hidden');
+      }
+    } catch (err) {
+      ui.log('Unable to load audit log: ' + describeError(err));
+    } finally {
+      auditState.loading = false;
+    }
+  }
+
   const ui = {
     showLogin() {
       loginPanel.classList.remove('hidden');
@@ -7238,6 +7338,12 @@
       userBox.appendChild(actions);
 
       applyPermissionGates();
+    },
+    showPanel(panel) {
+      switchPanel(panel);
+      if (panel === 'team') {
+        loadAuditLog({ reset: true }).catch(() => {});
+      }
     }
   };
 

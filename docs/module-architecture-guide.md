@@ -26,7 +26,9 @@ behaviour:
   OAuth metadata) update the SQLite and MySQL dialects together and keep the cookie/token helpers in sync.
 - **Background workers**: Long-running jobs, such as the Discord bot, should have their own module (for example,
   `backend/src/discord-bot-service.js`) and a matching entry point in `deploy/systemd/` or `scripts/` if they are launched
-  separately from the HTTP server.
+  separately from the HTTP server. Shared helpers that are reused across worker features (for example, Discord-specific
+  date/ID/timestamp formatting) belong in small focused modules such as `backend/src/discord-bot-utils.js` so the main
+  worker file stays readable and easy to extend.
 
 When introducing a new backend module, ensure it is required from the entry point or another module that is part of the startup
 path so the file is bundled by Node.js and actually executed.
