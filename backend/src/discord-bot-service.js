@@ -212,8 +212,6 @@ function formatRoleMention(id, fallback = 'Not set') {
   return value ? `<@&${value}>` : fallback;
 }
 
-}
-
 function setStateConfig(state, config) {
   const target = state || {};
   const next = cloneDiscordBotConfig(config ?? DEFAULT_DISCORD_BOT_CONFIG);
