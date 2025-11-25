@@ -1,4 +1,9 @@
 (() => {
+  // Lightweight runtime markers to help diagnose init issues in the field.
+  // These are info-level only and safe to keep in production builds.
+  console.info('[rcp] app bundle loaded');
+
+  try {
   const whenTemplatesReady = async () => {
     if (document.readyState === 'loading') {
       await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
@@ -48,6 +53,7 @@
   };
 
   const start = () => {
+  console.info('[rcp] start() invoked');
   const $ = (sel) => document.querySelector(sel);
 
   const serversEl = $('#servers');
@@ -416,18 +422,10 @@
   const discordCategoryOptions = $('#discord-category-options');
   const discordChannelOptions = $('#discord-channel-options');
   const discordRoleOptions = $('#discord-role-options');
-  const teamCommandStatusInput = $('#team-command-status-role-input');
-  const teamCommandTicketInput = $('#team-command-ticket-role-input');
-  const teamCommandLookupInput = $('#team-command-lookup-role-input');
-  const teamCommandAuthInput = $('#team-command-auth-role-input');
   const teamCommandStatusSelect = $('#team-command-status-role-select');
   const teamCommandTicketSelect = $('#team-command-ticket-role-select');
   const teamCommandLookupSelect = $('#team-command-lookup-role-select');
   const teamCommandAuthSelect = $('#team-command-auth-role-select');
-  const teamCommandStatusList = $('#team-command-status-role-list');
-  const teamCommandTicketList = $('#team-command-ticket-role-list');
-  const teamCommandLookupList = $('#team-command-lookup-role-list');
-  const teamCommandAuthList = $('#team-command-auth-role-list');
   const teamCommandSummaryStatus = $('#team-command-summary-status');
   const teamCommandSummaryTicket = $('#team-command-summary-ticket');
   const teamCommandSummaryLookup = $('#team-command-summary-lookup');
@@ -3945,12 +3943,12 @@
     [discordTicketingPanelChannelSelect, discordTicketingPanelChannelInput]
   ];
 
-    const commandRoleControls = [
-      { key: 'status', input: teamCommandStatusInput, select: teamCommandStatusSelect, list: teamCommandStatusList },
-      { key: 'ticket', input: teamCommandTicketInput, select: teamCommandTicketSelect, list: teamCommandTicketList },
-      { key: 'rustlookup', input: teamCommandLookupInput, select: teamCommandLookupSelect, list: teamCommandLookupList },
-      { key: 'auth', input: teamCommandAuthInput, select: teamCommandAuthSelect, list: teamCommandAuthList }
-    ];
+  const commandRoleControls = [
+    { key: 'status', select: teamCommandStatusSelect },
+    { key: 'ticket', select: teamCommandTicketSelect },
+    { key: 'rustlookup', select: teamCommandLookupSelect },
+    { key: 'auth', select: teamCommandAuthSelect }
+  ];
 
   discordTicketingEnabledInput?.addEventListener('change', updateTeamTicketingState);
   discordTicketingPingInput?.addEventListener('change', updateTeamTicketingState);
@@ -3963,24 +3961,9 @@
       updateTeamTicketingState();
     });
   });
-    commandRoleControls.forEach(({ key, input, select, list }) => {
-      const commitInput = () => commitCommandRoleInput(key);
-      input?.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ',') {
-          ev.preventDefault();
-          commitCommandRoleInput(key);
-        }
-      });
-      input?.addEventListener('change', commitInput);
-      input?.addEventListener('blur', commitInput);
-      select?.addEventListener('change', () => handleCommandRoleSelect(key, select.value));
-      list?.addEventListener('click', (ev) => {
-        const target = ev.target?.closest?.('[data-remove-command-role]');
-        if (!target) return;
-        ev.preventDefault();
-        removeCommandRole(target.dataset.commandRole, target.dataset.roleId);
-      });
-    });
+  commandRoleControls.forEach(({ key, select }) => {
+    select?.addEventListener('change', () => handleCommandRoleSelect(key));
+  });
 
   btnRefreshTeamCommandRoles?.addEventListener('click', () => {
     loadTeamDiscordRoles({ force: true, showStatus: true }).catch(() => {});
@@ -9020,60 +9003,41 @@
     return normalizeTeamCommandPermissions(config.commandPermissions || {});
   }
 
-  function syncCommandRoleOptions(select, roles, disabled = false) {
+  function syncCommandRoleOptions(select, roles, selectedValues = [], disabled = false) {
     if (!select) return;
     const roleList = Array.isArray(roles) ? roles : [];
+    const selectedIds = new Set(normalizeCommandRoleList(selectedValues));
     const fragment = document.createDocumentFragment();
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = roleList.length ? 'Select a role' : 'No Discord roles found';
-    fragment.append(placeholder);
+
+    // For non-multi selects, include a placeholder option.
+    if (!select.multiple) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = roleList.length ? 'Select a role' : 'No Discord roles found';
+      fragment.append(placeholder);
+    }
+
     roleList.forEach((role) => {
       const option = document.createElement('option');
       option.value = role.id;
       option.textContent = role.name;
+      if (selectedIds.has(role.id)) {
+        option.selected = true;
+      }
       fragment.append(option);
     });
+
     select.innerHTML = '';
     select.append(fragment);
-    select.value = '';
-    select.disabled = disabled || !roleList.length;
-  }
 
-  function renderCommandRoleList(list, values, roleLookup, commandKey, disabled = false) {
-    if (!list) return;
-    const ids = normalizeCommandRoleList(values);
-    list.innerHTML = '';
-    if (!ids.length) {
-      const placeholder = document.createElement('span');
-      placeholder.className = 'command-role-placeholder';
-      placeholder.textContent = disabled ? 'Connect the Main Bot to add roles.' : 'Everyone can run this command.';
-      list.append(placeholder);
-      return;
-    }
-    const fragment = document.createDocumentFragment();
-    ids.forEach((id) => {
-      const chip = document.createElement('span');
-      chip.className = 'command-role-chip';
-      const name = roleLookup?.get(id)?.name || id;
-      const label = document.createElement('span');
-      label.textContent = name;
-      const meta = document.createElement('small');
-      meta.textContent = id;
-      chip.append(label, meta);
-      if (!disabled) {
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'command-role-remove';
-        remove.setAttribute('aria-label', `Remove ${name} from ${commandKey} roles`);
-        remove.dataset.commandRole = commandKey;
-        remove.dataset.roleId = id;
-        remove.textContent = 'Remove';
-        chip.append(remove);
+    if (!select.multiple) {
+      // For single-select, keep placeholder selected when nothing is chosen.
+      if (!selectedIds.size) {
+        select.value = '';
       }
-      fragment.append(chip);
-    });
-    list.append(fragment);
+    }
+
+    select.disabled = disabled || !roleList.length;
   }
 
   function addCommandRoles(commandKey, roleValues = []) {
@@ -9099,45 +9063,20 @@
     }
   }
 
-  function handleCommandRoleSelect(commandKey, value) {
-    const normalized = normalizeCommandRoleValue(value);
-    const input = {
-      status: teamCommandStatusInput,
-      ticket: teamCommandTicketInput,
-      rustlookup: teamCommandLookupInput,
-      auth: teamCommandAuthInput
-    }[commandKey];
+  function handleCommandRoleSelect(commandKey) {
     const select = {
       status: teamCommandStatusSelect,
       ticket: teamCommandTicketSelect,
       rustlookup: teamCommandLookupSelect,
       auth: teamCommandAuthSelect
     }[commandKey];
-    if (normalized) {
-      addCommandRoles(commandKey, [normalized]);
-    }
-    if (input) input.value = '';
-    if (select) select.value = '';
-  }
-
-  function commitCommandRoleInput(commandKey) {
-    const input = {
-      status: teamCommandStatusInput,
-      ticket: teamCommandTicketInput,
-      rustlookup: teamCommandLookupInput,
-      auth: teamCommandAuthInput
-    }[commandKey];
-    if (!input) return;
-    const raw = input.value || '';
-    if (!raw.trim()) {
-      input.value = '';
-      return;
-    }
-    const ids = raw.split(/[,\s]+/g)
-      .map((value) => normalizeCommandRoleValue(value))
+    if (!select) return;
+    const selectedIds = Array.from(select.selectedOptions || [])
+      .map((opt) => normalizeCommandRoleValue(opt.value))
       .filter(Boolean);
-    input.value = '';
-    if (ids.length) addCommandRoles(commandKey, ids);
+    const draft = getCommandPermissionsDraft();
+    draft[commandKey] = selectedIds;
+    updateTeamCommandPermissionsState(draft);
   }
 
   function syncDiscordCategoryOptions(list, categories) {
@@ -9392,31 +9331,10 @@
     const commandInputsDisabled = !canManage || loading || !hasSettings;
     const disableCommandSelects = commandInputsDisabled || rolesLoading || !availableRoles.length;
 
-    syncCommandRoleOptions(teamCommandStatusSelect, availableRoles, disableCommandSelects);
-    syncCommandRoleOptions(teamCommandTicketSelect, availableRoles, disableCommandSelects);
-    syncCommandRoleOptions(teamCommandLookupSelect, availableRoles, disableCommandSelects);
-    syncCommandRoleOptions(teamCommandAuthSelect, availableRoles, disableCommandSelects);
-
-    const commandInputMap = {
-      status: teamCommandStatusInput,
-      ticket: teamCommandTicketInput,
-      rustlookup: teamCommandLookupInput,
-      auth: teamCommandAuthInput
-    };
-    Object.entries(commandInputMap).forEach(([, input]) => {
-      if (!input) return;
-      input.disabled = commandInputsDisabled;
-      if (!input.matches(':focus')) {
-        input.placeholder = commandInputsDisabled
-          ? 'Connect the Main Bot to add roles'
-          : 'Add role IDs, separated by commas';
-      }
-    });
-
-    renderCommandRoleList(teamCommandStatusList, commandPerms.status, roleLookup, 'status', commandInputsDisabled);
-    renderCommandRoleList(teamCommandTicketList, commandPerms.ticket, roleLookup, 'ticket', commandInputsDisabled);
-    renderCommandRoleList(teamCommandLookupList, commandPerms.rustlookup, roleLookup, 'rustlookup', commandInputsDisabled);
-    renderCommandRoleList(teamCommandAuthList, commandPerms.auth, roleLookup, 'auth', commandInputsDisabled);
+    syncCommandRoleOptions(teamCommandStatusSelect, availableRoles, commandPerms.status, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandTicketSelect, availableRoles, commandPerms.ticket, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandLookupSelect, availableRoles, commandPerms.rustlookup, disableCommandSelects);
+    syncCommandRoleOptions(teamCommandAuthSelect, availableRoles, commandPerms.auth, disableCommandSelects);
 
     if (btnRefreshTeamCommandRoles) {
       btnRefreshTeamCommandRoles.disabled = !canManage || loading || !hasSettings || rolesLoading;
@@ -9795,8 +9713,11 @@
     if (!canManageTeamDiscord()) return;
     const hasSettings = Boolean(state.teamDiscord?.hasToken || state.teamDiscord?.guildId);
     if (!hasSettings) {
-      showNotice(teamTicketingStatus, 'Link the Main Bot before saving ticket settings.', 'error');
-      return;
+      showNotice(
+        teamTicketingStatus,
+        'Ticketing preferences saved. Link the Main Bot before ticketing can go live.',
+        'warning'
+      );
     }
 
     state.teamDiscord.loading = true;
@@ -11043,6 +10964,22 @@
   init();
   };
 
-  whenTemplatesReady().then(start).catch((err) => console.error('App init failed', err));
-}
+  // Expose a minimal debug handle so browser consoles can inspect init state.
+  if (typeof window !== 'undefined') {
+    window.__RCP_DEBUG__ = Object.assign(window.__RCP_DEBUG__ || {}, {
+      whenTemplatesReady,
+      start
+    });
+  }
+
+  console.info('[rcp] waiting for templates');
+  whenTemplatesReady()
+    .then(() => {
+      console.info('[rcp] templates ready, starting app');
+      start();
+    })
+    .catch((err) => console.error('App init failed', err));
+  } catch (err) {
+    console.error('[rcp] init crash', err);
+  }
 })();
