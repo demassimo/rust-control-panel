@@ -3,21 +3,47 @@
     if (document.readyState === 'loading') {
       await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
     }
+
+    const hasTemplatesInDom = () => Boolean(
+      document.getElementById('loginPanel') ||
+      document.getElementById('appPanel')
+    );
+
     if (window.loadTemplatesPromise) {
       try {
         await window.loadTemplatesPromise;
-        return;
+        if (hasTemplatesInDom()) return;
       } catch (err) {
         console.error('Template load failed', err);
       }
     }
 
+    if (hasTemplatesInDom()) return;
+
     await new Promise((resolve) => {
+      let settled = false;
+
       const onReady = () => {
+        if (settled) return;
+        settled = true;
         document.removeEventListener('templates:ready', onReady);
         resolve();
       };
+
       document.addEventListener('templates:ready', onReady, { once: true });
+
+      const pollUntilReady = () => {
+        if (settled) return;
+        if (hasTemplatesInDom()) {
+          settled = true;
+          document.removeEventListener('templates:ready', onReady);
+          resolve();
+          return;
+        }
+        setTimeout(pollUntilReady, 50);
+      };
+
+      pollUntilReady();
     });
   };
 
