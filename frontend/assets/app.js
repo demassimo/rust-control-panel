@@ -289,6 +289,7 @@
       config: defaultTeamDiscordConfig(),
       configLoaded: false
     },
+    teamDiscordAudit: defaultTeamDiscordAuditState(),
     teamDiscordRoles: defaultTeamDiscordRolesState(),
     teamDiscordChannels: defaultTeamDiscordChannelsState(),
     teamAuth: { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null },
@@ -301,6 +302,7 @@
       status: null,
       config: defaultWorkspaceDiscordConfig()
     },
+    workspaceDiscordAudit: defaultWorkspaceDiscordAuditState(),
     pendingMfa: null,
     admin: {
       users: [],
@@ -347,6 +349,8 @@
   const teamDiscordSummary = $('#teamDiscordSummary');
   const teamDiscordSummaryGuild = $('#teamDiscordSummaryGuild');
   const teamDiscordSummaryToken = $('#teamDiscordSummaryToken');
+  const teamDiscordAuditList = $('#teamDiscordAuditList');
+  const teamDiscordAuditNotice = $('#teamDiscordAuditNotice');
   const teamAuthSection = $('#teamAuthSection');
   const teamAuthForm = $('#teamAuthForm');
   const teamAuthEnabledInput = $('#teamAuthEnabled');
@@ -449,6 +453,8 @@
   const discordTicketingSummaryRole = $('#discord-ticketing-summary-role');
   const discordStatusForm = $('#discord-status-form');
   const discordStatusNotice = $('#discord-status-notice');
+  const workspaceDiscordAuditList = $('#workspaceDiscordAuditList');
+  const workspaceDiscordAuditNotice = $('#workspaceDiscordAuditNotice');
   const discordPresenceTemplateInput = $('#discord-presence-template-input');
   const discordPresenceOnlineSelect = $('#discord-presence-online');
   const discordPresenceOfflineSelect = $('#discord-presence-offline');
@@ -635,6 +641,25 @@
 
   const commandRolePickers = new Map();
   const commandSummaryNodes = new Map();
+  const commandSectionNodes = new Map();
+  document.querySelectorAll('[data-command-section]').forEach((node) => {
+    const id = node?.dataset?.commandSection;
+    if (id) commandSectionNodes.set(id, node);
+  });
+  const commandSectionStatusNodes = new Map();
+  document.querySelectorAll('[data-command-status]').forEach((node) => {
+    const id = node?.dataset?.commandStatus;
+    if (id) commandSectionStatusNodes.set(id, node);
+  });
+  const commandSaveButtons = new Map();
+  document.querySelectorAll('[data-command-save]').forEach((button) => {
+    const id = button?.dataset?.commandSave;
+    if (id) {
+      commandSaveButtons.set(id, button);
+      button.dataset.saving = 'false';
+    }
+  });
+  const commandSectionFlashTimers = new Map();
 
   const aqState = {
     serverId: null,
@@ -4320,6 +4345,8 @@
         }
         state.teamDiscordRoles = defaultTeamDiscordRolesState();
         state.teamDiscordChannels = defaultTeamDiscordChannelsState();
+        state.teamDiscordAudit = defaultTeamDiscordAuditState();
+        updateTeamDiscordAuditUi();
       }
     }
     if (state.teamAuth) {
@@ -5850,6 +5877,133 @@
     return text;
   }
 
+  function renderAuditEntries(container, entries, { emptyMessage }) {
+    if (!container) return;
+    container.innerHTML = '';
+    const records = Array.isArray(entries) ? entries : [];
+    if (!records.length) {
+      const empty = document.createElement('p');
+      empty.className = 'muted small';
+      empty.textContent = emptyMessage;
+      container.append(empty);
+      return;
+    }
+    const list = document.createElement('ul');
+    list.className = 'discord-audit-list';
+    records.forEach((entry) => {
+      const item = document.createElement('li');
+      item.className = 'discord-audit-entry';
+      const title = document.createElement('h6');
+      title.textContent = entry?.summary || 'Updated settings';
+      item.append(title);
+      const detailText = (() => {
+        if (Array.isArray(entry?.details?.changes) && entry.details.changes.length) {
+          return `Changes: ${entry.details.changes.join(', ')}`;
+        }
+        if (entry?.details?.guildId) return `Guild: ${entry.details.guildId}`;
+        return null;
+      })();
+      if (detailText) {
+        const detail = document.createElement('p');
+        detail.textContent = detailText;
+        item.append(detail);
+      }
+      const meta = document.createElement('div');
+      meta.className = 'discord-audit-meta';
+      const actor = document.createElement('span');
+      actor.textContent = entry?.userId ? `User #${entry.userId}` : 'System';
+      const time = document.createElement('span');
+      time.textContent = formatDateTime(entry?.createdAt);
+      meta.append(actor, time);
+      item.append(meta);
+      list.append(item);
+    });
+    container.append(list);
+  }
+
+  function updateTeamDiscordAuditUi() {
+    const audit = state.teamDiscordAudit || defaultTeamDiscordAuditState();
+    if (teamDiscordAuditList) {
+      if (audit.loading) teamDiscordAuditList.setAttribute('aria-busy', 'true');
+      else teamDiscordAuditList.removeAttribute('aria-busy');
+      renderAuditEntries(teamDiscordAuditList, audit.entries, { emptyMessage: 'No Main Bot activity yet.' });
+    }
+    if (teamDiscordAuditNotice) {
+      if (audit.error) showNotice(teamDiscordAuditNotice, audit.error, 'error');
+      else hideNotice(teamDiscordAuditNotice);
+    }
+  }
+
+  function updateWorkspaceDiscordAuditUi() {
+    const audit = state.workspaceDiscordAudit || defaultWorkspaceDiscordAuditState();
+    if (workspaceDiscordAuditList) {
+      if (audit.loading) workspaceDiscordAuditList.setAttribute('aria-busy', 'true');
+      else workspaceDiscordAuditList.removeAttribute('aria-busy');
+      renderAuditEntries(workspaceDiscordAuditList, audit.entries, { emptyMessage: 'No Server Bot changes yet.' });
+    }
+    if (workspaceDiscordAuditNotice) {
+      if (audit.error) showNotice(workspaceDiscordAuditNotice, audit.error, 'error');
+      else hideNotice(workspaceDiscordAuditNotice);
+    }
+  }
+
+  async function loadTeamDiscordAudit({ force = false } = {}) {
+    if (!canManageTeamDiscord()) {
+      state.teamDiscordAudit = defaultTeamDiscordAuditState();
+      updateTeamDiscordAuditUi();
+      return;
+    }
+    const teamId = state.activeTeamId ?? null;
+    if (teamId == null) return;
+    if (!force && state.teamDiscordAudit.loadedTeamId === teamId) return;
+    state.teamDiscordAudit.loading = true;
+    state.teamDiscordAudit.error = null;
+    updateTeamDiscordAuditUi();
+    try {
+      const data = await api('/team/discord/audit');
+      state.teamDiscordAudit.entries = Array.isArray(data?.entries) ? data.entries : [];
+      state.teamDiscordAudit.loadedTeamId = teamId;
+    } catch (err) {
+      state.teamDiscordAudit.entries = [];
+      state.teamDiscordAudit.error = describeError(err);
+    } finally {
+      state.teamDiscordAudit.loading = false;
+      updateTeamDiscordAuditUi();
+    }
+  }
+
+  async function loadWorkspaceDiscordAudit(serverId = state.workspaceDiscord?.serverId, { force = false } = {}) {
+    const numericId = Number(serverId);
+    if (!Number.isFinite(numericId)) {
+      state.workspaceDiscordAudit = defaultWorkspaceDiscordAuditState();
+      updateWorkspaceDiscordAuditUi();
+      return;
+    }
+    if (!hasServerCapability('discord')) {
+      state.workspaceDiscordAudit = defaultWorkspaceDiscordAuditState();
+      updateWorkspaceDiscordAuditUi();
+      return;
+    }
+    if (!force && state.workspaceDiscordAudit.loadedServerId === numericId) return;
+    state.workspaceDiscordAudit.loading = true;
+    state.workspaceDiscordAudit.error = null;
+    updateWorkspaceDiscordAuditUi();
+    try {
+      const data = await api(`/servers/${encodeURIComponent(numericId)}/discord/audit`);
+      state.workspaceDiscordAudit.entries = Array.isArray(data?.entries) ? data.entries : [];
+      state.workspaceDiscordAudit.loadedServerId = numericId;
+    } catch (err) {
+      state.workspaceDiscordAudit.entries = [];
+      state.workspaceDiscordAudit.error = describeError(err);
+    } finally {
+      state.workspaceDiscordAudit.loading = false;
+      updateWorkspaceDiscordAuditUi();
+    }
+  }
+
+  updateTeamDiscordAuditUi();
+  updateWorkspaceDiscordAuditUi();
+
   function formatAbsoluteWithRelative(value) {
     const absolute = formatDateTime(value);
     const relative = formatRelativeTime(value);
@@ -6224,6 +6378,14 @@
     return { loading: false, categories: [], channels: [], error: null, loadedTeamId: null };
   }
 
+  function defaultTeamDiscordAuditState() {
+    return { loading: false, entries: [], error: null, loadedTeamId: null };
+  }
+
+  function defaultWorkspaceDiscordAuditState() {
+    return { loading: false, entries: [], error: null, loadedServerId: null };
+  }
+
   function sanitizePresenceValue(value, key) {
     const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (DISCORD_ALLOWED_PRESENCES.has(raw)) return raw;
@@ -6579,6 +6741,8 @@
       setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
       setWorkspaceDiscordStatus(null);
       updateWorkspaceDiscordUi();
+      state.workspaceDiscordAudit = defaultWorkspaceDiscordAuditState();
+      updateWorkspaceDiscordAuditUi();
       if (discordStatusServerSelect && discordStatusServerSelect.value !== '') {
         discordStatusServerSelect.value = '';
       }
@@ -6593,12 +6757,17 @@
       setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
       setWorkspaceDiscordStatus(null);
       updateWorkspaceDiscordUi();
+      state.workspaceDiscordAudit = defaultWorkspaceDiscordAuditState();
+      updateWorkspaceDiscordAuditUi();
       return;
     }
 
     if (!force && state.workspaceDiscord.integration && Number(state.workspaceDiscord.integration.serverId) === numericId) {
       state.workspaceDiscord.error = null;
       updateWorkspaceDiscordUi();
+      if (state.workspaceDiscordAudit.loadedServerId !== numericId) {
+        loadWorkspaceDiscordAudit(numericId, { force: true }).catch(() => {});
+      }
       return;
     }
 
@@ -6614,6 +6783,7 @@
       setWorkspaceDiscordStatus(status);
       state.workspaceDiscord.error = null;
       hideNotice(discordStatusNotice);
+      await loadWorkspaceDiscordAudit(numericId, { force: true }).catch(() => {});
     } catch (err) {
       const code = errorCode(err);
       if (code === 'not_supported') {
@@ -6624,6 +6794,8 @@
       state.workspaceDiscord.integration = null;
       setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
       setWorkspaceDiscordStatus(null);
+      state.workspaceDiscordAudit = defaultWorkspaceDiscordAuditState();
+      updateWorkspaceDiscordAuditUi();
     } finally {
       state.workspaceDiscord.loading = false;
       updateWorkspaceDiscordUi();
@@ -6639,6 +6811,8 @@
     setWorkspaceDiscordConfig(defaultWorkspaceDiscordConfig());
     setWorkspaceDiscordStatus(null);
     updateWorkspaceDiscordUi();
+    state.workspaceDiscordAudit = defaultWorkspaceDiscordAuditState();
+    updateWorkspaceDiscordAuditUi();
   }
 
   function gatherWorkspaceDiscordPayload() {
@@ -6703,6 +6877,7 @@
         setWorkspaceDiscordStatus(data?.status || state.workspaceDiscord.status);
         state.workspaceDiscord.error = null;
         showNotice(discordStatusNotice, 'Discord status settings saved.', 'success');
+        await loadWorkspaceDiscordAudit(serverId, { force: true }).catch(() => {});
     } catch (err) {
       showNotice(discordStatusNotice, describeError(err), 'error');
     } finally {
@@ -9097,6 +9272,7 @@
     if (!hiddenInput) return null;
     const picker = {
       key,
+      groupId: COMMAND_METADATA_BY_KEY.get(key)?.groupId || null,
       hiddenInput,
       select: elements.select || null,
       manualInput: elements.manualInput || null,
@@ -9176,6 +9352,7 @@
       resetInputs();
       renderCommandRolePicker(picker);
       updateTeamCommandPermissionsState();
+      if (picker.groupId) clearCommandSectionStatus(picker.groupId);
       return true;
     };
 
@@ -9216,6 +9393,7 @@
       picker.hiddenInput.value = remaining.join(',');
       renderCommandRolePicker(picker);
       updateTeamCommandPermissionsState();
+      if (picker.groupId) clearCommandSectionStatus(picker.groupId);
     });
 
     renderCommandRolePicker(picker);
@@ -9265,6 +9443,79 @@
     if (!picker) return;
     picker.setOptions(roles, disableControls);
     picker.setValues(values);
+  }
+
+  function clearCommandSectionStatus(sectionId) {
+    if (!sectionId) return;
+    const statusNode = commandSectionStatusNodes.get(sectionId);
+    if (statusNode) hideNotice(statusNode);
+    const timer = commandSectionFlashTimers.get(sectionId);
+    if (timer) {
+      clearTimeout(timer);
+      commandSectionFlashTimers.delete(sectionId);
+    }
+    const section = commandSectionNodes.get(sectionId);
+    if (section) section.classList.remove('command-section-glow--success', 'command-section-glow--error');
+  }
+
+  function setCommandSectionStatus(sectionId, message, type = 'success') {
+    if (!sectionId) return;
+    const statusNode = commandSectionStatusNodes.get(sectionId);
+    if (!statusNode) return;
+    if (!message) {
+      hideNotice(statusNode);
+      return;
+    }
+    showNotice(statusNode, message, type);
+  }
+
+  function flashCommandSection(sectionId, state = 'success') {
+    if (!sectionId) return;
+    const section = commandSectionNodes.get(sectionId);
+    if (!section) return;
+    section.classList.remove('command-section-glow--success', 'command-section-glow--error');
+    const existingTimer = commandSectionFlashTimers.get(sectionId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      commandSectionFlashTimers.delete(sectionId);
+    }
+    const className = state === 'error' ? 'command-section-glow--error' : 'command-section-glow--success';
+    section.classList.add(className);
+    const timer = setTimeout(() => {
+      section.classList.remove('command-section-glow--success', 'command-section-glow--error');
+      commandSectionFlashTimers.delete(sectionId);
+    }, 2400);
+    commandSectionFlashTimers.set(sectionId, timer);
+  }
+
+  function setCommandSaveButtonSaving(sectionId, saving) {
+    if (!sectionId) return;
+    const button = commandSaveButtons.get(sectionId);
+    if (!button) return;
+    if (saving) {
+      if (!button.dataset.originalLabel) {
+        button.dataset.originalLabel = button.textContent || 'Save';
+      }
+      button.dataset.saving = 'true';
+      button.disabled = true;
+      button.textContent = 'Saving…';
+    } else {
+      button.dataset.saving = 'false';
+      if (button.dataset.originalLabel) {
+        button.textContent = button.dataset.originalLabel;
+      }
+    }
+  }
+
+  function resetCommandRoleFeedback() {
+    commandSectionStatusNodes.forEach((node) => {
+      hideNotice(node);
+    });
+    commandSectionNodes.forEach((section) => {
+      section.classList.remove('command-section-glow--success', 'command-section-glow--error');
+    });
+    commandSectionFlashTimers.forEach((timer) => clearTimeout(timer));
+    commandSectionFlashTimers.clear();
   }
 
   function syncIdSelectOptions(select, items, currentValue, placeholder) {
@@ -9419,6 +9670,13 @@
     commandRolePickers.forEach((picker, key) => {
       picker.setOptions(availableRoles, disableCommandSelects || !availableRoles.length);
       picker.setValues(commandPerms[key] || []);
+    });
+
+    const disableCommandSaves = disableCommandSelects || !availableRoles.length;
+    commandSaveButtons.forEach((button) => {
+      if (!button) return;
+      if (button.dataset.saving === 'true') return;
+      button.disabled = disableCommandSaves;
     });
 
     if (btnRefreshTeamCommandRoles) {
@@ -9581,6 +9839,46 @@
     hideNotice(teamTicketingStatus);
     updateTeamDiscordConfigUi(updated);
   }
+
+  async function saveCommandRoleSection(sectionId) {
+    if (!sectionId) return;
+    if (!canManageTeamDiscord()) return;
+    const hasSettings = Boolean(state.teamDiscord?.hasToken) || Boolean(state.teamDiscord?.guildId);
+    if (!hasSettings) {
+      setCommandSectionStatus(sectionId, 'Link the Main Bot before saving command roles.', 'error');
+      flashCommandSection(sectionId, 'error');
+      return;
+    }
+    const button = commandSaveButtons.get(sectionId);
+    if (button?.dataset?.saving === 'true') return;
+
+    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}) };
+    let unauthorized = false;
+    setCommandSaveButtonSaving(sectionId, true);
+    setCommandSectionStatus(sectionId, 'Saving command roles…', 'info');
+    try {
+      const data = await api('/team/discord', payload, 'POST');
+      setTeamDiscordConfig(data?.config || payload.config);
+      state.teamDiscord.hasToken = Boolean(data?.hasToken ?? state.teamDiscord.hasToken);
+      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : state.teamDiscord.guildId;
+      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
+      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
+      setCommandSectionStatus(sectionId, 'Command roles saved.', 'success');
+      flashCommandSection(sectionId, 'success');
+      await loadTeamDiscordAudit({ force: true }).catch(() => {});
+    } catch (err) {
+      if (errorCode(err) === 'unauthorized') {
+        unauthorized = true;
+        handleUnauthorized();
+      }
+      setCommandSectionStatus(sectionId, describeError(err), 'error');
+      flashCommandSection(sectionId, 'error');
+    } finally {
+      setCommandSaveButtonSaving(sectionId, false);
+      updateTeamDiscordConfigUi();
+    }
+    if (unauthorized) return;
+  }
   function updateTeamDiscordUi() {
     if (!teamDiscordSection) return;
     const canManage = canManageTeamDiscord();
@@ -9703,6 +10001,9 @@
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       state.teamDiscordRoles = defaultTeamDiscordRolesState();
       state.teamDiscordChannels = defaultTeamDiscordChannelsState();
+      state.teamDiscordAudit = defaultTeamDiscordAuditState();
+      resetCommandRoleFeedback();
+      updateTeamDiscordAuditUi();
       updateTeamDiscordConfigUi();
       updateTeamDiscordUi();
       state.teamAuth.loading = false;
@@ -9715,7 +10016,9 @@
       updateTeamAuthUi();
       return;
     }
-    if (!force && state.teamDiscord.loadedTeamId === state.activeTeamId) {
+    const activeTeamId = state.activeTeamId ?? null;
+    const shouldResetCommandSections = force || state.teamDiscord.loadedTeamId !== activeTeamId;
+    if (!force && state.teamDiscord.loadedTeamId === activeTeamId) {
       updateTeamDiscordUi();
       if (!state.teamDiscordRoles.roles.length && !state.teamDiscordRoles.loading) {
         loadTeamDiscordRoles().catch(() => {});
@@ -9723,7 +10026,13 @@
       if (!state.teamDiscordChannels.channels.length && !state.teamDiscordChannels.loading) {
         loadTeamDiscordChannels().catch(() => {});
       }
+      if (state.teamDiscordAudit.loadedTeamId !== state.activeTeamId) {
+        loadTeamDiscordAudit({ force: true }).catch(() => {});
+      }
       return;
+    }
+    if (shouldResetCommandSections) {
+      resetCommandRoleFeedback();
     }
     state.teamDiscord.loading = true;
     updateTeamDiscordUi();
@@ -9769,6 +10078,7 @@
       updateTeamDiscordUi();
       if (canManageTeamDiscord()) {
         loadTeamAuthSettings({ force: true }).catch(() => {});
+        loadTeamDiscordAudit({ force: true }).catch(() => {});
       }
     }
     if (unauthorized) return;
@@ -9797,6 +10107,7 @@
       state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
       state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
       showNotice(teamTicketingStatus, 'Ticketing settings saved for the Main Bot.', 'success');
+      await loadTeamDiscordAudit({ force: true }).catch(() => {});
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
@@ -9850,6 +10161,7 @@
         teamDiscordGuildId.value = state.teamDiscord.guildId || '';
       }
       showNotice(teamDiscordStatus, 'Discord settings saved.', 'success');
+      await loadTeamDiscordAudit({ force: true }).catch(() => {});
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
@@ -9900,6 +10212,7 @@
         teamDiscordGuildId.value = state.teamDiscord.guildId || '';
       }
       showNotice(teamDiscordStatus, 'Removed the stored Discord settings.', 'success');
+      await loadTeamDiscordAudit({ force: true }).catch(() => {});
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
@@ -10840,6 +11153,12 @@
       state.teamAuth.logChannelId = value ? value : null;
       hideNotice(teamAuthStatus);
       updateTeamAuthUi();
+    });
+    commandSaveButtons.forEach((button, sectionId) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        saveCommandRoleSection(sectionId);
+      });
     });
     btnAdminCreateUser?.addEventListener('click', (event) => { event.preventDefault(); handleAdminCreateUser(); });
     adminUserSaveRole?.addEventListener('click', handleAdminRoleSave);

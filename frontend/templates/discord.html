@@ -138,14 +138,20 @@
           <div class="row">
             <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
           </div>
-          <div class="discord-section-note">
-            <h5>Authentication command access</h5>
-            <p class="muted small">Keep sensitive /auth subcommands limited to trusted roles.</p>
+          <div class="command-roles-panel" data-command-section="auth">
+            <div class="discord-section-note">
+              <h5>Authentication command access</h5>
+              <p class="muted small">Keep sensitive /auth subcommands limited to trusted roles.</p>
+            </div>
+            <div class="discord-command-entry-list two-column" data-command-list="auth"></div>
+            <div class="row">
+              <button type="button" class="accent" data-command-save="auth">Save authentication command roles</button>
+            </div>
+            <p class="notice hidden" data-command-status="auth"></p>
           </div>
-        <div class="discord-command-entry-list two-column" data-command-list="auth"></div>
-          <p id="teamAuthStatus" class="notice hidden"></p>
-        </form>
-      </section>
+        <p id="teamAuthStatus" class="notice hidden"></p>
+      </form>
+    </section>
       <section
         id="teamTicketingSection"
         class="team-discord-auth discord-card discord-section-card discord-tab-panel"
@@ -271,12 +277,18 @@
               <button type="submit" class="accent">Save ticketing settings</button>
             </div>
             <p id="teamTicketingStatus" class="notice hidden"></p>
-        <div class="discord-section-note">
-          <h5>Ticket command access</h5>
-          <p class="muted small">Assign roles to each /ticket subcommand or leave blank to allow everyone.</p>
+        <div class="command-roles-panel" data-command-section="ticket">
+          <div class="discord-section-note">
+            <h5>Ticket command access</h5>
+            <p class="muted small">Assign roles to each /ticket subcommand or leave blank to allow everyone.</p>
+          </div>
+          <div class="discord-command-entry-list two-column" data-command-list="ticket"></div>
+          <div class="row">
+            <button type="button" class="accent" data-command-save="ticket">Save ticket command roles</button>
+          </div>
+          <p class="notice hidden" data-command-status="ticket"></p>
+          <p id="teamCommandRolesStatus" class="notice hidden centered-notice"></p>
         </div>
-        <div class="discord-command-entry-list two-column" data-command-list="ticket"></div>
-        <p id="teamCommandRolesStatus" class="notice hidden centered-notice"></p>
         </form>
       </section>
       <section
@@ -293,8 +305,8 @@
             <p class="muted small">Control who can run the Server Status and Player Lookup slash commands.</p>
           </div>
         </div>
-        <div class="discord-command-mod-panels">
-          <article class="discord-command-card" aria-labelledby="discord-status-module-title">
+        <div class="discord-command-mod-panels stacked">
+          <article class="discord-command-card" aria-labelledby="discord-status-module-title" data-command-section="ruststatus">
             <div class="discord-command-card-head">
               <div>
                 <span class="discord-chip" aria-hidden="true">Commands</span>
@@ -303,8 +315,12 @@
               </div>
             </div>
             <div class="discord-command-entry-list two-column" data-command-list="ruststatus"></div>
+            <div class="row">
+              <button type="button" class="accent" data-command-save="ruststatus">Save server status roles</button>
+            </div>
+            <p class="notice hidden centered-notice" data-command-status="ruststatus"></p>
           </article>
-          <article class="discord-command-card" aria-labelledby="discord-lookup-module-title">
+          <article class="discord-command-card" aria-labelledby="discord-lookup-module-title" data-command-section="rustlookup">
             <div class="discord-command-card-head">
               <div>
                 <span class="discord-chip" aria-hidden="true">Commands</span>
@@ -313,6 +329,10 @@
               </div>
             </div>
             <div class="discord-command-entry-list two-column" data-command-list="rustlookup"></div>
+            <div class="row">
+              <button type="button" class="accent" data-command-save="rustlookup">Save player lookup roles</button>
+            </div>
+            <p class="notice hidden centered-notice" data-command-status="rustlookup"></p>
           </article>
         </div>
       </section>

@@ -6104,6 +6104,15 @@ function describeDiscordStatus(serverId) {
   };
 }
 
+async function recordAuditEvent(entry = {}) {
+  if (typeof db?.insertAuditLog !== 'function') return;
+  try {
+    await db.insertAuditLog(entry);
+  } catch (err) {
+    console.warn('failed to record audit event', err);
+  }
+}
+
 rconEventBus.on('monitor_status', (serverId, payload) => {
   const id = toServerId(serverId);
   if (id == null) return;
@@ -6931,6 +6940,28 @@ app.get('/api/team/discord/channels', auth, async (req, res) => {
   }
 });
 
+app.get('/api/team/discord/audit', auth, async (req, res) => {
+  if (!hasGlobalPermission(req.authUser, 'manageUsers')
+    && !hasGlobalPermission(req.authUser, 'manageRoles')
+    && !hasGlobalPermission(req.authUser, 'manageServers')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const teamId = req.authUser?.activeTeamId;
+  if (teamId == null) return res.status(400).json({ error: 'no_active_team' });
+  if (typeof db.listTeamDiscordAuditLogs !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const limitRaw = Number(req.query?.limit);
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 200);
+  try {
+    const entries = await db.listTeamDiscordAuditLogs(teamId, { limit });
+    res.json({ entries });
+  } catch (err) {
+    console.error('failed to load team discord audit logs', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 app.post('/api/team/discord', auth, async (req, res) => {
   if (!hasGlobalPermission(req.authUser, 'manageUsers')
     && !hasGlobalPermission(req.authUser, 'manageRoles')
@@ -7052,6 +7083,31 @@ app.post('/api/team/discord', auth, async (req, res) => {
       activeTeamDiscordGuildId: responseGuildId,
       config: responseConfig
     });
+    const changeFlags = [];
+    if (token) changeFlags.push('token');
+    if (guildInput) changeFlags.push('guild');
+    if (body.config) {
+      const configKeys = Object.keys(body.config || {});
+      if (configKeys.includes('commandPermissions')) changeFlags.push('command-permissions');
+      if (configKeys.includes('ticketing')) changeFlags.push('ticketing');
+      if (!configKeys.length) changeFlags.push('config');
+    }
+    const summarySuffix = changeFlags.length
+      ? changeFlags.join(', ').replace(/, ([^,]+)$/, ' & $1')
+      : 'settings';
+    await recordAuditEvent({
+      teamId,
+      userId: Number.isFinite(Number(req.authUser?.id)) ? Number(req.authUser.id) : null,
+      scope: 'team_discord',
+      action: token || guildInput ? 'team.discord.credentials' : 'team.discord.config',
+      summary: `Updated Main Bot ${summarySuffix}`,
+      details: {
+        guildId: responseGuildId,
+        hasToken,
+        changes: changeFlags,
+        requestedConfigKeys: Object.keys(body.config || {})
+      }
+    });
   } catch (err) {
     console.error('failed to save team discord token', err);
     res.status(500).json({ error: 'db_error' });
@@ -7162,6 +7218,14 @@ app.delete('/api/team/discord', auth, async (req, res) => {
       activeTeamHasDiscordToken: hasToken,
       activeTeamDiscordGuildId: responseGuildId,
       config: responseConfig
+    });
+    await recordAuditEvent({
+      teamId,
+      userId: Number.isFinite(Number(req.authUser?.id)) ? Number(req.authUser.id) : null,
+      scope: 'team_discord',
+      action: 'team.discord.removed',
+      summary: 'Removed Main Bot link and reset settings',
+      details: { guildId: responseGuildId, hasToken }
     });
   } catch (err) {
     console.error('failed to clear team discord token', err);
@@ -8834,6 +8898,23 @@ app.get('/api/servers/:id/discord', auth, async (req, res) => {
   }
 });
 
+app.get('/api/servers/:id/discord/audit', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'discord');
+  if (id == null) return;
+  if (typeof db.listServerDiscordAuditLogs !== 'function') {
+    return res.status(501).json({ error: 'not_supported' });
+  }
+  const limitRaw = Number(req.query?.limit);
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 25, 1), 200);
+  try {
+    const entries = await db.listServerDiscordAuditLogs(id, { limit });
+    res.json({ entries });
+  } catch (err) {
+    console.error('failed to load server discord audit logs', err);
+    res.status(500).json({ error: 'db_error' });
+  }
+});
+
 app.post('/api/servers/:id/discord', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'discord');
   if (id == null) return;
@@ -8898,6 +8979,27 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
       integration: projectDiscordIntegration(integration),
       status: describeDiscordStatus(id)
     });
+    const changeFlags = [];
+    if (tokenInput) changeFlags.push('token');
+    if (commandTokenInput || clearCommandToken) changeFlags.push('command-token');
+    if (guildInput) changeFlags.push('guild');
+    if (channelInput) changeFlags.push('channel');
+    if (body.config) changeFlags.push('config');
+    await recordAuditEvent({
+      teamId: Number(server?.team_id ?? server?.teamId) || null,
+      serverId: id,
+      userId: Number.isFinite(Number(req.authUser?.id)) ? Number(req.authUser.id) : null,
+      scope: 'server_discord',
+      action: 'server.discord.save',
+      summary: `Updated Server Bot ${changeFlags.length ? changeFlags.join(', ').replace(/, ([^,]+)$/, ' & $1') : 'settings'}`,
+      details: {
+        guildId,
+        channelId,
+        hasStatusToken: Boolean(botToken),
+        hasCommandToken: Boolean(commandBotToken),
+        changes: changeFlags
+      }
+    });
   } catch (err) {
     console.error('failed to save discord integration', err);
     res.status(500).json({ error: 'db_error' });
@@ -8919,6 +9021,17 @@ app.delete('/api/servers/:id/discord', auth, async (req, res) => {
       integration: null,
       status: describeDiscordStatus(id)
     });
+    if (Number(removed) > 0) {
+      await recordAuditEvent({
+        teamId: Number(server?.team_id ?? server?.teamId) || null,
+        serverId: id,
+        userId: Number.isFinite(Number(req.authUser?.id)) ? Number(req.authUser.id) : null,
+        scope: 'server_discord',
+        action: 'server.discord.removed',
+        summary: 'Removed Server Bot configuration',
+        details: { guildId: server?.discord_guild_id ?? null }
+      });
+    }
   } catch (err) {
     console.error('failed to delete discord integration', err);
     res.status(500).json({ error: 'db_error' });

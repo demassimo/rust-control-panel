@@ -96,6 +96,12 @@ With these values in place the `/request.html` flow prompts users to sign in wit
 
 See [docs/team-auth-oauth.md](docs/team-auth-oauth.md) for a full walkthrough that covers provider setup, required environment variables, and troubleshooting tips for the linking flow.
 
+## Discord audit trail
+
+- Every change to the Main Bot (team scope) or a workspace Server Bot (per-server scope) now lands in the `audit_logs` table. The Team panel includes an **Audit log** card, and each workspace’s Discord settings card shows the latest server-specific entries.
+- The installer and database bootstrap add this table automatically for both SQLite and MySQL. Updating the code and restarting the backend (or rerunning `scripts/install-linux.sh`) applies the migration with no extra steps.
+- Each entry records who made the change, when it happened, and which parts of the configuration (token, guild/channel, ticketing, command roles, etc.) were touched, making it easier to understand Discord behaviour changes.
+
 ## Access control
 
 - On first boot the panel seeds an `admin / admin123` account; sign in and change it immediately.

@@ -67,6 +67,51 @@ function createApi(pool, dialect) {
     const lower = text.toLowerCase();
     return lower === 'team' || lower === 'global' ? lower : null;
   };
+  const sanitizeAuditScope = (value) => {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return text ? text.slice(0, 32) : 'general';
+  };
+  const sanitizeAuditAction = (value) => {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return text ? text.slice(0, 96) : 'unknown';
+  };
+  const sanitizeAuditSummary = (value) => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return text.slice(0, 255);
+  };
+  const parseAuditDetails = (value) => {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    if (Buffer.isBuffer(value)) {
+      try {
+        return JSON.parse(value.toString('utf8'));
+      } catch {
+        return null;
+      }
+    }
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+  const normaliseAuditRow = (row) => {
+    if (!row) return null;
+    return {
+      id: Number(row.id) || null,
+      teamId: row.team_id != null ? Number(row.team_id) : null,
+      serverId: row.server_id != null ? Number(row.server_id) : null,
+      userId: row.user_id != null ? Number(row.user_id) : null,
+      scope: row.scope || null,
+      action: row.action || null,
+      summary: row.summary || '',
+      details: parseAuditDetails(row.details),
+      createdAt: row.created_at || null
+    };
+  };
   return {
     dialect,
     async init() {
@@ -444,6 +489,23 @@ function createApi(pool, dialect) {
         PRIMARY KEY(ticket_id, message_id),
         INDEX idx_ticket_dialog_ticket_time (ticket_id, posted_at),
         CONSTRAINT fk_ticket_dialog_ticket FOREIGN KEY (ticket_id) REFERENCES discord_tickets(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB;`);
+      await exec(`CREATE TABLE IF NOT EXISTS audit_logs(
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        team_id INT NULL,
+        server_id INT NULL,
+        user_id INT NULL,
+        scope VARCHAR(32) NOT NULL,
+        action VARCHAR(96) NOT NULL,
+        summary VARCHAR(255) NOT NULL,
+        details JSON NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_audit_team (team_id, created_at),
+        INDEX idx_audit_server (server_id, created_at),
+        INDEX idx_audit_scope (scope),
+        CONSTRAINT fk_audit_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
+        CONSTRAINT fk_audit_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL,
+        CONSTRAINT fk_audit_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB;`);
     },
     async countUsers(){ const r = await exec('SELECT COUNT(*) c FROM users'); const row = Array.isArray(r)?r[0]:r; return row.c ?? row['COUNT(*)']; },
@@ -2002,6 +2064,63 @@ function createApi(pool, dialect) {
          ORDER BY posted_at ASC, message_id ASC`,
         [numericTicketId]
       );
+    },
+    async insertAuditLog(entry = {}){
+      if (!entry || !entry.summary) return null;
+      const summary = sanitizeAuditSummary(entry.summary);
+      if (!summary) return null;
+      const action = sanitizeAuditAction(entry.action);
+      const scope = sanitizeAuditScope(entry.scope || 'general');
+      const teamId = Number(entry.teamId);
+      const serverId = Number(entry.serverId);
+      const userId = Number(entry.userId);
+      let detailValue = null;
+      if (entry.details != null) {
+        detailValue = typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details);
+      } else if (typeof entry.detailJson === 'string') {
+        detailValue = entry.detailJson;
+      }
+      await exec(
+        'INSERT INTO audit_logs(team_id, server_id, user_id, scope, action, summary, details) VALUES(?,?,?,?,?,?,?)',
+        [
+          Number.isFinite(teamId) ? teamId : null,
+          Number.isFinite(serverId) ? serverId : null,
+          Number.isFinite(userId) ? userId : null,
+          scope,
+          action,
+          summary,
+          detailValue
+        ]
+      );
+      return true;
+    },
+    async listTeamDiscordAuditLogs(teamId, { limit = 50 } = {}){
+      const numericTeamId = Number(teamId);
+      if (!Number.isFinite(numericTeamId)) return [];
+      const limitValue = Math.min(Math.max(Number(limit) || 25, 1), 200);
+      const rows = await exec(
+        `SELECT id, team_id, server_id, user_id, scope, action, summary, details, created_at
+         FROM audit_logs
+         WHERE team_id=? AND scope=?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`,
+        [numericTeamId, 'team_discord', limitValue]
+      );
+      return Array.isArray(rows) ? rows.map(normaliseAuditRow) : [];
+    },
+    async listServerDiscordAuditLogs(serverId, { limit = 25 } = {}){
+      const numericServerId = Number(serverId);
+      if (!Number.isFinite(numericServerId)) return [];
+      const limitValue = Math.min(Math.max(Number(limit) || 25, 1), 200);
+      const rows = await exec(
+        `SELECT id, team_id, server_id, user_id, scope, action, summary, details, created_at
+         FROM audit_logs
+         WHERE server_id=? AND scope=?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?`,
+        [numericServerId, 'server_discord', limitValue]
+      );
+      return Array.isArray(rows) ? rows.map(normaliseAuditRow) : [];
     },
     async listRoles(){
       const rows = await exec('SELECT role_key, name, description, permissions, created_at, updated_at FROM roles ORDER BY name ASC');
