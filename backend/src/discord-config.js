@@ -21,28 +21,58 @@ export const DEFAULT_TICKETING_CONFIG = Object.freeze({
   panelButtonLabel: 'Open Ticket'
 });
 
-export const DEFAULT_COMMAND_PERMISSIONS = Object.freeze({
-  status: Object.freeze([]),
-  ticket: Object.freeze([]),
-  rustlookup: Object.freeze([]),
-  auth: Object.freeze([])
-});
+export const COMMAND_PERMISSION_KEYS = Object.freeze([
+  'ticket',
+  'ticket.open',
+  'ticket.close',
+  'ticket.panel',
+  'ticket.config',
+  'ticket.config.show',
+  'ticket.config.toggle',
+  'ticket.config.setcategory',
+  'ticket.config.setlog',
+  'ticket.config.setstaff',
+  'ticket.config.setwelcome',
+  'ticket.config.setprompt',
+  'ticket.config.setping',
+  'auth',
+  'auth.link',
+  'auth.status',
+  'auth.enable',
+  'auth.disable',
+  'auth.setrole',
+  'ruststatus',
+  'ruststatus.status',
+  'ruststatus.listservers',
+  'ruststatus.server',
+  'ruststatus.refresh',
+  'rustlookup',
+  'rustlookup.player',
+  'rustlookup.steamid'
+]);
+
+const defaultCommandPermissions = {};
+for (const key of COMMAND_PERMISSION_KEYS) {
+  defaultCommandPermissions[key] = Object.freeze([]);
+}
+
+export const DEFAULT_COMMAND_PERMISSIONS = Object.freeze(defaultCommandPermissions);
 
 export const DEFAULT_TEAM_DISCORD_CONFIG = Object.freeze({
   ticketing: Object.freeze({ ...DEFAULT_TICKETING_CONFIG }),
-  commandPermissions: Object.freeze({ ...DEFAULT_COMMAND_PERMISSIONS }),
-  oauth: Object.freeze({
-    discord: Object.freeze({
-      clientId: null,
-      clientSecret: null,
-      redirectUri: null
-    }),
-    steam: Object.freeze({
-      apiKey: null,
-      realm: null,
-      returnUrl: null
-    })
-  })
+  commandPermissions: Object.freeze(
+    COMMAND_PERMISSION_KEYS.reduce((acc, key) => {
+      acc[key] = Object.freeze([]);
+      return acc;
+    }, {})
+  )
+});
+
+const COMMAND_PERMISSION_LEGACY_ALIASES = Object.freeze({
+  ruststatus: ['status'],
+  rustlookup: ['rustlookup'],
+  auth: ['auth'],
+  ticket: ['ticket']
 });
 
 export const DEFAULT_DISCORD_BOT_CONFIG = Object.freeze({
@@ -133,13 +163,20 @@ function normalizeCommandRoleList(value) {
 
 export function normalizeCommandPermissions(permissions = {}) {
   const source = permissions && typeof permissions === 'object' ? permissions : {};
-  const base = DEFAULT_COMMAND_PERMISSIONS;
-  return {
-    status: normalizeCommandRoleList(source.status ?? source.ruststatus ?? base.status),
-    ticket: normalizeCommandRoleList(source.ticket ?? base.ticket),
-    rustlookup: normalizeCommandRoleList(source.rustlookup ?? source.lookup ?? base.rustlookup),
-    auth: normalizeCommandRoleList(source.auth ?? base.auth)
-  };
+  const normalized = {};
+  for (const key of COMMAND_PERMISSION_KEYS) {
+    let raw = source[key];
+    if (raw == null && Array.isArray(COMMAND_PERMISSION_LEGACY_ALIASES[key])) {
+      for (const alias of COMMAND_PERMISSION_LEGACY_ALIASES[key]) {
+        if (source[alias] != null) {
+          raw = source[alias];
+          break;
+        }
+      }
+    }
+    normalized[key] = normalizeCommandRoleList(raw);
+  }
+  return normalized;
 }
 
 function sanitizePanelText(value, fallback, maxLength = 190) {
@@ -281,54 +318,12 @@ export function normaliseDiscordBotConfig(value = {}) {
   }
 }
 
-function sanitizeUrl(value, maxLength = 500) {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (!trimmed.match(/^https?:\/\//i)) return null;
-  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
-  return trimmed.slice(0, maxLength);
-}
-
-function sanitizeSecret(value, maxLength = 256) {
-  if (value == null) return null;
-  const trimmed = String(value).trim();
-  if (!trimmed) return null;
-  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
-  return trimmed.slice(0, maxLength);
-}
-
-function normalizeTeamOAuthConfig(oauth = {}) {
-  const source = oauth && typeof oauth === 'object' ? oauth : {};
-  const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
-  const steam = source.steam && typeof source.steam === 'object' ? source.steam : {};
-  const discordClientId = sanitizeDiscordSnowflake(discord.clientId ?? discord.client_id);
-  const discordClientSecret = sanitizeSecret(discord.clientSecret ?? discord.client_secret, 400);
-  const discordRedirectUri = sanitizeUrl(discord.redirectUri ?? discord.redirect_uri, 800);
-  const steamApiKey = sanitizeSecret(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120);
-  const steamRealm = sanitizeUrl(steam.realm ?? steam.realmUrl, 800);
-  const steamReturnUrl = sanitizeUrl(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800);
-  return {
-    discord: {
-      clientId: discordClientId,
-      clientSecret: discordClientSecret,
-      redirectUri: discordRedirectUri
-    },
-    steam: {
-      apiKey: steamApiKey,
-      realm: steamRealm,
-      returnUrl: steamReturnUrl
-    }
-  };
-}
-
 export function normaliseTeamDiscordConfig(value = {}) {
   const hasSource = typeof value === 'object' && value != null;
   const source = hasSource ? value : {};
   const ticketing = normalizeTicketingConfig(source.ticketing);
   const commandPermissions = normalizeCommandPermissions(source.commandPermissions ?? source.command_permissions);
-  const oauth = normalizeTeamOAuthConfig(source.oauth);
-  return { ticketing, commandPermissions, oauth };
+  return { ticketing, commandPermissions };
 }
 
 export function cloneDiscordBotConfig(config = DEFAULT_DISCORD_BOT_CONFIG) {
@@ -340,17 +335,17 @@ export function cloneTeamDiscordConfig(config = DEFAULT_TEAM_DISCORD_CONFIG) {
   const normalised = normaliseTeamDiscordConfig(config);
   return {
     ticketing: { ...normalised.ticketing },
-    commandPermissions: {
-      status: [...normalised.commandPermissions.status],
-      ticket: [...normalised.commandPermissions.ticket],
-      rustlookup: [...normalised.commandPermissions.rustlookup],
-      auth: [...normalised.commandPermissions.auth]
-    },
-    oauth: {
-      discord: { ...normalised.oauth.discord },
-      steam: { ...normalised.oauth.steam }
-    }
+    commandPermissions: cloneCommandPermissions(normalised.commandPermissions)
   };
+}
+
+function cloneCommandPermissions(source = DEFAULT_COMMAND_PERMISSIONS) {
+  const normalized = normalizeCommandPermissions(source);
+  const clone = {};
+  for (const key of COMMAND_PERMISSION_KEYS) {
+    clone[key] = [...(normalized[key] || [])];
+  }
+  return clone;
 }
 
 export function parseDiscordBotConfig(raw) {

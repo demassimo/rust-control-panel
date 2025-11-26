@@ -1,5 +1,5 @@
 [Unit]
-Description=Rust Control Panel Backend
+Description=Rust Admin Online Backend
 After=network.target
 
 [Service]

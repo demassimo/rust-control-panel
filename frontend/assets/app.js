@@ -1,59 +1,18 @@
 (() => {
-  // Lightweight runtime markers to help diagnose init issues in the field.
-  // These are info-level only and safe to keep in production builds.
-  console.info('[rcp] app bundle loaded');
-
-  try {
   const whenTemplatesReady = async () => {
     if (document.readyState === 'loading') {
       await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
     }
-
-    const hasTemplatesInDom = () => Boolean(
-      document.getElementById('loginPanel') ||
-      document.getElementById('appPanel')
-    );
-
     if (window.loadTemplatesPromise) {
       try {
         await window.loadTemplatesPromise;
-        if (hasTemplatesInDom()) return;
       } catch (err) {
         console.error('Template load failed', err);
       }
     }
-
-    if (hasTemplatesInDom()) return;
-
-    await new Promise((resolve) => {
-      let settled = false;
-
-      const onReady = () => {
-        if (settled) return;
-        settled = true;
-        document.removeEventListener('templates:ready', onReady);
-        resolve();
-      };
-
-      document.addEventListener('templates:ready', onReady, { once: true });
-
-      const pollUntilReady = () => {
-        if (settled) return;
-        if (hasTemplatesInDom()) {
-          settled = true;
-          document.removeEventListener('templates:ready', onReady);
-          resolve();
-          return;
-        }
-        setTimeout(pollUntilReady, 50);
-      };
-
-      pollUntilReady();
-    });
   };
 
   const start = () => {
-  console.info('[rcp] start() invoked');
   const $ = (sel) => document.querySelector(sel);
 
   const serversEl = $('#servers');
@@ -166,12 +125,6 @@
     panelChannelId: '',
     panelMessageId: ''
   };
-  const DEFAULT_DISCORD_COMMAND_PERMISSIONS = {
-    status: [],
-    ticket: [],
-    rustlookup: [],
-    auth: []
-  };
   const DISCORD_STATUS_FIELD_LABELS = {
     joining: 'Joining players',
     queued: 'Queue length',
@@ -179,6 +132,108 @@
     fps: 'Server FPS',
     lastUpdate: 'Last update timestamp'
   };
+
+  const DISCORD_COMMAND_GROUPS = [
+    {
+      id: 'ticket',
+      commands: [
+        { key: 'ticket', label: '/ticket (any)', description: 'Applies to every /ticket command.' },
+        { key: 'ticket.open', label: '/ticket open', description: 'Allow players to create support tickets.' },
+        { key: 'ticket.close', label: '/ticket close', description: 'Close ticket channels and log the result.' },
+        { key: 'ticket.panel', label: '/ticket panel', description: 'Post or refresh the interactive ticket panel.' },
+        { key: 'ticket.config', label: '/ticket config (any)', description: 'Any ticket configuration subcommand.' },
+        { key: 'ticket.config.show', label: '/ticket config show', description: 'Display the current ticket setup.' },
+        { key: 'ticket.config.toggle', label: '/ticket config toggle', description: 'Enable or disable ticket creation.' },
+        { key: 'ticket.config.setcategory', label: '/ticket config setcategory', description: 'Choose the category for new tickets.' },
+        { key: 'ticket.config.setlog', label: '/ticket config setlog', description: 'Select the channel used for ticket logs.' },
+        { key: 'ticket.config.setstaff', label: '/ticket config setstaff', description: 'Pick the staff role pinged on ticket creation.' },
+        { key: 'ticket.config.setwelcome', label: '/ticket config setwelcome', description: 'Customise the welcome message inside new tickets.' },
+        { key: 'ticket.config.setprompt', label: '/ticket config setprompt', description: 'Customise the helper prompt shown to players.' },
+        { key: 'ticket.config.setping', label: '/ticket config setping', description: 'Toggle staff role pings on new tickets.' }
+      ]
+    },
+    {
+      id: 'auth',
+      commands: [
+        { key: 'auth', label: '/auth (any)', description: 'Applies to every /auth command.' },
+        { key: 'auth.link', label: '/auth link', description: 'Generate a fresh Discord ↔ Steam linking URL.' },
+        { key: 'auth.status', label: '/auth status', description: 'Show whether account linking is enabled.' },
+        { key: 'auth.enable', label: '/auth enable', description: 'Turn on the account linking workflow.' },
+        { key: 'auth.disable', label: '/auth disable', description: 'Turn off the account linking workflow.' },
+        { key: 'auth.setrole', label: '/auth setrole', description: 'Select the Discord role granted after verification.' }
+      ]
+    },
+    {
+      id: 'ruststatus',
+      commands: [
+        { key: 'ruststatus', label: '/ruststatus (any)', description: 'Applies to every /ruststatus subcommand.' },
+        { key: 'ruststatus.status', label: '/ruststatus status', description: 'Show the latest aggregated snapshot.' },
+        { key: 'ruststatus.listservers', label: '/ruststatus listservers', description: 'List the Rust servers linked to this workspace.' },
+        { key: 'ruststatus.server', label: '/ruststatus server', description: 'Inspect a specific server by ID.' },
+        { key: 'ruststatus.refresh', label: '/ruststatus refresh', description: 'Force the bot to refresh server status data.' }
+      ]
+    },
+    {
+      id: 'rustlookup',
+      commands: [
+        { key: 'rustlookup', label: '/rustlookup (any)', description: 'Applies to every /rustlookup subcommand.' },
+        { key: 'rustlookup.player', label: '/rustlookup player', description: 'Search players by name.' },
+        { key: 'rustlookup.steamid', label: '/rustlookup steamid', description: 'Fetch details for a specific SteamID.' }
+      ]
+    }
+  ];
+
+  const COMMAND_METADATA_BY_KEY = new Map();
+  const COMMAND_PERMISSION_KEYS = [];
+  DISCORD_COMMAND_GROUPS.forEach((group) => {
+    group.commands.forEach((command) => {
+      if (!COMMAND_METADATA_BY_KEY.has(command.key)) {
+        COMMAND_METADATA_BY_KEY.set(command.key, { ...command, groupId: group.id });
+      }
+      if (!COMMAND_PERMISSION_KEYS.includes(command.key)) {
+        COMMAND_PERMISSION_KEYS.push(command.key);
+      }
+    });
+  });
+
+  const DEFAULT_DISCORD_COMMAND_PERMISSIONS = COMMAND_PERMISSION_KEYS.reduce((acc, key) => {
+    acc[key] = [];
+    return acc;
+  }, {});
+
+  const COMMAND_PERMISSION_LEGACY_ALIASES = {
+    ruststatus: ['status'],
+    rustlookup: [],
+    auth: [],
+    ticket: []
+  };
+
+  function parentCommandKey(key) {
+    if (typeof key !== 'string') return null;
+    const idx = key.lastIndexOf('.');
+    if (idx <= 0) return null;
+    return key.slice(0, idx);
+  }
+
+  function resolveEffectiveCommandRoles(commandPermissions = {}, key, visited = new Set()) {
+    if (!key || visited.has(key)) {
+      return { roles: [], sourceKey: null };
+    }
+    visited.add(key);
+    const direct = Array.isArray(commandPermissions[key]) ? commandPermissions[key].filter(Boolean) : [];
+    if (direct.length) {
+      return { roles: direct, sourceKey: key };
+    }
+    const parent = parentCommandKey(key);
+    if (parent) {
+      return resolveEffectiveCommandRoles(commandPermissions, parent, visited);
+    }
+    return { roles: [], sourceKey: key };
+  }
+
+  function formatCommandLabel(key) {
+    return COMMAND_METADATA_BY_KEY.get(key)?.label || key;
+  }
 
   const logMfa = (message, details = {}) => {
     try {
@@ -292,14 +347,6 @@
   const teamDiscordSummary = $('#teamDiscordSummary');
   const teamDiscordSummaryGuild = $('#teamDiscordSummaryGuild');
   const teamDiscordSummaryToken = $('#teamDiscordSummaryToken');
-  const teamOAuthForm = $('#teamOAuthForm');
-  const teamDiscordOauthClientId = $('#teamDiscordOauthClientId');
-  const teamDiscordOauthClientSecret = $('#teamDiscordOauthClientSecret');
-  const teamDiscordOauthRedirectUri = $('#teamDiscordOauthRedirectUri');
-  const teamSteamApiKeyInput = $('#teamSteamApiKey');
-  const teamOAuthStatus = $('#teamOAuthStatus');
-  const btnSaveTeamOAuth = $('#btnSaveTeamOAuth');
-  const btnClearTeamOAuth = $('#btnClearTeamOAuth');
   const teamAuthSection = $('#teamAuthSection');
   const teamAuthForm = $('#teamAuthForm');
   const teamAuthEnabledInput = $('#teamAuthEnabled');
@@ -419,21 +466,21 @@
   const discordTicketingLogSelect = $('#discord-ticketing-log-select');
   const discordTicketingRoleSelect = $('#discord-ticketing-role-select');
   const discordTicketingPanelChannelSelect = $('#discord-ticketing-panel-channel-select');
-  const discordCategoryOptions = $('#discord-category-options');
-  const discordChannelOptions = $('#discord-channel-options');
-  const discordRoleOptions = $('#discord-role-options');
-  const teamCommandStatusSelect = $('#team-command-status-role-select');
-  const teamCommandTicketSelect = $('#team-command-ticket-role-select');
-  const teamCommandLookupSelect = $('#team-command-lookup-role-select');
-  const teamCommandAuthSelect = $('#team-command-auth-role-select');
-  const teamCommandSummaryStatus = $('#team-command-summary-status');
-  const teamCommandSummaryTicket = $('#team-command-summary-ticket');
-  const teamCommandSummaryLookup = $('#team-command-summary-lookup');
-  const teamCommandSummaryAuth = $('#team-command-summary-auth');
   const teamCommandRolesStatus = $('#teamCommandRolesStatus');
   const btnRefreshTeamCommandRoles = $('#team-command-refresh-roles');
   const teamDiscordChannelsStatus = $('#teamDiscordChannelsStatus');
   const btnRefreshTeamDiscordChannels = $('#team-discord-refresh-channels');
+  const btnRefreshTeamDiscordChannelsOverview = $('#btnRefreshTeamDiscordChannelsOverview');
+  const btnRefreshTeamDiscordRolesOverview = $('#btnRefreshTeamDiscordRolesOverview');
+  const btnRefreshTeamDiscordCategoriesOverview = $('#btnRefreshTeamDiscordCategoriesOverview');
+  const discordTabButtons = Array.from(document.querySelectorAll('[data-discord-tab]'));
+  const discordTabPanels = new Map();
+  document.querySelectorAll('[data-discord-panel]').forEach((panel) => {
+    const id = panel?.dataset?.discordPanel;
+    if (id) discordTabPanels.set(id, panel);
+  });
+  let activeDiscordTabId = null;
+
   const aqTicketsList = $('#aqTicketsList');
   const aqTicketsLoading = $('#aqTicketsLoading');
   const aqTicketsError = $('#aqTicketsError');
@@ -586,6 +633,9 @@
   const f7ProfileCache = new Map();
   const f7ProfileRequests = new Map();
 
+  const commandRolePickers = new Map();
+  const commandSummaryNodes = new Map();
+
   const aqState = {
     serverId: null,
     list: [],
@@ -619,6 +669,9 @@
     const titleEl = header?.querySelector('[data-module-title]') || header?.querySelector('h3') || null;
     moduleSlots.set(id, { card, body, header, actions, titleEl });
   });
+
+  setupCommandPermissionUi();
+  initDiscordTabs();
 
   function setWorkspaceView(nextView = workspaceViewDefault) {
     const visibleButtons = workspaceViewButtons.filter((btn) => !btn.classList.contains('permission-hidden') && !btn.disabled);
@@ -735,44 +788,6 @@
 
   if (workspaceViewSections.length) {
     setWorkspaceView(workspaceViewDefault);
-  }
-
-  const auditSearchInput = $('#auditSearchInput');
-  const auditPageSize = $('#auditPageSize');
-  const auditLoadMoreBtn = $('#auditLoadMore');
-
-  if (auditSearchInput) {
-    let auditTimer = null;
-    const commitSearch = () => {
-      const value = auditSearchInput.value || '';
-      if (value === auditState.search) return;
-      auditState.search = value;
-      loadAuditLog({ reset: true }).catch(() => {});
-    };
-    const onSearchInput = () => {
-      if (auditTimer) clearTimeout(auditTimer);
-      auditTimer = setTimeout(() => {
-        auditTimer = null;
-        commitSearch();
-      }, 250);
-    };
-    auditSearchInput.addEventListener('input', onSearchInput);
-    auditSearchInput.addEventListener('search', commitSearch);
-  }
-
-  if (auditPageSize) {
-    auditPageSize.addEventListener('change', () => {
-      const value = Number(auditPageSize.value);
-      const numeric = Number.isFinite(value) ? value : 50;
-      auditState.pageSize = Math.max(1, Math.min(200, numeric));
-      loadAuditLog({ reset: true }).catch(() => {});
-    });
-  }
-
-  if (auditLoadMoreBtn) {
-    auditLoadMoreBtn.addEventListener('click', () => {
-      loadAuditLog({ reset: false }).catch(() => {});
-    });
   }
 
   function normalizeChatFilter(value) {
@@ -3943,13 +3958,6 @@
     [discordTicketingPanelChannelSelect, discordTicketingPanelChannelInput]
   ];
 
-  const commandRoleControls = [
-    { key: 'status', select: teamCommandStatusSelect },
-    { key: 'ticket', select: teamCommandTicketSelect },
-    { key: 'rustlookup', select: teamCommandLookupSelect },
-    { key: 'auth', select: teamCommandAuthSelect }
-  ];
-
   discordTicketingEnabledInput?.addEventListener('change', updateTeamTicketingState);
   discordTicketingPingInput?.addEventListener('change', updateTeamTicketingState);
   ticketingInputs.forEach((input) => {
@@ -3961,12 +3969,20 @@
       updateTeamTicketingState();
     });
   });
-  commandRoleControls.forEach(({ key, select }) => {
-    select?.addEventListener('change', () => handleCommandRoleSelect(key));
-  });
-
   btnRefreshTeamCommandRoles?.addEventListener('click', () => {
     loadTeamDiscordRoles({ force: true, showStatus: true }).catch(() => {});
+  });
+
+  btnRefreshTeamDiscordChannelsOverview?.addEventListener('click', () => {
+    loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
+  });
+
+  btnRefreshTeamDiscordRolesOverview?.addEventListener('click', () => {
+    loadTeamDiscordRoles({ force: true, showStatus: true }).catch(() => {});
+  });
+
+  btnRefreshTeamDiscordCategoriesOverview?.addEventListener('click', () => {
+    loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
   });
 
   if (typeof window !== 'undefined') {
@@ -5210,10 +5226,14 @@
 
     updateTeamAccessView({ refreshUsers: isTeam, refreshAdmin: isAdmin });
     if (isDiscord) {
-      const shouldForceDiscordLoad = state.teamDiscord.loadedTeamId !== state.activeTeamId;
-      loadTeamDiscord({ force: shouldForceDiscordLoad, refreshLists: true }).catch(() => {});
-      if (!shouldForceDiscordLoad) updateTeamDiscordUi();
+      if (!state.teamDiscord.loading) {
+        loadTeamDiscord({ force: true }).catch(() => {});
+      } else {
+        updateTeamDiscordUi();
+      }
       loadTeamAuthSettings({ force: true }).catch(() => {});
+      loadTeamDiscordRoles({ force: true, showStatus: true }).catch(() => {});
+      loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
     }
   }
 
@@ -5981,25 +6001,219 @@
   function defaultTeamDiscordConfig() {
     return {
       ticketing: { ...DEFAULT_DISCORD_TICKETING_CONFIG },
-      commandPermissions: {
-        status: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.status],
-        ticket: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.ticket],
-        rustlookup: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.rustlookup],
-        auth: [...DEFAULT_DISCORD_COMMAND_PERMISSIONS.auth]
-      },
-      oauth: {
-        discord: {
-          clientId: null,
-          clientSecret: null,
-          redirectUri: null
-        },
-        steam: {
-          apiKey: null,
-          realm: null,
-          returnUrl: null
-        }
-      }
+      commandPermissions: cloneCommandPermissions()
     };
+  }
+
+  function cloneCommandPermissions(source = DEFAULT_DISCORD_COMMAND_PERMISSIONS) {
+    const normalized = normalizeTeamCommandPermissions(source);
+    const clone = {};
+    COMMAND_PERMISSION_KEYS.forEach((key) => {
+      clone[key] = [...(normalized[key] || [])];
+    });
+    return clone;
+  }
+
+  function renderCommandPermissionEntries() {
+    const hosts = new Map();
+    document.querySelectorAll('[data-command-list]').forEach((node) => {
+      const id = node.dataset.commandList;
+      if (id) hosts.set(id, node);
+    });
+    DISCORD_COMMAND_GROUPS.forEach((group) => {
+      const host = hosts.get(group.id);
+      if (!host) return;
+      host.innerHTML = '';
+      group.commands.forEach((command) => {
+        const entry = createCommandEntry(command);
+        host.appendChild(entry);
+      });
+    });
+  }
+
+  function createCommandEntry(command) {
+    const entry = document.createElement('div');
+    entry.className = 'discord-command-entry';
+    entry.dataset.commandKey = command.key;
+
+    const head = document.createElement('div');
+    head.className = 'discord-command-entry-head';
+    const label = document.createElement('code');
+    label.textContent = command.label;
+    const summary = document.createElement('span');
+    summary.className = 'discord-command-summary';
+    summary.dataset.commandSummary = command.key;
+    summary.textContent = 'Everyone';
+    head.append(label, summary);
+    entry.append(head);
+
+    if (command.description) {
+      const desc = document.createElement('p');
+      desc.className = 'discord-command-entry-desc';
+      desc.textContent = command.description;
+      entry.append(desc);
+    }
+
+    const picker = document.createElement('div');
+    picker.className = 'discord-role-picker';
+    const pickerLabel = document.createElement('label');
+    pickerLabel.className = 'muted tiny';
+    pickerLabel.textContent = 'Allowed roles';
+    picker.append(pickerLabel);
+
+    const controls = document.createElement('div');
+    controls.className = 'discord-role-picker__controls';
+
+    const select = document.createElement('select');
+    select.className = 'discord-role-picker__select';
+    select.dataset.commandSelect = command.key;
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Select a role';
+    select.append(option);
+
+    const manual = document.createElement('input');
+    manual.type = 'text';
+    manual.autocomplete = 'off';
+    manual.inputMode = 'numeric';
+    manual.placeholder = 'Or paste a role ID';
+    manual.dataset.commandManual = command.key;
+
+    const addButton = document.createElement('button');
+    addButton.type = 'button';
+    addButton.className = 'ghost';
+    addButton.dataset.commandAdd = command.key;
+    addButton.textContent = 'Add';
+
+    controls.append(select, manual, addButton);
+    picker.append(controls);
+
+    const list = document.createElement('ul');
+    list.className = 'discord-role-picker__list';
+    list.dataset.commandRoleList = command.key;
+    picker.append(list);
+
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.dataset.commandValue = command.key;
+    picker.append(hidden);
+
+    entry.append(picker);
+    return entry;
+  }
+
+  function initializeCommandRolePickers() {
+    commandRolePickers.clear();
+    document.querySelectorAll('[data-command-key]').forEach((entry) => {
+      const key = entry.dataset.commandKey;
+      if (!key) return;
+      const picker = initCommandRolePicker(key, {
+        hiddenInput: entry.querySelector('[data-command-value]'),
+        select: entry.querySelector('[data-command-select]'),
+        manualInput: entry.querySelector('[data-command-manual]'),
+        addButton: entry.querySelector('[data-command-add]'),
+        list: entry.querySelector('[data-command-role-list]')
+      });
+      if (picker) commandRolePickers.set(key, picker);
+    });
+  }
+
+  function setupCommandPermissionUi() {
+    renderCommandPermissionEntries();
+    commandSummaryNodes.clear();
+    document.querySelectorAll('[data-command-summary]').forEach((node) => {
+      const key = node.dataset.commandSummary;
+      if (key) commandSummaryNodes.set(key, node);
+    });
+    initializeCommandRolePickers();
+  }
+
+  function isDiscordPanelAvailable(panel) {
+    return panel && !panel.classList.contains('hidden');
+  }
+
+  function getFirstVisibleDiscordTab() {
+    for (const button of discordTabButtons) {
+      const id = button.dataset.discordTab;
+      const panel = discordTabPanels.get(id);
+      if (isDiscordPanelAvailable(panel)) return id;
+    }
+    for (const [id, panel] of discordTabPanels.entries()) {
+      if (isDiscordPanelAvailable(panel)) return id;
+    }
+    return null;
+  }
+
+  function updateDiscordTabButtonState() {
+    discordTabButtons.forEach((button) => {
+      const id = button.dataset.discordTab;
+      const panel = discordTabPanels.get(id);
+      const available = isDiscordPanelAvailable(panel);
+      button.disabled = !available;
+      button.setAttribute('aria-disabled', available ? 'false' : 'true');
+      button.setAttribute('aria-selected', button.classList.contains('active') ? 'true' : 'false');
+    });
+  }
+
+  function activateDiscordTab(tabId) {
+    const panel = discordTabPanels.get(tabId);
+    if (!isDiscordPanelAvailable(panel)) {
+      const fallback = getFirstVisibleDiscordTab();
+      if (fallback && fallback !== activeDiscordTabId) activateDiscordTab(fallback);
+      return;
+    }
+    activeDiscordTabId = tabId;
+    discordTabButtons.forEach((button) => {
+      const isActive = button.dataset.discordTab === tabId;
+      button.classList.toggle('active', isActive);
+      button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    discordTabPanels.forEach((panelEl, id) => {
+      const active = id === tabId && isDiscordPanelAvailable(panelEl);
+      panelEl.classList.toggle('active', active);
+      panelEl.setAttribute('aria-hidden', active ? 'false' : 'true');
+    });
+    updateDiscordTabButtonState();
+  }
+
+  function ensureActiveDiscordTab() {
+    const currentPanel = activeDiscordTabId ? discordTabPanels.get(activeDiscordTabId) : null;
+    if (isDiscordPanelAvailable(currentPanel)) {
+      updateDiscordTabButtonState();
+      return;
+    }
+    const fallback = getFirstVisibleDiscordTab();
+    if (fallback) {
+      activateDiscordTab(fallback);
+    } else {
+      discordTabPanels.forEach((panelEl) => {
+        panelEl.classList.remove('active');
+        panelEl.setAttribute('aria-hidden', 'true');
+      });
+      discordTabButtons.forEach((button) => {
+        button.classList.remove('active');
+        button.setAttribute('aria-selected', 'false');
+        button.disabled = true;
+        button.setAttribute('aria-disabled', 'true');
+      });
+    }
+  }
+
+  function initDiscordTabs() {
+    if (!discordTabButtons.length) return;
+    discordTabButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        if (button.disabled) return;
+        const id = button.dataset.discordTab;
+        if (id) activateDiscordTab(id);
+      });
+    });
+    const initial = getFirstVisibleDiscordTab();
+    if (initial) {
+      activateDiscordTab(initial);
+    } else {
+      ensureActiveDiscordTab();
+    }
   }
 
   function defaultTeamDiscordRolesState() {
@@ -6088,64 +6302,29 @@
 
   function normalizeTeamCommandPermissions(commandPermissions = {}) {
     const source = commandPermissions && typeof commandPermissions === 'object' ? commandPermissions : {};
-    const base = DEFAULT_DISCORD_COMMAND_PERMISSIONS;
-    return {
-      status: normalizeCommandRoleList(source.status ?? source.ruststatus ?? base.status),
-      ticket: normalizeCommandRoleList(source.ticket ?? base.ticket),
-      rustlookup: normalizeCommandRoleList(source.rustlookup ?? source.lookup ?? base.rustlookup),
-      auth: normalizeCommandRoleList(source.auth ?? base.auth)
-    };
-  }
-
-  function normalizeUrlConfig(value, max = 800) {
-    const text = typeof value === 'string' ? value.trim() : '';
-    if (!text) return null;
-    if (!/^https?:\/\//i.test(text)) return null;
-    const limit = Number.isFinite(max) && max > 0 ? max : undefined;
-    return limit ? text.slice(0, limit) : text;
-  }
-
-  function normalizeSecretValue(value, max = 400) {
-    if (value == null) return null;
-    const text = String(value).trim();
-    if (!text) return null;
-    const limit = Number.isFinite(max) && max > 0 ? max : undefined;
-    return limit ? text.slice(0, limit) : text;
-  }
-
-  function normalizeDiscordClientId(value) {
-    const digits = typeof value === 'string' ? value.replace(/[^0-9]/g, '') : '';
-    if (!digits) return null;
-    return digits.slice(0, 64);
-  }
-
-  function normalizeTeamOAuthConfig(oauth = {}) {
-    const source = oauth && typeof oauth === 'object' ? oauth : {};
-    const discord = source.discord && typeof source.discord === 'object' ? source.discord : {};
-    const steam = source.steam && typeof source.steam === 'object' ? source.steam : {};
-    return {
-      discord: {
-        clientId: normalizeDiscordClientId(discord.clientId ?? discord.client_id),
-        clientSecret: normalizeSecretValue(discord.clientSecret ?? discord.client_secret, 400),
-        redirectUri: normalizeUrlConfig(discord.redirectUri ?? discord.redirect_uri, 800)
-      },
-      steam: {
-        apiKey: normalizeSecretValue(steam.apiKey ?? steam.api_key ?? steam.webApiKey, 120),
-        realm: normalizeUrlConfig(steam.realm ?? steam.realm_url, 800),
-        returnUrl: normalizeUrlConfig(steam.returnUrl ?? steam.return_url ?? steam.callbackUrl, 800)
+    const normalized = {};
+    COMMAND_PERMISSION_KEYS.forEach((key) => {
+      let raw = source[key];
+      if (raw == null && Array.isArray(COMMAND_PERMISSION_LEGACY_ALIASES[key])) {
+        for (const alias of COMMAND_PERMISSION_LEGACY_ALIASES[key]) {
+          if (source[alias] != null) {
+            raw = source[alias];
+            break;
+          }
+        }
       }
-    };
+      normalized[key] = normalizeCommandRoleList(raw);
+    });
+    return normalized;
   }
 
   function normalizeTeamDiscordConfig(config = {}) {
     const source = config && typeof config === 'object' ? config : {};
-    const oauth = normalizeTeamOAuthConfig(source.oauth || {});
     return {
       ticketing: normalizeWorkspaceTicketing(source.ticketing || {}),
       commandPermissions: normalizeTeamCommandPermissions(
         source.commandPermissions || source.command_permissions || {}
-      ),
-      oauth
+      )
     };
   }
 
@@ -7187,68 +7366,6 @@
     moduleBus.emit('players:refresh', { reason: 'server-connect', serverId: numericId });
   }
 
-  const auditState = {
-    loading: false,
-    cursor: '',
-    search: '',
-    pageSize: 50
-  };
-
-  async function loadAuditLog({ reset = false } = {}) {
-    const listEl = $('#auditLogList');
-    const loadMoreBtn = $('#auditLoadMore');
-    const searchInput = $('#auditSearchInput');
-    const pageSizeSelect = $('#auditPageSize');
-    if (!listEl || !loadMoreBtn || !searchInput || !pageSizeSelect) return;
-    if (reset) {
-      auditState.cursor = '';
-      listEl.innerHTML = '';
-    }
-    if (auditState.loading) return;
-    auditState.loading = true;
-    loadMoreBtn.disabled = true;
-    loadMoreBtn.classList.add('hidden');
-    try {
-      const params = new URLSearchParams();
-      params.set('limit', String(auditState.pageSize));
-      if (auditState.search) params.set('q', auditState.search);
-      if (auditState.cursor) params.set('cursor', auditState.cursor);
-      const result = await api(`/audit/events?${params.toString()}`);
-      const items = Array.isArray(result?.items) ? result.items : [];
-      for (const evt of items) {
-        const row = document.createElement('div');
-        row.className = 'audit-log-entry';
-        const meta = document.createElement('div');
-        meta.className = 'audit-log-entry-meta muted small';
-        const ts = document.createElement('span');
-        ts.textContent = evt.created_at || '';
-        const actor = document.createElement('span');
-        actor.textContent = evt.actor_name || evt.actor_id || 'Unknown user';
-        const action = document.createElement('span');
-        action.className = 'audit-log-entry-action';
-        action.textContent = evt.action || '';
-        meta.appendChild(ts);
-        meta.appendChild(actor);
-        meta.appendChild(action);
-        const text = document.createElement('div');
-        text.className = 'audit-log-entry-text';
-        text.textContent = evt.metadata || '';
-        row.appendChild(meta);
-        row.appendChild(text);
-        listEl.appendChild(row);
-      }
-      auditState.cursor = result.nextCursor || '';
-      if (auditState.cursor) {
-        loadMoreBtn.disabled = false;
-        loadMoreBtn.classList.remove('hidden');
-      }
-    } catch (err) {
-      ui.log('Unable to load audit log: ' + describeError(err));
-    } finally {
-      auditState.loading = false;
-    }
-  }
-
   const ui = {
     showLogin() {
       loginPanel.classList.remove('hidden');
@@ -7347,12 +7464,6 @@
       userBox.appendChild(actions);
 
       applyPermissionGates();
-    },
-    showPanel(panel) {
-      switchPanel(panel);
-      if (panel === 'team') {
-        loadAuditLog({ reset: true }).catch(() => {});
-      }
     }
   };
 
@@ -8978,147 +9089,182 @@
       state.teamDiscord.config = normalized;
     }
     state.teamDiscord.configLoaded = true;
-    resetTeamOAuthInputs();
     updateTeamDiscordConfigUi();
   }
 
-  function resetTeamOAuthInputs() {
-    [teamDiscordOauthClientId, teamDiscordOauthRedirectUri, teamDiscordOauthClientSecret, teamSteamApiKeyInput]
-      .forEach((input) => {
-        if (!input) return;
-        if ((input === teamDiscordOauthClientSecret || input === teamSteamApiKeyInput) && !input.matches(':focus')) {
-          input.value = '';
+  function initCommandRolePicker(key, elements = {}) {
+    const hiddenInput = elements?.hiddenInput || null;
+    if (!hiddenInput) return null;
+    const picker = {
+      key,
+      hiddenInput,
+      select: elements.select || null,
+      manualInput: elements.manualInput || null,
+      addButton: elements.addButton || null,
+      list: elements.list || null,
+      roleLookup: new Map(),
+      disabled: false,
+      setDisabled(flag) {
+        this.disabled = !!flag;
+        if (this.select) this.select.disabled = this.disabled;
+        if (this.manualInput) this.manualInput.disabled = this.disabled;
+        if (this.addButton) this.addButton.disabled = this.disabled;
+        if (this.disabled && document.activeElement) {
+          if (document.activeElement === this.select || document.activeElement === this.manualInput) {
+            document.activeElement.blur();
+          }
         }
-        if (input.dataset) delete input.dataset.touched;
-      });
-  }
-
-  function selectedRolesFromSelect(select) {
-    if (!select) return [];
-    return Array.from(select.selectedOptions || [])
-      .map((option) => option.value)
-      .filter(Boolean);
-  function getCommandPermissionsDraft() {
-    const config = state.teamDiscord?.config || defaultTeamDiscordConfig();
-    return normalizeTeamCommandPermissions(config.commandPermissions || {});
-  }
-
-  function syncCommandRoleOptions(select, roles, selectedValues = [], disabled = false) {
-    if (!select) return;
-    const roleList = Array.isArray(roles) ? roles : [];
-    const selectedIds = new Set(normalizeCommandRoleList(selectedValues));
-    const fragment = document.createDocumentFragment();
-
-    // For non-multi selects, include a placeholder option.
-    if (!select.multiple) {
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = roleList.length ? 'Select a role' : 'No Discord roles found';
-      fragment.append(placeholder);
-    }
-
-    roleList.forEach((role) => {
-      const option = document.createElement('option');
-      option.value = role.id;
-      option.textContent = role.name;
-      if (selectedIds.has(role.id)) {
-        option.selected = true;
+      },
+      setOptions(roles = [], disableControls = false) {
+        const roleList = Array.isArray(roles) ? roles : [];
+        this.roleLookup = new Map(roleList.map((role) => [String(role.id), role]));
+        if (this.select) {
+          const fragment = document.createDocumentFragment();
+          if (roleList.length) {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select a role';
+            fragment.append(placeholder);
+            roleList.forEach((role) => {
+              const option = document.createElement('option');
+              option.value = role.id;
+              option.textContent = role.name;
+              fragment.append(option);
+            });
+          } else {
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = 'No Discord roles found';
+            fragment.append(emptyOption);
+          }
+          this.select.innerHTML = '';
+          this.select.append(fragment);
+        }
+        this.setDisabled(disableControls);
+        if (this.select) {
+          this.select.disabled = disableControls || !roleList.length;
+        }
+        renderCommandRolePicker(this);
+      },
+      setValues(values = []) {
+        const normalized = normalizeCommandRoleList(values);
+        this.hiddenInput.value = normalized.join(',');
+        renderCommandRolePicker(this);
+      },
+      getValues() {
+        const raw = this.hiddenInput.value || '';
+        if (!raw) return [];
+        return normalizeCommandRoleList(raw.split(','));
       }
-      fragment.append(option);
-    });
+    };
 
-    select.innerHTML = '';
-    select.append(fragment);
+    const resetInputs = () => {
+      if (picker.manualInput) picker.manualInput.value = '';
+      if (picker.select) picker.select.value = '';
+    };
 
-    if (!select.multiple) {
-      // For single-select, keep placeholder selected when nothing is chosen.
-      if (!selectedIds.size) {
-        select.value = '';
+    const commitValue = (value) => {
+      const normalized = normalizeCommandRoleValue(value);
+      if (!normalized) return false;
+      const current = new Set(picker.getValues());
+      if (current.has(normalized)) {
+        resetInputs();
+        return false;
       }
+      current.add(normalized);
+      picker.hiddenInput.value = Array.from(current).join(',');
+      resetInputs();
+      renderCommandRolePicker(picker);
+      updateTeamCommandPermissionsState();
+      return true;
+    };
+
+    const addFromInputs = () => {
+      if (picker.disabled) return;
+      const manualValue = normalizeCommandRoleValue(picker.manualInput?.value);
+      const selectValue = normalizeCommandRoleValue(picker.select?.value);
+      commitValue(manualValue || selectValue);
+    };
+
+    picker.addButton?.addEventListener('click', (event) => {
+      event?.preventDefault();
+      addFromInputs();
+    });
+
+    picker.manualInput?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      if (picker.disabled) return;
+      const manualValue = normalizeCommandRoleValue(picker.manualInput.value);
+      commitValue(manualValue);
+    });
+
+    picker.select?.addEventListener('change', () => {
+      if (picker.disabled) return;
+      const selectValue = normalizeCommandRoleValue(picker.select.value);
+      if (!selectValue) return;
+      commitValue(selectValue);
+    });
+
+    picker.list?.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-role-remove]');
+      if (!button || picker.disabled) return;
+      event.preventDefault();
+      const roleId = button.getAttribute('data-role-remove');
+      if (!roleId) return;
+      const remaining = picker.getValues().filter((value) => value !== roleId);
+      picker.hiddenInput.value = remaining.join(',');
+      renderCommandRolePicker(picker);
+      updateTeamCommandPermissionsState();
+    });
+
+    renderCommandRolePicker(picker);
+    return picker;
+  }
+
+  function renderCommandRolePicker(picker) {
+    if (!picker?.list) return;
+    const list = picker.list;
+    list.innerHTML = '';
+    const values = picker.getValues();
+    if (!values.length) {
+      const empty = document.createElement('li');
+      empty.className = 'muted tiny';
+      empty.textContent = 'Everyone can use this command.';
+      list.append(empty);
+      return;
     }
-
-    select.disabled = disabled || !roleList.length;
-  }
-
-  function addCommandRoles(commandKey, roleValues = []) {
-    if (!commandKey) return;
-    const draft = getCommandPermissionsDraft();
-    const next = new Set(draft[commandKey] || []);
-    roleValues.map((value) => normalizeCommandRoleValue(value)).forEach((id) => {
-      if (id) next.add(id);
-    });
-    draft[commandKey] = Array.from(next);
-    updateTeamCommandPermissionsState(draft);
-  }
-
-  function removeCommandRole(commandKey, roleValue) {
-    if (!commandKey) return;
-    const draft = getCommandPermissionsDraft();
-    const next = new Set(draft[commandKey] || []);
-    const id = normalizeCommandRoleValue(roleValue);
-    if (id && next.has(id)) {
-      next.delete(id);
-      draft[commandKey] = Array.from(next);
-      updateTeamCommandPermissionsState(draft);
-    }
-  }
-
-  function handleCommandRoleSelect(commandKey) {
-    const select = {
-      status: teamCommandStatusSelect,
-      ticket: teamCommandTicketSelect,
-      rustlookup: teamCommandLookupSelect,
-      auth: teamCommandAuthSelect
-    }[commandKey];
-    if (!select) return;
-    const selectedIds = Array.from(select.selectedOptions || [])
-      .map((opt) => normalizeCommandRoleValue(opt.value))
-      .filter(Boolean);
-    const draft = getCommandPermissionsDraft();
-    draft[commandKey] = selectedIds;
-    updateTeamCommandPermissionsState(draft);
-  }
-
-  function syncDiscordCategoryOptions(list, categories) {
-    if (!list) return;
     const fragment = document.createDocumentFragment();
-    (Array.isArray(categories) ? categories : []).forEach((category) => {
-      const option = document.createElement('option');
-      option.value = category.id;
-      option.label = category.name ? `${category.name} (${category.id})` : category.id;
-      option.textContent = option.label;
-      fragment.append(option);
+    values.forEach((id) => {
+      const item = document.createElement('li');
+      item.className = 'discord-role-chip';
+      const label = picker.roleLookup.get(id)?.name || id;
+      const text = document.createElement('span');
+      text.textContent = label;
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.dataset.roleRemove = id;
+      removeButton.setAttribute('aria-label', `Remove ${label}`);
+      removeButton.textContent = '×';
+      item.append(text, removeButton);
+      fragment.append(item);
     });
-    list.innerHTML = '';
     list.append(fragment);
   }
 
-  function syncDiscordChannelOptions(list, channels) {
-    if (!list) return;
-    const fragment = document.createDocumentFragment();
-    (Array.isArray(channels) ? channels : []).forEach((channel) => {
-      const option = document.createElement('option');
-      option.value = channel.id;
-      option.label = channel.name ? `${channel.name} (${channel.id})` : channel.id;
-      option.textContent = option.label;
-      fragment.append(option);
+  function getCommandRolePickerValues() {
+    const values = {};
+    commandRolePickers.forEach((picker, key) => {
+      values[key] = picker.getValues();
     });
-    list.innerHTML = '';
-    list.append(fragment);
+    return values;
   }
 
-  function syncDiscordRoleOptions(list, roles) {
-    if (!list) return;
-    const fragment = document.createDocumentFragment();
-    (Array.isArray(roles) ? roles : []).forEach((role) => {
-      const option = document.createElement('option');
-      option.value = role.id;
-      option.label = role.name ? `${role.name} (${role.id})` : role.id;
-      option.textContent = option.label;
-      fragment.append(option);
-    });
-    list.innerHTML = '';
-    list.append(fragment);
+  function applyCommandRolePickerState(key, roles, values, disableControls) {
+    const picker = commandRolePickers.get(key);
+    if (!picker) return;
+    picker.setOptions(roles, disableControls);
+    picker.setValues(values);
   }
 
   function syncIdSelectOptions(select, items, currentValue, placeholder) {
@@ -9155,9 +9301,6 @@
     state.teamDiscord.config = details;
 
     const ticketing = details.ticketing || DEFAULT_DISCORD_TICKETING_CONFIG;
-    const oauth = details.oauth || defaultTeamDiscordConfig().oauth;
-    const discordOauth = oauth.discord || {};
-    const steamOauth = oauth.steam || {};
     const ticketingEnabled = Boolean(ticketing.enabled);
     if (discordTicketingEnabledInput && !discordTicketingEnabledInput.matches(':focus')) {
       discordTicketingEnabledInput.checked = ticketingEnabled;
@@ -9195,9 +9338,6 @@
     const channelsLoading = Boolean(state.teamDiscordChannels?.loading);
     const channelsLoadedForTeam = state.teamDiscordChannels?.loadedTeamId === state.activeTeamId;
     const channelErrorMessage = state.teamDiscordChannels?.error || '';
-    syncDiscordCategoryOptions(discordCategoryOptions, availableCategories);
-    syncDiscordChannelOptions(discordChannelOptions, availableChannels);
-    syncDiscordRoleOptions(discordRoleOptions, availableRoles);
     syncIdSelectOptions(discordTicketingCategorySelect, availableCategories, ticketing.categoryId, 'Select a category');
     syncIdSelectOptions(discordTicketingLogSelect, availableChannels, ticketing.logChannelId, 'Select a channel');
     syncIdSelectOptions(discordTicketingRoleSelect, availableRoles, ticketing.staffRoleId, 'Select a role');
@@ -9253,27 +9393,6 @@
       discordTicketingSummaryRole.textContent = formatTicketValue(ticketing.staffRoleId, roleLookup);
     }
 
-    if (teamDiscordOauthClientId && !teamDiscordOauthClientId.matches(':focus')) {
-      teamDiscordOauthClientId.value = discordOauth.clientId || '';
-      delete teamDiscordOauthClientId.dataset?.touched;
-    }
-    if (teamDiscordOauthRedirectUri && !teamDiscordOauthRedirectUri.matches(':focus')) {
-      teamDiscordOauthRedirectUri.value = discordOauth.redirectUri || '';
-      delete teamDiscordOauthRedirectUri.dataset?.touched;
-    }
-    if (teamDiscordOauthClientSecret && !teamDiscordOauthClientSecret.matches(':focus')) {
-      teamDiscordOauthClientSecret.value = '';
-      delete teamDiscordOauthClientSecret.dataset?.touched;
-    }
-    if (teamSteamApiKeyInput && !teamSteamApiKeyInput.matches(':focus')) {
-      if (teamSteamApiKeyInput.dataset?.touched === 'true') {
-        // keep user-entered value
-      } else {
-        teamSteamApiKeyInput.value = '';
-      }
-      delete teamSteamApiKeyInput.dataset?.touched;
-    }
-
     if (btnRefreshTeamDiscordChannels) {
       btnRefreshTeamDiscordChannels.disabled = !canManage || loading || !hasSettings || channelsLoading;
     }
@@ -9294,47 +9413,13 @@
       }
     }
 
-    if (teamDiscordOauthClientId) {
-      teamDiscordOauthClientId.disabled = !canManage || loading;
-      if (!teamDiscordOauthClientId.matches(':focus')) {
-        teamDiscordOauthClientId.placeholder = discordOauth.clientId
-          ? 'Client ID stored — enter to replace'
-          : 'Enter Discord OAuth client ID';
-      }
-    }
-    if (teamDiscordOauthClientSecret) {
-      teamDiscordOauthClientSecret.disabled = !canManage || loading;
-      teamDiscordOauthClientSecret.placeholder = discordOauth.clientSecret
-        ? 'Secret stored — enter to replace'
-        : 'Paste Discord OAuth client secret';
-    }
-    if (teamDiscordOauthRedirectUri) {
-      teamDiscordOauthRedirectUri.disabled = !canManage || loading;
-      if (!teamDiscordOauthRedirectUri.matches(':focus')) {
-        teamDiscordOauthRedirectUri.placeholder = discordOauth.redirectUri
-          ? 'Redirect stored — enter to replace'
-          : 'Optional: custom Discord redirect URI';
-      }
-    }
-    if (teamSteamApiKeyInput) {
-      teamSteamApiKeyInput.disabled = !canManage || loading;
-      if (!teamSteamApiKeyInput.matches(':focus')) {
-        teamSteamApiKeyInput.placeholder = steamOauth.apiKey
-          ? 'Key stored — enter to replace or clear'
-          : 'Optional: Steam Web API key';
-      }
-    }
-    if (btnSaveTeamOAuth) btnSaveTeamOAuth.disabled = !canManage || loading;
-    if (btnClearTeamOAuth) btnClearTeamOAuth.disabled = !canManage || loading;
-
     const commandPerms = normalizeTeamCommandPermissions(details.commandPermissions || {});
-    const commandInputsDisabled = !canManage || loading || !hasSettings;
-    const disableCommandSelects = commandInputsDisabled || rolesLoading || !availableRoles.length;
+    const disableCommandSelects = !canManage || loading || !hasSettings || rolesLoading;
 
-    syncCommandRoleOptions(teamCommandStatusSelect, availableRoles, commandPerms.status, disableCommandSelects);
-    syncCommandRoleOptions(teamCommandTicketSelect, availableRoles, commandPerms.ticket, disableCommandSelects);
-    syncCommandRoleOptions(teamCommandLookupSelect, availableRoles, commandPerms.rustlookup, disableCommandSelects);
-    syncCommandRoleOptions(teamCommandAuthSelect, availableRoles, commandPerms.auth, disableCommandSelects);
+    commandRolePickers.forEach((picker, key) => {
+      picker.setOptions(availableRoles, disableCommandSelects || !availableRoles.length);
+      picker.setValues(commandPerms[key] || []);
+    });
 
     if (btnRefreshTeamCommandRoles) {
       btnRefreshTeamCommandRoles.disabled = !canManage || loading || !hasSettings || rolesLoading;
@@ -9358,10 +9443,19 @@
       const names = ids.map((id) => roleLookup.get(id)?.name || id);
       return names.join(', ');
     };
-    if (teamCommandSummaryStatus) teamCommandSummaryStatus.textContent = formatCommandValue(commandPerms.status);
-    if (teamCommandSummaryTicket) teamCommandSummaryTicket.textContent = formatCommandValue(commandPerms.ticket);
-    if (teamCommandSummaryLookup) teamCommandSummaryLookup.textContent = formatCommandValue(commandPerms.rustlookup);
-    if (teamCommandSummaryAuth) teamCommandSummaryAuth.textContent = formatCommandValue(commandPerms.auth);
+
+    commandSummaryNodes.forEach((node, key) => {
+      if (!node) return;
+      const effective = resolveEffectiveCommandRoles(commandPerms, key);
+      const summaryText = formatCommandValue(effective.roles);
+      if (effective.roles.length && effective.sourceKey && effective.sourceKey !== key) {
+        node.textContent = `${summaryText} (via ${formatCommandLabel(effective.sourceKey)})`;
+      } else {
+        node.textContent = summaryText;
+      }
+    });
+
+    ensureActiveDiscordTab();
 
     if (teamTicketingStatus) {
       if (!canManage) {
@@ -9479,40 +9573,12 @@
     updateTeamDiscordConfigUi(updated);
   }
 
-  function updateTeamCommandPermissionsState(nextPermissions) {
+  function updateTeamCommandPermissionsState() {
     const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
-    const commandPermissions = normalizeTeamCommandPermissions(nextPermissions || current.commandPermissions || {});
+    const commandPermissions = normalizeTeamCommandPermissions(getCommandRolePickerValues());
     const updated = normalizeTeamDiscordConfig({ ...current, commandPermissions });
     state.teamDiscord.config = updated;
     hideNotice(teamTicketingStatus);
-    updateTeamDiscordConfigUi(updated);
-  }
-
-  function updateTeamOAuthState({ clearSecrets = false } = {}) {
-    const current = state.teamDiscord?.config || defaultTeamDiscordConfig();
-    const baseOauth = current.oauth || defaultTeamDiscordConfig().oauth;
-    const clientIdTouched = teamDiscordOauthClientId?.dataset?.touched === 'true';
-    const redirectTouched = teamDiscordOauthRedirectUri?.dataset?.touched === 'true';
-    const secretTouched = teamDiscordOauthClientSecret?.dataset?.touched === 'true';
-    const steamKeyTouched = teamSteamApiKeyInput?.dataset?.touched === 'true';
-
-    const oauth = normalizeTeamOAuthConfig({
-      discord: {
-        clientId: clientIdTouched ? teamDiscordOauthClientId?.value : baseOauth.discord.clientId,
-        clientSecret: clearSecrets
-          ? null
-          : (secretTouched ? teamDiscordOauthClientSecret?.value : baseOauth.discord.clientSecret),
-        redirectUri: redirectTouched ? teamDiscordOauthRedirectUri?.value : baseOauth.discord.redirectUri
-      },
-      steam: {
-        apiKey: clearSecrets ? null : (steamKeyTouched ? teamSteamApiKeyInput?.value : baseOauth.steam.apiKey),
-        realm: baseOauth.steam.realm,
-        returnUrl: baseOauth.steam.returnUrl
-      }
-    });
-    const updated = normalizeTeamDiscordConfig({ ...current, oauth });
-    state.teamDiscord.config = updated;
-    hideNotice(teamOAuthStatus);
     updateTeamDiscordConfigUi(updated);
   }
   function updateTeamDiscordUi() {
@@ -9573,6 +9639,7 @@
     }
     updateTeamDiscordConfigUi();
     updateTeamAuthUi();
+    ensureActiveDiscordTab();
   }
 
   async function loadTeamAuthSettings({ force = false } = {}) {
@@ -9626,7 +9693,7 @@
     }
   }
 
-  async function loadTeamDiscord({ force = false, refreshLists = false } = {}) {
+  async function loadTeamDiscord({ force = false } = {}) {
     if (!teamDiscordSection) return;
     if (!state.TOKEN) return;
     if (!canManageTeamDiscord()) {
@@ -9648,7 +9715,7 @@
       updateTeamAuthUi();
       return;
     }
-    if (!force && !refreshLists && state.teamDiscord.loadedTeamId === state.activeTeamId) {
+    if (!force && state.teamDiscord.loadedTeamId === state.activeTeamId) {
       updateTeamDiscordUi();
       if (!state.teamDiscordRoles.roles.length && !state.teamDiscordRoles.loading) {
         loadTeamDiscordRoles().catch(() => {});
@@ -9661,7 +9728,6 @@
     state.teamDiscord.loading = true;
     updateTeamDiscordUi();
     hideNotice(teamDiscordStatus);
-    hideNotice(teamOAuthStatus);
     let unauthorized = false;
     try {
       const data = await api('/team/discord');
@@ -9680,8 +9746,8 @@
       if (!state.teamDiscord.guildId && teamDiscordGuildId && document.activeElement !== teamDiscordGuildId) {
         teamDiscordGuildId.value = '';
       }
-      await loadTeamDiscordRoles({ force: true, showStatus: refreshLists });
-      await loadTeamDiscordChannels({ force: true, showStatus: refreshLists });
+      await loadTeamDiscordRoles({ force: true });
+      await loadTeamDiscordChannels({ force: true });
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         unauthorized = true;
@@ -9713,11 +9779,8 @@
     if (!canManageTeamDiscord()) return;
     const hasSettings = Boolean(state.teamDiscord?.hasToken || state.teamDiscord?.guildId);
     if (!hasSettings) {
-      showNotice(
-        teamTicketingStatus,
-        'Ticketing preferences saved. Link the Main Bot before ticketing can go live.',
-        'warning'
-      );
+      showNotice(teamTicketingStatus, 'Link the Main Bot before saving ticket settings.', 'error');
+      return;
     }
 
     state.teamDiscord.loading = true;
@@ -9746,60 +9809,6 @@
       updateTeamDiscordUi();
     }
     if (unauthorized) return;
-  }
-
-  async function handleTeamOAuthSubmit(ev) {
-    ev?.preventDefault();
-    if (!canManageTeamDiscord()) return;
-    updateTeamOAuthState();
-    state.teamDiscord.loading = true;
-    updateTeamDiscordUi();
-    hideNotice(teamOAuthStatus);
-    const payload = { config: normalizeTeamDiscordConfig(state.teamDiscord?.config || {}) };
-    let unauthorized = false;
-    try {
-      const data = await api('/team/discord', payload, 'POST');
-      setTeamDiscordConfig(data?.config || payload.config);
-      state.teamDiscord.hasToken = Boolean(data?.hasToken ?? state.teamDiscord.hasToken);
-      state.teamDiscord.guildId = data?.guildId ? String(data.guildId) : state.teamDiscord.guildId;
-      state.teamDiscord.tokenPreview = data?.tokenPreview ? String(data.tokenPreview) : state.teamDiscord.tokenPreview;
-      state.teamDiscord.loadedTeamId = state.activeTeamId ?? null;
-      showNotice(teamOAuthStatus, 'Saved OAuth settings for this team.', 'success');
-    } catch (err) {
-      if (errorCode(err) === 'unauthorized') {
-        unauthorized = true;
-        handleUnauthorized();
-      } else {
-        showNotice(teamOAuthStatus, describeError(err), 'error');
-      }
-    } finally {
-      state.teamDiscord.loading = false;
-      updateTeamDiscordUi();
-    }
-    if (unauthorized) return;
-  }
-
-  function handleClearTeamOAuth(ev) {
-    ev?.preventDefault();
-    if (!canManageTeamDiscord()) return;
-    if (teamDiscordOauthClientId) {
-      teamDiscordOauthClientId.dataset.touched = 'true';
-      teamDiscordOauthClientId.value = '';
-    }
-    if (teamDiscordOauthClientSecret) {
-      teamDiscordOauthClientSecret.dataset.touched = 'true';
-      teamDiscordOauthClientSecret.value = '';
-    }
-    if (teamDiscordOauthRedirectUri) {
-      teamDiscordOauthRedirectUri.dataset.touched = 'true';
-      teamDiscordOauthRedirectUri.value = '';
-    }
-    if (teamSteamApiKeyInput) {
-      teamSteamApiKeyInput.dataset.touched = 'true';
-      teamSteamApiKeyInput.value = '';
-    }
-    updateTeamOAuthState({ clearSecrets: true });
-    showNotice(teamOAuthStatus, 'Cleared stored OAuth values locally. Save to apply.', 'info');
   }
 
   async function handleTeamDiscordSubmit(ev) {
@@ -10795,25 +10804,10 @@
     btnBackToDashboard?.addEventListener('click', () => hideWorkspace('back'));
     teamSelect?.addEventListener('change', onTeamSelectionChange);
     teamDiscordForm?.addEventListener('submit', handleTeamDiscordSubmit);
-    teamOAuthForm?.addEventListener('submit', handleTeamOAuthSubmit);
-    btnSaveTeamOAuth?.addEventListener('click', handleTeamOAuthSubmit);
-    btnClearTeamOAuth?.addEventListener('click', handleClearTeamOAuth);
     teamTicketingForm?.addEventListener('submit', handleTeamTicketingSubmit);
     btnRemoveTeamDiscord?.addEventListener('click', handleTeamDiscordRemove);
     teamDiscordToken?.addEventListener('input', () => hideNotice(teamDiscordStatus));
     teamDiscordGuildId?.addEventListener('input', () => hideNotice(teamDiscordStatus));
-    [
-      teamDiscordOauthClientId,
-      teamDiscordOauthClientSecret,
-      teamDiscordOauthRedirectUri,
-      teamSteamApiKeyInput
-    ].forEach((input) => {
-      input?.addEventListener('input', () => {
-        input.dataset.touched = 'true';
-        hideNotice(teamOAuthStatus);
-        updateTeamOAuthState();
-      });
-    });
     btnRefreshTeamDiscordChannels?.addEventListener('click', () => {
       loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
     });
@@ -10964,22 +10958,5 @@
   init();
   };
 
-  // Expose a minimal debug handle so browser consoles can inspect init state.
-  if (typeof window !== 'undefined') {
-    window.__RCP_DEBUG__ = Object.assign(window.__RCP_DEBUG__ || {}, {
-      whenTemplatesReady,
-      start
-    });
-  }
-
-  console.info('[rcp] waiting for templates');
-  whenTemplatesReady()
-    .then(() => {
-      console.info('[rcp] templates ready, starting app');
-      start();
-    })
-    .catch((err) => console.error('App init failed', err));
-  } catch (err) {
-    console.error('[rcp] init crash', err);
-  }
+  whenTemplatesReady().then(start).catch((err) => console.error('App init failed', err));
 })();

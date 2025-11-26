@@ -407,22 +407,6 @@ function createApi(pool, dialect) {
         CONSTRAINT fk_team_auth_request_user FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
         CONSTRAINT fk_team_auth_request_profile FOREIGN KEY (completed_profile_id) REFERENCES team_auth_profiles(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
-      await exec(`CREATE TABLE IF NOT EXISTS audit_events(
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        team_id INT NULL,
-        server_id INT NULL,
-        source VARCHAR(32) NOT NULL,
-        actor_type VARCHAR(32) NULL,
-        actor_id VARCHAR(191) NULL,
-        actor_name VARCHAR(191) NULL,
-        action VARCHAR(64) NOT NULL,
-        metadata TEXT NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_audit_events_team_created (team_id, created_at),
-        INDEX idx_audit_events_source_created (source, created_at),
-        CONSTRAINT fk_audit_event_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
-        CONSTRAINT fk_audit_event_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`);
       await exec(`CREATE TABLE IF NOT EXISTS team_auth_cookies(
         id INT AUTO_INCREMENT PRIMARY KEY,
         team_id INT NOT NULL,
@@ -1971,74 +1955,6 @@ function createApi(pool, dialect) {
       );
       const rows = await exec('SELECT * FROM discord_tickets WHERE channel_id=?', [channelId]);
       return Array.isArray(rows) ? rows[0] || null : rows || null;
-    },
-    async createAuditEvent(event){
-      if (!event || typeof event !== 'object') return null;
-      const {
-        team_id = null,
-        server_id = null,
-        source,
-        actor_type = null,
-        actor_id = null,
-        actor_name = null,
-        action,
-        metadata = null
-      } = event;
-      if (!source || !action) return null;
-      let metadataJson = null;
-      if (metadata != null) {
-        try {
-          metadataJson = JSON.stringify(metadata);
-        } catch {
-          metadataJson = null;
-        }
-      }
-      const result = await exec(
-        `INSERT INTO audit_events(team_id, server_id, source, actor_type, actor_id, actor_name, action, metadata)
-         VALUES(?,?,?,?,?,?,?,?)`,
-        [
-          Number.isFinite(Number(team_id)) ? Number(team_id) : null,
-          Number.isFinite(Number(server_id)) ? Number(server_id) : null,
-          String(source),
-          actor_type ? String(actor_type) : null,
-          actor_id != null ? String(actor_id) : null,
-          actor_name != null ? String(actor_name) : null,
-          String(action),
-          metadataJson
-        ]
-      );
-      const insertedId = typeof result?.insertId === 'number'
-        ? result.insertId
-        : Array.isArray(result) && typeof result[0]?.insertId === 'number'
-          ? result[0].insertId
-          : null;
-      if (!Number.isFinite(insertedId)) return null;
-      const rows = await exec('SELECT * FROM audit_events WHERE id=?', [insertedId]);
-      return Array.isArray(rows) ? rows[0] || null : rows || null;
-    },
-    async listAuditEventsForTeam(teamId, { limit = 50, search = '', cursor = '' } = {}) {
-      const numericTeamId = Number(teamId);
-      if (!Number.isFinite(numericTeamId)) return { items: [], nextCursor: null };
-      const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
-      const where = ['team_id=?'];
-      const params = [numericTeamId];
-      if (search && typeof search === 'string') {
-        const term = `%${search.trim().replace(/[%_]/g, '\\$&')}%`;
-        where.push('(action LIKE ? OR source LIKE ? OR actor_name LIKE ? OR actor_id LIKE ? OR metadata LIKE ?)');
-        params.push(term, term, term, term, term);
-      }
-      if (cursor) {
-        where.push('id < ?');
-        params.push(Number(cursor));
-      }
-      params.push(safeLimit + 1);
-      const sql = `SELECT * FROM audit_events WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`;
-      const rows = await exec(sql, params);
-      const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
-      const hasMore = list.length > safeLimit;
-      const items = hasMore ? list.slice(0, safeLimit) : list;
-      const nextCursor = hasMore && items.length ? String(items[items.length - 1].id) : null;
-      return { items, nextCursor };
     },
     async replaceDiscordTicketDialogEntries(ticketId, entries = []){
       const numericTicketId = Number(ticketId);

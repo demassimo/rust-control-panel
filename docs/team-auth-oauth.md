@@ -21,9 +21,7 @@ Once those values are in place, restart the backend so it reads the updated conf
    - `DISCORD_OAUTH_CLIENT_ID`
    - `DISCORD_OAUTH_CLIENT_SECRET`
    - `DISCORD_OAUTH_REDIRECT_URI` (optional — defaults to `https://<host>/api/auth/discord/callback` when omitted).【F:backend/src/index.js†L142-L150】【F:backend/src/index.js†L5288-L5292】
-   
-   You can also save these fields from **Discord → Main Bot settings** in the dashboard. Values entered there override the environment defaults for that team without changing stored bot tokens.【F:frontend/templates/discord.html†L20-L80】【F:backend/src/index.js†L7336-L7397】
-5. Restart the backend after saving the environment changes when you rely on environment variables.
+5. Restart the backend after saving the environment changes.
 
 During the linking flow the backend redirects players to Discord with the `identify` scope and validates the callback before storing the Discord snowflake in a signed cookie. If the application cannot reach the Discord API, or if the client ID/secret are missing, the `/api/auth/discord/*` routes short-circuit with `discord_unavailable` errors, so double-check the variables above whenever the flow fails immediately.【F:backend/src/index.js†L6267-L6397】
 
@@ -35,8 +33,7 @@ Steam uses OpenID rather than a traditional OAuth app registration, so you only 
 2. If the backend is running behind a proxy that rewrites scheme or host headers, set:
    - `STEAM_OPENID_RETURN_URL` to the exact callback URL.
    - `STEAM_OPENID_REALM` to the public origin you expect Steam to trust.【F:backend/src/index.js†L151-L156】【F:backend/src/index.js†L5294-L5304】
-3. Optionally store a Steam Web API key under **Discord → Main Bot settings** so the panel can enrich player profiles with playtime and ban data without relying on a global `STEAM_API_KEY`.【F:frontend/templates/discord.html†L49-L74】【F:backend/src/index.js†L3066-L3093】
-4. Restart the backend so the new values take effect when you change the environment.
+3. Restart the backend so the new values take effect.
 
 When a player chooses the Steam option the backend issues an OpenID request, validates the signed response with Steam, and extracts the 64-bit SteamID from `openid.claimed_id`. Any mismatch or verification failure is surfaced back to `/request.html` via `steam_error` codes. If you see `steam_unreachable` errors, verify outbound HTTPS requests to `steamcommunity.com` are allowed from your host.【F:backend/src/index.js†L6400-L6524】
 

@@ -9,122 +9,84 @@
   </div>
   <section id="teamDiscordSection" class="team-section" aria-labelledby="teamDiscordTitle">
     <div class="team-section-head">
-      <h4 id="teamDiscordTitle">Main Bot settings</h4>
-      <p class="muted small">Store the Main Bot token and guild ID used by tickets, lookup tools, and other global automation.</p>
+      <h4 id="teamDiscordTitle">Discord integration</h4>
+      <p class="muted small">Configure the Main Bot, authentication rules, ticketing, and command permissions without endless scrolling.</p>
     </div>
-    <div class="discord-settings-grid">
-      <div class="discord-card-grid">
-        <form id="teamDiscordForm" class="team-discord-form discord-card" autocomplete="off">
-          <span class="discord-chip" aria-hidden="true">Main Bot</span>
-          <h5>Connect guild and bot token</h5>
-          <label for="teamDiscordGuildId">Guild ID
-            <input
-              type="text"
-              id="teamDiscordGuildId"
-              name="teamDiscordGuildId"
-              inputmode="numeric"
-              autocomplete="off"
-              autocapitalize="none"
-              spellcheck="false"
-              placeholder="Enter Discord guild ID"
-            />
-          </label>
-          <label for="teamDiscordToken">Bot token
-            <input
-              type="password"
-              id="teamDiscordToken"
-              name="teamDiscordToken"
-              autocomplete="new-password"
-              autocapitalize="none"
-              spellcheck="false"
-              placeholder="Paste Discord bot token"
-            />
-          </label>
-          <div class="row">
-            <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
-            <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
-          </div>
-          <p id="teamDiscordStatus" class="notice hidden"></p>
-        </form>
-        <aside class="discord-card discord-summary-card small" aria-labelledby="teamDiscordSummaryTitle">
-          <div class="discord-chip" aria-hidden="true">Overview</div>
-          <h5 id="teamDiscordSummaryTitle">Current link</h5>
-          <dl id="teamDiscordSummary" class="discord-summary-list">
-            <div>
-              <dt>Guild ID</dt>
-              <dd id="teamDiscordSummaryGuild">Not set</dd>
+    <div class="discord-tab-nav" role="tablist" aria-label="Discord settings tabs">
+      <button type="button" class="discord-tab-button active" data-discord-tab="overview" aria-controls="discordTabOverview" aria-selected="true" role="tab">Overview</button>
+      <button type="button" class="discord-tab-button" data-discord-tab="auth" aria-controls="discordTabAuth" aria-selected="false" role="tab">Authentication</button>
+      <button type="button" class="discord-tab-button" data-discord-tab="ticket" aria-controls="discordTabTicket" aria-selected="false" role="tab">Ticketing</button>
+      <button type="button" class="discord-tab-button" data-discord-tab="monitoring" aria-controls="discordTabMonitoring" aria-selected="false" role="tab">Status &amp; Lookup</button>
+    </div>
+    <div class="discord-tab-panels">
+      <div class="discord-tab-panel active" id="discordTabOverview" data-discord-panel="overview" role="tabpanel" aria-labelledby="teamDiscordTitle">
+    <div class="discord-card-grid discord-card-grid--even">
+      <form id="teamDiscordForm" class="team-discord-form discord-card" autocomplete="off">
+        <span class="discord-chip" aria-hidden="true">Main Bot</span>
+        <h5>Connect guild and bot token</h5>
+            <label for="teamDiscordGuildId">Guild ID
+              <input
+                type="text"
+                id="teamDiscordGuildId"
+                name="teamDiscordGuildId"
+                inputmode="numeric"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                placeholder="Enter Discord guild ID"
+              />
+            </label>
+            <label for="teamDiscordToken">Bot token
+              <input
+                type="password"
+                id="teamDiscordToken"
+                name="teamDiscordToken"
+                autocomplete="new-password"
+                autocapitalize="none"
+                spellcheck="false"
+                placeholder="Paste Discord bot token"
+              />
+            </label>
+            <div class="row">
+              <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
+              <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
             </div>
-            <div>
-              <dt>Bot token</dt>
-              <dd id="teamDiscordSummaryToken">Not linked</dd>
-            </div>
-          </dl>
-          <p id="teamDiscordHelp" class="muted small">
-            The stored token stays hidden. Paste a new value to replace the existing one.
-          </p>
-          <p class="muted small">
-            Each workspace has its own Server Bot token and guild ID for appearance and embed styling. You can only edit this workspace's bot configuration.
-          </p>
-        </aside>
-      </div>
-      <form id="teamOAuthForm" class="team-discord-form discord-card" autocomplete="off">
-        <span class="discord-chip" aria-hidden="true">OAuth</span>
-        <h5>Discord &amp; Steam OAuth</h5>
-        <p class="muted small">Set the credentials used for Discord login and Steam lookups during authentication.</p>
-        <label for="teamDiscordOauthClientId">Discord OAuth client ID
-          <input
-            type="text"
-            id="teamDiscordOauthClientId"
-            name="teamDiscordOauthClientId"
-            inputmode="numeric"
-            autocomplete="off"
-            autocapitalize="none"
-            spellcheck="false"
-            placeholder="Enter Discord OAuth client ID"
-          />
-        </label>
-        <label for="teamDiscordOauthClientSecret">Discord OAuth client secret
-          <input
-            type="password"
-            id="teamDiscordOauthClientSecret"
-            name="teamDiscordOauthClientSecret"
-            autocomplete="new-password"
-            autocapitalize="none"
-            spellcheck="false"
-            placeholder="Paste Discord OAuth client secret"
-          />
-        </label>
-        <label for="teamDiscordOauthRedirectUri">Discord redirect URI
-          <input
-            type="url"
-            id="teamDiscordOauthRedirectUri"
-            name="teamDiscordOauthRedirectUri"
-            autocomplete="off"
-            autocapitalize="none"
-            spellcheck="false"
-            placeholder="Optional: override the default redirect"
-          />
-        </label>
-        <label for="teamSteamApiKey">Steam Web API key
-          <input
-            type="password"
-            id="teamSteamApiKey"
-            name="teamSteamApiKey"
-            autocomplete="new-password"
-            autocapitalize="none"
-            spellcheck="false"
-            placeholder="Optional: Steam API key for profile lookups"
-          />
-        </label>
-        <div class="row">
-          <button type="submit" class="accent" id="btnSaveTeamOAuth">Save OAuth settings</button>
-          <button type="button" class="ghost" id="btnClearTeamOAuth">Clear stored values</button>
+        <div class="row wrap">
+          <button type="button" class="ghost" id="btnRefreshTeamDiscordChannelsOverview">Refresh channels</button>
+          <button type="button" class="ghost" id="btnRefreshTeamDiscordRolesOverview">Refresh roles</button>
+          <button type="button" class="ghost" id="btnRefreshTeamDiscordCategoriesOverview">Refresh categories</button>
         </div>
-        <p id="teamOAuthStatus" class="notice hidden"></p>
+        <p id="teamDiscordStatus" class="notice hidden"></p>
       </form>
-    </div>
-    <div class="discord-layout-grid">
-      <section id="teamAuthSection" class="team-discord-auth discord-card discord-section-card">
+          <aside class="discord-card discord-summary-card small" aria-labelledby="teamDiscordSummaryTitle">
+            <div class="discord-chip" aria-hidden="true">Overview</div>
+            <h5 id="teamDiscordSummaryTitle">Current link</h5>
+            <dl id="teamDiscordSummary" class="discord-summary-list">
+              <div>
+                <dt>Guild ID</dt>
+                <dd id="teamDiscordSummaryGuild">Not set</dd>
+              </div>
+              <div>
+                <dt>Bot token</dt>
+                <dd id="teamDiscordSummaryToken">Not linked</dd>
+              </div>
+            </dl>
+            <p id="teamDiscordHelp" class="muted small">
+              The stored token stays hidden. Paste a new value to replace the existing one.
+            </p>
+            <p class="muted small">
+              Each workspace has its own Server Bot token and guild ID for appearance and embed styling. You can only edit this workspace's bot configuration.
+            </p>
+          </aside>
+        </div>
+      </div>
+      <section
+        id="teamAuthSection"
+        class="team-discord-auth discord-card discord-section-card discord-tab-panel"
+        data-discord-panel="auth"
+        role="tabpanel"
+        aria-labelledby="teamAuthTitle"
+      >
         <div class="discord-card-header">
           <div>
             <span class="discord-chip" aria-hidden="true">Auth &amp; roles</span>
@@ -143,43 +105,54 @@
           </label>
           <div class="discord-field-grid">
             <label for="teamAuthRole">Auto-assign role ID
-          <div class="input-combo">
-            <select id="teamAuthRoleSelect" class="input-combo-select">
-              <option value="">Select a role</option>
-            </select>
-            <input
-              id="teamAuthRole"
-              type="text"
-              inputmode="numeric"
-              autocomplete="off"
-              placeholder="Choose from the menu or paste an ID"
-            />
-          </div>
+                <div class="input-combo">
+                  <select id="teamAuthRoleSelect" class="input-combo-select">
+                    <option value="">Select a role</option>
+                  </select>
+                  <input
+                    id="teamAuthRole"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    placeholder="Optional: paste a Discord role ID"
+                  />
+                </div>
               <small class="muted">Pick a Discord role from the dropdown or paste an ID manually.</small>
             </label>
             <label for="teamAuthLogChannel">Log channel ID
-              <div class="input-combo">
-                <select id="teamAuthLogChannelSelect" class="input-combo-select">
-                  <option value="">Select a channel</option>
-                </select>
-                <input
-                  id="teamAuthLogChannel"
-                  type="text"
-                  inputmode="numeric"
-                  autocomplete="off"
-                  placeholder="Optional: choose a channel or paste an ID"
-                />
-              </div>
+                <div class="input-combo">
+                  <select id="teamAuthLogChannelSelect" class="input-combo-select">
+                    <option value="">Select a channel</option>
+                  </select>
+                  <input
+                    id="teamAuthLogChannel"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    placeholder="Optional: paste a Discord channel ID"
+                  />
+                </div>
               </label>
           </div>
           <p class="muted small">When set, completed links are announced in the selected Discord channel.</p>
           <div class="row">
             <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
           </div>
+          <div class="discord-section-note">
+            <h5>Authentication command access</h5>
+            <p class="muted small">Keep sensitive /auth subcommands limited to trusted roles.</p>
+          </div>
+        <div class="discord-command-entry-list two-column" data-command-list="auth"></div>
           <p id="teamAuthStatus" class="notice hidden"></p>
         </form>
       </section>
-      <section id="teamTicketingSection" class="team-discord-auth discord-card discord-section-card">
+      <section
+        id="teamTicketingSection"
+        class="team-discord-auth discord-card discord-section-card discord-tab-panel"
+        data-discord-panel="ticket"
+        role="tabpanel"
+        aria-labelledby="teamTicketingMeta"
+      >
         <div class="discord-card-header">
           <div>
             <span class="discord-chip" aria-hidden="true">Tickets</span>
@@ -191,48 +164,29 @@
             <span class="meta-value" id="teamTicketingMeta">Workspace</span>
           </div>
         </div>
-        <div class="discord-ticketing-columns">
-          <div class="discord-config">
-            <h4 class="discord-section-title">Current ticketing setup</h4>
-            <dl class="discord-config-list">
-              <div>
-                <dt>Status</dt>
-                <dd id="discord-ticketing-summary-status">—</dd>
-              </div>
-              <div>
-                <dt>Ticket category</dt>
-                <dd id="discord-ticketing-summary-category">—</dd>
-              </div>
-              <div>
-                <dt>Log channel</dt>
-                <dd id="discord-ticketing-summary-log">—</dd>
-              </div>
-              <div>
-                <dt>Staff role</dt>
-                <dd id="discord-ticketing-summary-role">—</dd>
-              </div>
-            </dl>
-            <h5 class="discord-config-title">Slash command roles</h5>
-            <dl class="discord-config-list">
-              <div>
-                <dt>/status</dt>
-                <dd id="team-command-summary-status">Everyone</dd>
-              </div>
-              <div>
-                <dt>/ticket</dt>
-                <dd id="team-command-summary-ticket">Everyone</dd>
-              </div>
-              <div>
-                <dt>/rustlookup</dt>
-                <dd id="team-command-summary-lookup">Everyone</dd>
-              </div>
-              <div>
-                <dt>/auth</dt>
-                <dd id="team-command-summary-auth">Everyone</dd>
-              </div>
-            </dl>
+        <div class="discord-section-note">
+          <h5>Current ticketing setup</h5>
+          <p class="muted small">Review the live configuration before making changes.</p>
+        </div>
+        <div class="discord-summary-banner">
+          <div>
+            <p class="muted tiny">Status</p>
+            <p class="summary-value" id="discord-ticketing-summary-status">—</p>
           </div>
-          <form id="teamTicketingForm" class="team-discord-form" autocomplete="off">
+          <div>
+            <p class="muted tiny">Ticket category</p>
+            <p class="summary-value" id="discord-ticketing-summary-category">—</p>
+          </div>
+          <div>
+            <p class="muted tiny">Log channel</p>
+            <p class="summary-value" id="discord-ticketing-summary-log">—</p>
+          </div>
+          <div>
+            <p class="muted tiny">Staff role</p>
+            <p class="summary-value" id="discord-ticketing-summary-role">—</p>
+          </div>
+        </div>
+        <form id="teamTicketingForm" class="team-discord-form" autocomplete="off">
             <label class="checkbox">
               <input type="checkbox" id="discord-ticketing-enabled" />
               <span>Enable ticketing on the Main Bot</span>
@@ -248,7 +202,7 @@
                     type="text"
                     inputmode="numeric"
                     autocomplete="off"
-                    placeholder="Pick a category or paste an ID"
+                    placeholder="Optional: paste a category ID"
                   />
                 </div>
               </label>
@@ -262,7 +216,7 @@
                     type="text"
                     inputmode="numeric"
                     autocomplete="off"
-                    placeholder="Optional: choose a channel or paste an ID"
+                    placeholder="Optional: paste a channel ID"
                   />
                 </div>
               </label>
@@ -278,7 +232,7 @@
                     type="text"
                     inputmode="numeric"
                     autocomplete="off"
-                    placeholder="Choose a role or paste an ID"
+                    placeholder="Optional: paste a role ID"
                   />
                 </div>
               </label>
@@ -298,7 +252,7 @@
                     type="text"
                     inputmode="numeric"
                     autocomplete="off"
-                    placeholder="Channel containing the ticket panel"
+                    placeholder="Optional: paste a panel channel ID"
                   />
                 </div>
               </label>
@@ -312,76 +266,56 @@
                 />
               </label>
             </div>
-            <fieldset class="role-fieldset">
-              <legend>Slash command roles</legend>
-              <p class="muted small">Limit who can run the Main Bot's commands. Select one or more roles per command; leave empty to allow everyone.</p>
-              <div class="discord-command-grid">
-                <div class="command-role" data-command="status">
-                  <div class="command-role-label">
-                    <span class="command-role-title">/status roles</span>
-                    <small class="muted">Everyone if empty</small>
-                  </div>
-              <div class="input-combo">
-                <select id="team-command-status-role-select" class="input-combo-select command-role-select" multiple>
-                  <option value="">Select one or more roles</option>
-                </select>
-              </div>
-                </div>
-                <div class="command-role" data-command="ticket">
-                  <div class="command-role-label">
-                    <span class="command-role-title">/ticket roles</span>
-                    <small class="muted">Everyone if empty</small>
-                  </div>
-              <div class="input-combo">
-                <select id="team-command-ticket-role-select" class="input-combo-select command-role-select" multiple>
-                  <option value="">Select one or more roles</option>
-                </select>
-              </div>
-                </div>
-                <div class="command-role" data-command="rustlookup">
-                  <div class="command-role-label">
-                    <span class="command-role-title">/rustlookup roles</span>
-                    <small class="muted">Everyone if empty</small>
-                  </div>
-              <div class="input-combo">
-                <select id="team-command-lookup-role-select" class="input-combo-select command-role-select" multiple>
-                  <option value="">Select one or more roles</option>
-                </select>
-              </div>
-                </div>
-                <div class="command-role" data-command="auth">
-                  <div class="command-role-label">
-                    <span class="command-role-title">/auth roles</span>
-                    <small class="muted">Everyone if empty</small>
-                  </div>
-              <div class="input-combo">
-                <select id="team-command-auth-role-select" class="input-combo-select command-role-select" multiple>
-                  <option value="">Select one or more roles</option>
-                </select>
-              </div>
-                </div>
-              </div>
-              <div class="row space-between align-center">
-                <p id="teamCommandRolesStatus" class="notice hidden"></p>
-                <button type="button" id="team-command-refresh-roles" class="ghost">Refresh Discord roles</button>
-              </div>
-            </fieldset>
-            <div class="row space-between align-center">
-              <p id="teamDiscordChannelsStatus" class="notice hidden"></p>
-              <button type="button" id="team-discord-refresh-channels" class="ghost">Refresh Discord channels</button>
-            </div>
+            <p id="teamDiscordChannelsStatus" class="notice hidden centered-notice"></p>
             <div class="row">
               <button type="submit" class="accent">Save ticketing settings</button>
             </div>
             <p id="teamTicketingStatus" class="notice hidden"></p>
-          </form>
+        <div class="discord-section-note">
+          <h5>Ticket command access</h5>
+          <p class="muted small">Assign roles to each /ticket subcommand or leave blank to allow everyone.</p>
+        </div>
+        <div class="discord-command-entry-list two-column" data-command-list="ticket"></div>
+        <p id="teamCommandRolesStatus" class="notice hidden centered-notice"></p>
+        </form>
+      </section>
+      <section
+        id="discordTabMonitoring"
+        class="team-discord-auth discord-card discord-section-card discord-tab-panel"
+        data-discord-panel="monitoring"
+        role="tabpanel"
+        aria-labelledby="discordCommandHeading"
+      >
+        <div class="discord-card-header">
+          <div>
+            <span class="discord-chip" aria-hidden="true">Monitoring</span>
+            <h4 id="discordCommandHeading">Monitoring &amp; lookup commands</h4>
+            <p class="muted small">Control who can run the Server Status and Player Lookup slash commands.</p>
+          </div>
+        </div>
+        <div class="discord-command-mod-panels">
+          <article class="discord-command-card" aria-labelledby="discord-status-module-title">
+            <div class="discord-command-card-head">
+              <div>
+                <span class="discord-chip" aria-hidden="true">Commands</span>
+                <h6 id="discord-status-module-title">Server status</h6>
+                <p class="muted tiny">/ruststatus family</p>
+              </div>
+            </div>
+            <div class="discord-command-entry-list two-column" data-command-list="ruststatus"></div>
+          </article>
+          <article class="discord-command-card" aria-labelledby="discord-lookup-module-title">
+            <div class="discord-command-card-head">
+              <div>
+                <span class="discord-chip" aria-hidden="true">Commands</span>
+                <h6 id="discord-lookup-module-title">Player lookup</h6>
+                <p class="muted tiny">/rustlookup family</p>
+              </div>
+            </div>
+            <div class="discord-command-entry-list two-column" data-command-list="rustlookup"></div>
+          </article>
         </div>
       </section>
     </div>
   </section>
-
   </section>
-
-  <datalist id="discord-category-options"></datalist>
-  <datalist id="discord-channel-options"></datalist>
-  <datalist id="discord-role-options"></datalist>

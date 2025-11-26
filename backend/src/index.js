@@ -20,7 +20,6 @@ import {
   verifyRegistrationResponse
 } from '@simplewebauthn/server';
 import { db, initDb } from './db/index.js';
-import { recordAuditEvent } from './audit-log.js';
 import { authMiddleware, signToken, requireAdmin } from './auth.js';
 // index.js
 import {
@@ -66,7 +65,6 @@ import {
   filterStatusMapByPermission,
   describeRoleTemplates
 } from './permissions.js';
-import { createAuditRouter } from './audit-routes.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -284,7 +282,7 @@ const PASSKEY_RP_ID = CONFIGURED_PASSKEY_RP_ID || (() => {
 })();
 const CONFIGURED_PASSKEY_ORIGIN = process.env.PASSKEY_ORIGIN || null;
 const PASSKEY_ORIGIN = CONFIGURED_PASSKEY_ORIGIN || DEFAULT_PANEL_ORIGIN;
-const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Control Panel Dashboard';
+const PASSKEY_RP_NAME = process.env.PASSKEY_RP_NAME || 'Rust Admin Dashboard';
 
 const TRUST_PROXY = (() => {
   const raw = typeof process.env.TRUST_PROXY === 'string' ? process.env.TRUST_PROXY.trim().toLowerCase() : '';
@@ -3064,11 +3062,10 @@ async function fetchRustPlaytimeMinutes(steamid, key) {
   return Number.isFinite(minutes) ? minutes : null;
 }
 
-async function resolveSteamProfiles(steamids, { steamApiKey = null } = {}) {
+async function resolveSteamProfiles(steamids) {
   const ids = [...new Set((steamids || []).map((id) => String(id || '').trim()).filter(Boolean))];
   const profileMap = new Map();
   if (ids.length === 0) return profileMap;
-  const apiKey = sanitizeDiscordToken(steamApiKey, 120) || process.env.STEAM_API_KEY || '';
   if (typeof db.getPlayersBySteamIds === 'function') {
     try {
       const rows = await db.getPlayersBySteamIds(ids);
@@ -3095,9 +3092,9 @@ async function resolveSteamProfiles(steamids, { steamApiKey = null } = {}) {
       profileMap.set(steamid, existing);
     }
   }
-  if (toFetch.length > 0 && apiKey) {
+  if (toFetch.length > 0 && process.env.STEAM_API_KEY) {
     try {
-      const fetched = await fetchSteamProfiles(toFetch, apiKey, { includePlaytime: true });
+      const fetched = await fetchSteamProfiles(toFetch, process.env.STEAM_API_KEY, { includePlaytime: true });
       const nowIso = new Date().toISOString();
       await Promise.all(fetched.map(async (profile) => {
         const normalized = {
@@ -4778,11 +4775,11 @@ async function maybeRefreshTeamInfoFromMonitor(serverId, players) {
   return result.players;
 }
 
-async function enrichLivePlayers(players, { steamApiKey = null } = {}) {
+async function enrichLivePlayers(players) {
   if (!Array.isArray(players) || players.length === 0) return [];
   try {
     const steamIds = players.map((p) => p?.steamId || '').filter(Boolean);
-    const profiles = await resolveSteamProfiles(steamIds, { steamApiKey });
+    const profiles = await resolveSteamProfiles(steamIds);
     return players.map((player) => {
       const endpoint = extractEndpoint(player.address);
       const profile = profiles.get(player.steamId) || null;
@@ -4866,10 +4863,8 @@ async function processMonitorPlayerListSnapshot(serverId, message) {
   try {
     let players = parsePlayerListMessage(message);
     if (!Array.isArray(players) || players.length === 0) return;
-    const serverRow = await getMonitoredServerRow(serverId);
-    const steamApiKey = await resolveTeamSteamApiKey(serverRow?.team_id ?? serverRow?.teamId);
     players = await maybeRefreshTeamInfoFromMonitor(serverId, players);
-    players = await enrichLivePlayers(players, { steamApiKey });
+    players = await enrichLivePlayers(players);
     await syncServerPlayerDirectory(serverId, players);
   } catch (err) {
     console.warn('Failed to process monitored player list', err);
@@ -5282,57 +5277,12 @@ function previewDiscordToken(token) {
   return `••••${text.slice(-4)}`;
 }
 
-function sanitizeUrlOverride(value, maxLength = 800) {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (!trimmed.match(/^https?:\/\//i)) return null;
-  if (!Number.isFinite(maxLength) || maxLength <= 0) return trimmed;
-  return trimmed.slice(0, maxLength);
-}
-
 function sanitizeDiscordSnowflake(value, maxLength = 64) {
   if (value == null) return '';
   const digits = String(value).replace(/[^0-9]/g, '');
   if (!digits) return '';
   if (!Number.isFinite(maxLength) || maxLength <= 0) return digits;
   return digits.slice(0, maxLength);
-}
-
-async function loadTeamDiscordConfig(teamId) {
-  const numeric = Number(teamId);
-  if (!Number.isFinite(numeric) || typeof db.getTeamDiscordSettings !== 'function') {
-    return DEFAULT_TEAM_DISCORD_CONFIG;
-  }
-  try {
-    const settings = await db.getTeamDiscordSettings(numeric);
-    return parseTeamDiscordConfig(settings?.config ?? null);
-  } catch (err) {
-    console.warn('failed to load team discord config', err);
-    return DEFAULT_TEAM_DISCORD_CONFIG;
-  }
-}
-
-function buildDiscordOAuthSettings(req, teamConfig = DEFAULT_TEAM_DISCORD_CONFIG) {
-  const discordOauth = teamConfig?.oauth?.discord || {};
-  const clientId = sanitizeDiscordSnowflake(discordOauth.clientId) || DISCORD_OAUTH_CLIENT_ID;
-  const clientSecret = sanitizeDiscordToken(discordOauth.clientSecret, 400) || DISCORD_OAUTH_CLIENT_SECRET;
-  const redirectUri = resolveDiscordRedirectUri(req, discordOauth.redirectUri);
-  return { clientId, clientSecret, redirectUri };
-}
-
-function buildSteamOAuthSettings(req, teamConfig = DEFAULT_TEAM_DISCORD_CONFIG) {
-  const steamOauth = teamConfig?.oauth?.steam || {};
-  const apiKey = sanitizeDiscordToken(steamOauth.apiKey, 120) || process.env.STEAM_API_KEY || '';
-  const realm = resolveSteamRealm(req, steamOauth.realm);
-  const returnUrl = resolveSteamReturnUrl(req, steamOauth.returnUrl);
-  return { apiKey, realm, returnUrl };
-}
-
-async function resolveTeamSteamApiKey(teamId) {
-  const config = await loadTeamDiscordConfig(teamId);
-  const apiKey = sanitizeDiscordToken(config?.oauth?.steam?.apiKey, 120) || process.env.STEAM_API_KEY || '';
-  return apiKey;
 }
 
 function projectDiscordRole(role) {
@@ -5614,29 +5564,23 @@ function buildTeamAuthReturnUrl(token, extraParams = {}) {
   return `${link}${connector}${params.toString()}`;
 }
 
-function resolveDiscordRedirectUri(req, override) {
-  const overrideUri = sanitizeUrlOverride(override, 800);
-  if (overrideUri) return overrideUri;
+function resolveDiscordRedirectUri(req) {
   if (DISCORD_OAUTH_REDIRECT_URI) return DISCORD_OAUTH_REDIRECT_URI;
   const origin = `${req.protocol}://${req.get('host')}`;
   return `${origin}/api/auth/discord/callback`;
 }
 
-function resolveTicketDiscordRedirectUri(req, override) {
-  return resolveDiscordRedirectUri(req, override);
+function resolveTicketDiscordRedirectUri(req) {
+  return resolveDiscordRedirectUri(req);
 }
 
-function resolveSteamReturnUrl(req, override) {
-  const overrideUrl = sanitizeUrlOverride(override, 800);
-  if (overrideUrl) return overrideUrl;
+function resolveSteamReturnUrl(req) {
   if (STEAM_OPENID_RETURN_URL) return STEAM_OPENID_RETURN_URL;
   const origin = `${req.protocol}://${req.get('host')}`;
   return `${origin}/api/auth/steam/callback`;
 }
 
-function resolveSteamRealm(req, override) {
-  const overrideRealm = sanitizeUrlOverride(override, 800);
-  if (overrideRealm) return overrideRealm;
+function resolveSteamRealm(req) {
   if (STEAM_OPENID_REALM) return STEAM_OPENID_REALM;
   const origin = `${req.protocol}://${req.get('host')}`;
   return origin;
@@ -6512,47 +6456,12 @@ app.get('/api/public-config', (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
   const userName = normalizeUsername(username);
-  if (!userName || !password) {
-    console.warn('login attempt missing fields', { username: userName || '(empty)' });
-    return res.status(400).json({ error: 'missing_fields' });
-  }
+  if (!userName || !password) return res.status(400).json({ error: 'missing_fields' });
   try {
-    const row = await findUserCaseInsensitive(userName);
-    if (!row) {
-      console.warn('login failed: user not found', { username: userName });
-      recordAuditEvent({
-        team_id: null,
-        server_id: null,
-        source: 'panel',
-        actor_type: 'panel_user',
-        actor_id: null,
-        actor_name: userName,
-        action: 'auth.login_failed',
-        metadata: {
-          reason: 'user_not_found',
-          ip: req.ip || null
-        }
-      }).catch(() => {});
-      return res.status(401).json({ error: 'invalid_login' });
-    }
+    const row = await db.getUserByUsername(userName);
+    if (!row) return res.status(401).json({ error: 'invalid_login' });
     const ok = await bcrypt.compare(password, row.password_hash);
-    if (!ok) {
-      console.warn('login failed: invalid password', { username: userName, userId: row.id });
-      recordAuditEvent({
-        team_id: null,
-        server_id: null,
-        source: 'panel',
-        actor_type: 'panel_user',
-        actor_id: row.id,
-        actor_name: userName,
-        action: 'auth.login_failed',
-        metadata: {
-          reason: 'invalid_password',
-          ip: req.ip || null
-        }
-      }).catch(() => {});
-      return res.status(401).json({ error: 'invalid_login' });
-    }
+    if (!ok) return res.status(401).json({ error: 'invalid_login' });
     const hasTotp = Boolean(row.mfa_enabled && row.mfa_secret);
     const passkeyCount = typeof db.countUserPasskeys === 'function'
       ? await db.countUserPasskeys(row.id)
@@ -6560,12 +6469,6 @@ app.post('/api/login', async (req, res) => {
     const requiresMfa = hasTotp || passkeyCount > 0;
     if (requiresMfa) {
       const ticket = createMfaTicket(row.id);
-      console.info('login requires mfa', {
-        username: userName,
-        userId: row.id,
-        hasTotp,
-        passkeyCount
-      });
       let passkeyOptions = null;
       if (passkeyCount > 0) {
         try {
@@ -6583,56 +6486,11 @@ app.post('/api/login', async (req, res) => {
       });
     }
     const payload = await buildAuthPayload(row);
-    console.info('login successful', { username: userName, userId: row.id });
-    recordAuditEvent({
-      team_id: payload.activeTeamId ?? null,
-      server_id: null,
-      source: 'panel',
-      actor_type: 'panel_user',
-      actor_id: row.id,
-      actor_name: userName,
-      action: 'auth.login_success',
-      metadata: {
-        ip: req.ip || null,
-        activeTeamId: payload.activeTeamId ?? null
-      }
-    }).catch(() => {});
     res.json(payload);
   } catch (e) {
-    console.error('login error', { username: userName, error: e });
     res.status(500).json({ error: 'db_error' });
   }
 });
-
-app.use(async (req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    if (!req.authUser) return;
-    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
-    if (res.statusCode < 200 || res.statusCode >= 400) return;
-    const path = req.path || req.originalUrl || '';
-    if (path === '/api/login') return;
-    recordAuditEvent({
-      team_id: req.authUser.activeTeamId ?? null,
-      server_id: null,
-      source: 'panel',
-      actor_type: 'panel_user',
-      actor_id: req.authUser.id,
-      actor_name: req.authUser.username ?? null,
-      action: 'api.request',
-      metadata: {
-        method: req.method,
-        path,
-        status: res.statusCode,
-        durationMs: Date.now() - start
-      }
-    }).catch(() => {});
-  });
-  next();
-});
-
-app.locals.db = db;
-app.use('/api/audit', auth, createAuditRouter());
 
 app.post('/api/login/mfa/totp', async (req, res) => {
   const { ticket, code } = req.body || {};
@@ -6936,17 +6794,6 @@ app.post('/api/me/passkeys/register', auth, async (req, res) => {
     });
     if (!verification.verified) return res.status(400).json({ error: 'invalid_passkey' });
     const info = verification.registrationInfo;
-    const missingFields = [];
-    if (!info?.credentialID) missingFields.push('credentialID');
-    if (!info?.credentialPublicKey) missingFields.push('credentialPublicKey');
-    if (missingFields.length > 0) {
-      console.warn('passkey registration missing credentials', {
-        userId: req.user?.uid,
-        missing: missingFields
-      });
-      passkeyRegistrationChallenges.delete(req.user.uid);
-      return res.status(400).json({ error: 'invalid_passkey', reason: 'missing_credentials' });
-    }
     await db.addUserPasskey({
       userId: req.user.uid,
       credentialId: encodeBase64Url(info.credentialID),
@@ -7106,19 +6953,15 @@ app.post('/api/team/discord', auth, async (req, res) => {
       : { config: DEFAULT_TEAM_DISCORD_CONFIG };
     const currentConfig = parseTeamDiscordConfig(existingSettings?.config ?? null);
     const nextConfig = normaliseTeamDiscordConfig({ ...currentConfig, ...incomingConfig });
-    const hadStoredToken = Boolean(existingSettings?.hasToken);
-    const finalToken = token || (hadStoredToken ? sanitizeDiscordToken(existingSettings.token) : null);
+    const finalToken = token || (existingSettings?.hasToken ? sanitizeDiscordToken(existingSettings.token) : null);
     const finalGuildId = guildId || (existingSettings?.guildId ? String(existingSettings.guildId) : null);
-    const wantsTokenUpdate = token != null || guildId != null;
-    if (hadStoredToken || wantsTokenUpdate) {
-      if (!finalToken) return res.status(400).json({ error: 'missing_token' });
-      if (!finalGuildId) return res.status(400).json({ error: 'missing_guild_id' });
-      await db.setTeamDiscordToken(teamId, finalToken, finalGuildId);
-    }
+    if (!finalToken) return res.status(400).json({ error: 'missing_token' });
+    if (!finalGuildId) return res.status(400).json({ error: 'missing_guild_id' });
+    await db.setTeamDiscordToken(teamId, finalToken, finalGuildId);
     if (typeof db.setTeamDiscordConfig === 'function') {
       await db.setTeamDiscordConfig(teamId, nextConfig);
     }
-    let hasToken = hadStoredToken || wantsTokenUpdate;
+    let hasToken = true;
     let responseGuildId = finalGuildId || null;
     let responseTokenPreview = finalToken ? previewDiscordToken(finalToken) : null;
     let responseConfig = nextConfig;
@@ -7494,6 +7337,9 @@ app.get('/api/team/auth/profiles', auth, async (req, res) => {
 app.get('/api/auth/discord/redirect', async (req, res) => {
   const requestToken = typeof req.query.token === 'string' ? req.query.token.trim() : '';
   const fallbackLink = buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'invalid_token' });
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'discord_unavailable' }));
+  }
   if (typeof db.getTeamAuthRequestByToken !== 'function') {
     return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'not_supported' }));
   }
@@ -7508,11 +7354,6 @@ app.get('/api/auth/discord/redirect', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'expired' }));
     }
-    const teamConfig = await loadTeamDiscordConfig(record.team_id ?? record.teamId);
-    const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
-    if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
-      return res.redirect(buildTeamAuthReturnUrl(requestToken || '', { discord_error: 'discord_unavailable' }));
-    }
     const cookieJar = parseCookies(req.headers.cookie || '');
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const stateToken = encodeSignedPayload({
@@ -7524,9 +7365,10 @@ app.get('/api/auth/discord/redirect', async (req, res) => {
     if (!stateToken) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { discord_error: 'state_error' }));
     }
+    const redirectUri = resolveDiscordRedirectUri(req);
     const authorizeUrl = new URL('https://discord.com/api/oauth2/authorize');
-    authorizeUrl.searchParams.set('client_id', discordOAuth.clientId);
-    authorizeUrl.searchParams.set('redirect_uri', discordOAuth.redirectUri);
+    authorizeUrl.searchParams.set('client_id', DISCORD_OAUTH_CLIENT_ID);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('scope', 'identify');
     authorizeUrl.searchParams.set('state', stateToken);
@@ -7548,6 +7390,10 @@ async function handleTicketDiscordCallback(req, res, statePayload, code) {
     res.redirect(fallback);
     return true;
   }
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'discord_unavailable' }) || fallback);
+    return true;
+  }
   if (!code) {
     res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'authorization_failed' }) || fallback);
     return true;
@@ -7563,16 +7409,10 @@ async function handleTicketDiscordCallback(req, res, statePayload, code) {
     res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'ticket_open' }) || fallback);
     return true;
   }
-  const teamConfig = await loadTeamDiscordConfig(teamId);
-  const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
-  if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
-    res.redirect(buildTicketPreviewReturn(teamId, ticketToken, { discord_error: 'discord_unavailable' }) || fallback);
-    return true;
-  }
-  const redirectUri = resolveTicketDiscordRedirectUri(req, discordOAuth.redirectUri);
+  const redirectUri = resolveTicketDiscordRedirectUri(req);
   const body = new URLSearchParams();
-  body.set('client_id', discordOAuth.clientId);
-  body.set('client_secret', discordOAuth.clientSecret);
+  body.set('client_id', DISCORD_OAUTH_CLIENT_ID);
+  body.set('client_secret', DISCORD_OAUTH_CLIENT_SECRET);
   body.set('grant_type', 'authorization_code');
   body.set('code', String(code));
   body.set('redirect_uri', redirectUri);
@@ -7646,6 +7486,9 @@ app.get('/api/auth/discord/callback', async (req, res) => {
   if (!requestToken) {
     return res.redirect(buildTeamAuthReturnUrl('', { discord_error: 'state_invalid' }));
   }
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unavailable' }));
+  }
   if (!code) {
     return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'authorization_failed' }));
   }
@@ -7660,21 +7503,16 @@ app.get('/api/auth/discord/callback', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'expired' }));
     }
-    const teamConfig = await loadTeamDiscordConfig(record.team_id ?? record.teamId);
-    const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
-    if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
-      return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'discord_unavailable' }));
-    }
     const cookieJar = parseCookies(req.headers.cookie || '');
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const expectedCookie = sanitizeCookieId(statePayload.cookieId || null);
     if (expectedCookie && cookieId && expectedCookie !== cookieId) {
       return res.redirect(buildTeamAuthReturnUrl(requestToken, { discord_error: 'session_mismatch' }));
     }
-    const redirectUri = resolveDiscordRedirectUri(req, discordOAuth.redirectUri);
+    const redirectUri = resolveDiscordRedirectUri(req);
     const body = new URLSearchParams();
-    body.set('client_id', discordOAuth.clientId);
-    body.set('client_secret', discordOAuth.clientSecret);
+    body.set('client_id', DISCORD_OAUTH_CLIENT_ID);
+    body.set('client_secret', DISCORD_OAUTH_CLIENT_SECRET);
     body.set('grant_type', 'authorization_code');
     body.set('code', String(code));
     body.set('redirect_uri', redirectUri);
@@ -7740,7 +7578,6 @@ app.get('/api/auth/steam/redirect', async (req, res) => {
     if (expires && Number.isFinite(expires.valueOf()) && expires.valueOf() < Date.now()) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'expired' }));
     }
-    const teamConfig = await loadTeamDiscordConfig(record.team_id ?? record.teamId);
     const cookieJar = parseCookies(req.headers.cookie || '');
     const cookieId = ensureTeamAuthCookie(cookieJar, res);
     const stateToken = encodeSignedPayload({
@@ -7752,14 +7589,13 @@ app.get('/api/auth/steam/redirect', async (req, res) => {
     if (!stateToken) {
       return res.redirect(buildTeamAuthReturnUrl(record.state_token, { steam_error: 'state_error' }));
     }
-    const steamOAuth = buildSteamOAuthSettings(req, teamConfig);
-    const returnUrl = new URL(resolveSteamReturnUrl(req, steamOAuth.returnUrl));
+    const returnUrl = new URL(resolveSteamReturnUrl(req));
     returnUrl.searchParams.set('state', stateToken);
     const params = new URLSearchParams({
       'openid.ns': 'http://specs.openid.net/auth/2.0',
       'openid.mode': 'checkid_setup',
       'openid.return_to': returnUrl.toString(),
-      'openid.realm': resolveSteamRealm(req, steamOAuth.realm),
+      'openid.realm': resolveSteamRealm(req),
       'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
       'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select'
     });
@@ -8838,23 +8674,21 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
 });
 
 app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (req, res) => {
+  if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
+    return res.status(503).json({ error: 'discord_unavailable' });
+  }
   const teamId = Number(req.params?.teamId);
   if (!Number.isFinite(teamId)) return res.status(400).json({ error: 'invalid_team' });
   const rawToken = typeof req.params?.ticketToken === 'string' ? req.params.ticketToken.trim() : '';
   if (!rawToken) return res.status(400).json({ error: 'invalid_ticket' });
   const fallbackReturn = buildTicketPreviewReturn(teamId, rawToken, { discord_error: 'authorization_failed' });
   try {
-    const teamConfig = await loadTeamDiscordConfig(teamId);
-    const discordOAuth = buildDiscordOAuthSettings(req, teamConfig);
-    if (!discordOAuth.clientId || !discordOAuth.clientSecret) {
-      return res.status(503).json({ error: 'discord_unavailable' });
-    }
     const row = await loadDiscordTicketForTeam(teamId, rawToken);
     if (!row) return res.status(404).json({ error: 'not_found' });
     const ticket = projectDiscordTicket(row);
     const isClosed = ticket?.status === 'closed' || Boolean(ticket?.closedAt);
     if (!isClosed) return res.status(409).json({ error: 'ticket_open' });
-    const redirectUri = resolveTicketDiscordRedirectUri(req, discordOAuth.redirectUri);
+    const redirectUri = resolveTicketDiscordRedirectUri(req);
     const returnToParam = typeof req.query?.returnTo === 'string' ? req.query.returnTo : null;
     const stateToken = encodeSignedPayload({
       purpose: 'ticket_discord_state',
@@ -8865,7 +8699,7 @@ app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (
     });
     if (!stateToken) return res.status(500).json({ error: 'state_error' });
     const params = new URLSearchParams({
-      client_id: discordOAuth.clientId,
+      client_id: DISCORD_OAUTH_CLIENT_ID,
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: 'identify',
@@ -9289,8 +9123,7 @@ app.get('/api/servers/:id/live-map', auth, async (req, res) => {
       clearManualRefreshState(id);
     }
 
-    const steamApiKey = await resolveTeamSteamApiKey(server?.team_id ?? server?.teamId);
-    players = await enrichLivePlayers(players, { steamApiKey });
+    players = await enrichLivePlayers(players);
     await syncServerPlayerDirectory(id, players);
     logger.debug('Processed live players', { count: players.length });
     let info = getCachedServerInfo(id);
@@ -10433,10 +10266,9 @@ async function fetchSteamProfiles(steamids, key, { includePlaytime = false } = {
 app.post('/api/steam/sync', auth, async (req, res) => {
   const { steamids } = req.body || {};
   if (!Array.isArray(steamids) || steamids.length === 0) return res.status(400).json({ error: 'missing_steamids' });
-  const steamApiKey = await resolveTeamSteamApiKey(req.authUser?.activeTeamId);
-  if (!steamApiKey) return res.status(400).json({ error: 'no_steam_api_key' });
+  if (!process.env.STEAM_API_KEY) return res.status(400).json({ error: 'no_steam_api_key' });
   try {
-    const list = await fetchSteamProfiles(steamids, steamApiKey, { includePlaytime: true });
+    const list = await fetchSteamProfiles(steamids, process.env.STEAM_API_KEY, { includePlaytime: true });
     const nowIso = new Date().toISOString();
     for (const profile of list) {
       await db.upsertPlayer({
