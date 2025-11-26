@@ -5,7 +5,7 @@ This document summarizes the purpose of the key files and directories that make 
 ## Repository root
 - `README.md` – Linux-focused installation and configuration guide for the bundled backend and static frontend.
 - `LICENSE` – MIT license for the open-source release of the project.
-- `docker-compose.yml` – Example container composition for launching the backend, Discord bot service, and SQLite database.
+- `docker-compose.yml` – Example container composition for launching the backend API, Discord bot worker, and static frontend (sharing the same SQLite volume).
 - `deploy/` – Production deployment snippets, including sample **nginx** and **systemd** configurations used by the install scripts.
 - `backend/` – Express/Socket.IO backend server, database adapters, and optional Discord bot service implemented in Node.js.
 - `frontend/` – Static assets served to browsers, including the HTML shell, compiled JavaScript bundle, and module loaders for dashboard widgets.
@@ -24,6 +24,7 @@ This document summarizes the purpose of the key files and directories that make 
 - `src/rcon.js` – Robust WebRCON client that maintains persistent connections, queues commands, handles keepalive traffic, and emits structured events for the rest of the app.【F:backend/src/rcon.js†L1-L120】
 - `src/rustmaps.js` – Utilities for querying the RustMaps API, orchestrating map generation requests, caching results, and downloading map imagery for the live map module.【F:backend/src/rustmaps.js†L1-L80】
 - `src/discord-bot-service.js` – Optional background worker that syncs server status to Discord, exposes team-wide status commands, and now provisions a configurable ticketing workflow with a dedicated command token and persistent ticket panel via slash commands.【F:backend/src/discord-bot-service.js†L1-L200】【F:backend/src/discord-bot-service.js†L840-L1508】
+- `src/ai-service.js` – Thin wrapper around the local Ollama HTTP API used to generate ticket summaries, reply drafts, server insights, and lookup assistance on demand.【F:backend/src/ai-service.js†L1-L190】
 
 ## Frontend assets (`frontend/`)
 - `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI, now populated by modular templates for each route-friendly view.【F:frontend/index.html†L1-L23】

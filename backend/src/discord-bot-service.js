@@ -39,6 +39,7 @@ import {
   parseColorString,
   normalizeCommandPermissions
 } from './discord-config.js';
+import { isAiEnabled, generateTicketSummary } from './ai-service.js';
 
 const MIN_REFRESH_MS = 10000;
 const DEFAULT_REFRESH_MS = 60000;
@@ -387,6 +388,45 @@ async function loadIntegrations() {
     if (integration) integrations.push(integration);
   }
   return integrations;
+}
+
+async function loadStandaloneTeamBots() {
+  if (typeof db.listTeamsWithDiscordToken !== 'function') return;
+  let teams = [];
+  try {
+    teams = await db.listTeamsWithDiscordToken();
+  } catch (err) {
+    console.error('failed to load teams with discord tokens', err);
+    return;
+  }
+  const activeTeams = new Set();
+  for (const team of teams || []) {
+    const teamId = Number(team?.id ?? team?.team_id ?? team?.teamId);
+    const token = sanitizeId(team?.discord_token ?? team?.token);
+    if (!Number.isFinite(teamId) || !token) continue;
+    const guildId = sanitizeId(team?.discord_guild_id ?? team?.guildId);
+    const config = parseTeamDiscordConfig(team?.discord_config_json ?? team?.configJson ?? team?.config ?? null);
+    try {
+      const teamState = await ensureTeamBot(teamId, { token, guildId, teamConfig: config });
+      if (teamState) {
+        teamState.keepAlive = true;
+        teamState.config = config || teamState.config || DEFAULT_TEAM_DISCORD_CONFIG;
+        activeTeams.add(teamState.teamId);
+      }
+    } catch (err) {
+      console.error(`failed to prepare standalone discord bot for team ${teamId}`, err);
+    }
+  }
+  for (const teamState of teamBots.values()) {
+    if (teamState.keepAlive && !activeTeams.has(teamState.teamId)) {
+      teamState.keepAlive = false;
+      if (teamState.serverStates.size === 0) {
+        shutdownTeamBot(teamState, { remove: true }).catch((err) => {
+          console.error(`failed to shutdown idle discord bot for team ${teamState.teamId}`, err);
+        });
+      }
+    }
+  }
 }
 
 async function loadTeamServers(state, { force = false } = {}) {
@@ -1078,7 +1118,7 @@ async function resetTeamCommandState(teamState, token) {
   }
 }
 
-async function ensureTeamBot(teamId, { token, guildId, state } = {}) {
+async function ensureTeamBot(teamId, { token, guildId, state, teamConfig } = {}) {
   if (!Number.isFinite(teamId) || !token) return null;
 
   let teamState = teamBots.get(teamId);
@@ -1094,11 +1134,18 @@ async function ensureTeamBot(teamId, { token, guildId, state } = {}) {
       guildRegistrations: new Map(),
       guildServers: new Map(),
       serverStates: new Map(),
-      config: state?.teamConfig ?? DEFAULT_TEAM_DISCORD_CONFIG
+      config: state?.teamConfig ?? DEFAULT_TEAM_DISCORD_CONFIG,
+      keepAlive: false
     };
     teamBots.set(teamId, teamState);
   } else if (teamState.token !== token) {
     await resetTeamCommandState(teamState, token);
+  }
+
+  if (teamConfig) {
+    teamState.config = parseTeamDiscordConfig(teamConfig);
+  } else if (!teamState.config) {
+    teamState.config = DEFAULT_TEAM_DISCORD_CONFIG;
   }
 
   if (state) {
@@ -1218,7 +1265,7 @@ function detachStateFromTeamBot(state) {
     state.commandReady = false;
   }
   state.teamCommandState = null;
-  if (teamState.serverStates.size === 0) {
+  if (teamState.serverStates.size === 0 && !teamState.keepAlive) {
     shutdownTeamBot(teamState, { remove: true }).catch((err) => {
       console.error(`failed to shutdown team bot for team ${teamState.teamId}`, err);
     });
@@ -3901,6 +3948,26 @@ async function handleTicketCloseCommand(state, interaction) {
     }
   }
 
+  let aiSummary = null;
+  if (isAiEnabled()) {
+    try {
+      const limitedEntries = transcriptEntries.slice(-14);
+      aiSummary = await generateTicketSummary({
+        ticket: {
+          subject: ticketRecord.subject,
+          details: ticketRecord.details ?? '',
+          status: ticketRecord.status ?? 'closed',
+          createdBy: ticketRecord.created_by,
+          createdByTag: ticketRecord.created_by_tag,
+          ticketNumber: ticketRecord.ticket_number ?? ticketRecord.ticketNumber
+        },
+        dialog: limitedEntries
+      });
+    } catch (err) {
+      console.error(`failed to generate ai ticket summary for ${targetChannel.id}`, err);
+    }
+  }
+
   let dmSuccess = false;
   if (ticketRecord.created_by && transcriptBuffer) {
     try {
@@ -3964,6 +4031,9 @@ async function handleTicketCloseCommand(state, interaction) {
         logEmbed.addFields({ name: 'Transcript delivery', value: dmLogMessage });
         if (previewUrl) {
           logEmbed.addFields({ name: 'Transcript preview', value: escapeMarkdown(previewUrl).slice(0, 200), inline: false });
+        }
+        if (aiSummary) {
+          logEmbed.addFields({ name: 'AI summary', value: escapeMarkdown(aiSummary).slice(0, 1000), inline: false });
         }
 
         const payload = { embeds: [logEmbed] };
@@ -4308,6 +4378,7 @@ async function handleAutocomplete(state, interaction) {
 }
 
 async function tick() {
+  await loadStandaloneTeamBots();
   const integrations = await loadIntegrations();
   const activeServers = new Set();
 

@@ -12,6 +12,19 @@ services:
     ports:
       - "8787:8787"
     restart: unless-stopped
+  rustadmin-discord-bot:
+    build: ./backend
+    container_name: rustadmin-discord-bot
+    command: ["node", "src/discord-bot-service.js"]
+    environment:
+      - PORT=8787
+      - JWT_SECRET=change-me
+      - CORS_ORIGIN=*
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      - rustadmin-backend
+    restart: unless-stopped
   rustadmin-frontend:
     image: nginx:alpine
     container_name: rustadmin-frontend

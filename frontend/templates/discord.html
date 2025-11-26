@@ -24,39 +24,41 @@
       <form id="teamDiscordForm" class="team-discord-form discord-card" autocomplete="off">
         <span class="discord-chip" aria-hidden="true">Main Bot</span>
         <h5>Connect guild and bot token</h5>
-            <label for="teamDiscordGuildId">Guild ID
-              <input
-                type="text"
-                id="teamDiscordGuildId"
-                name="teamDiscordGuildId"
-                inputmode="numeric"
-                autocomplete="off"
-                autocapitalize="none"
-                spellcheck="false"
-                placeholder="Enter Discord guild ID"
-              />
-            </label>
-            <label for="teamDiscordToken">Bot token
-              <input
-                type="password"
-                id="teamDiscordToken"
-                name="teamDiscordToken"
-                autocomplete="new-password"
-                autocapitalize="none"
-                spellcheck="false"
-                placeholder="Paste Discord bot token"
-              />
-            </label>
-            <div class="row">
-              <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
-              <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
-            </div>
+        <div class="discord-form-card" id="teamDiscordCard">
+          <label for="teamDiscordGuildId">Guild ID
+            <input
+              type="text"
+              id="teamDiscordGuildId"
+              name="teamDiscordGuildId"
+              inputmode="numeric"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="Enter Discord guild ID"
+            />
+          </label>
+          <label for="teamDiscordToken">Bot token
+            <input
+              type="password"
+              id="teamDiscordToken"
+              name="teamDiscordToken"
+              autocomplete="new-password"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="Paste Discord bot token"
+            />
+          </label>
+        </div>
+        <div class="row align-start">
+          <button type="submit" class="accent" id="btnSaveTeamDiscord">Save settings</button>
+          <button type="button" class="ghost danger" id="btnRemoveTeamDiscord">Remove settings</button>
+          <p id="teamDiscordStatus" class="notice hidden inline-notice" role="status" aria-live="polite"></p>
+        </div>
         <div class="row wrap">
           <button type="button" class="ghost" id="btnRefreshTeamDiscordChannelsOverview">Refresh channels</button>
           <button type="button" class="ghost" id="btnRefreshTeamDiscordRolesOverview">Refresh roles</button>
           <button type="button" class="ghost" id="btnRefreshTeamDiscordCategoriesOverview">Refresh categories</button>
         </div>
-        <p id="teamDiscordStatus" class="notice hidden"></p>
       </form>
           <aside class="discord-card discord-summary-card small" aria-labelledby="teamDiscordSummaryTitle">
             <div class="discord-chip" aria-hidden="true">Overview</div>
@@ -99,44 +101,47 @@
           </div>
         </div>
         <form id="teamAuthForm" class="team-discord-form" autocomplete="off">
-          <label class="checkbox">
-            <input type="checkbox" id="teamAuthEnabled" />
-            <span>Require Discord authentication</span>
-          </label>
-          <div class="discord-field-grid">
-            <label for="teamAuthRole">Auto-assign role ID
-                <div class="input-combo">
-                  <select id="teamAuthRoleSelect" class="input-combo-select">
-                    <option value="">Select a role</option>
-                  </select>
-                  <input
-                    id="teamAuthRole"
-                    type="text"
-                    inputmode="numeric"
-                    autocomplete="off"
-                    placeholder="Optional: paste a Discord role ID"
-                  />
-                </div>
-              <small class="muted">Pick a Discord role from the dropdown or paste an ID manually.</small>
+          <div class="discord-form-card" id="teamAuthCard">
+            <label class="checkbox">
+              <input type="checkbox" id="teamAuthEnabled" />
+              <span>Require Discord authentication</span>
             </label>
-            <label for="teamAuthLogChannel">Log channel ID
-                <div class="input-combo">
-                  <select id="teamAuthLogChannelSelect" class="input-combo-select">
-                    <option value="">Select a channel</option>
-                  </select>
-                  <input
-                    id="teamAuthLogChannel"
-                    type="text"
-                    inputmode="numeric"
-                    autocomplete="off"
-                    placeholder="Optional: paste a Discord channel ID"
-                  />
-                </div>
+            <div class="discord-field-grid">
+              <label for="teamAuthRole">Auto-assign role ID
+                  <div class="input-combo">
+                    <select id="teamAuthRoleSelect" class="input-combo-select">
+                      <option value="">Select a role</option>
+                    </select>
+                    <input
+                      id="teamAuthRole"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      placeholder="Optional: paste a Discord role ID"
+                    />
+                  </div>
+                <small class="muted">Pick a Discord role from the dropdown or paste an ID manually.</small>
               </label>
+              <label for="teamAuthLogChannel">Log channel ID
+                  <div class="input-combo">
+                    <select id="teamAuthLogChannelSelect" class="input-combo-select">
+                      <option value="">Select a channel</option>
+                    </select>
+                    <input
+                      id="teamAuthLogChannel"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      placeholder="Optional: paste a Discord channel ID"
+                    />
+                  </div>
+                </label>
+            </div>
+            <p class="muted small">When set, completed links are announced in the selected Discord channel.</p>
           </div>
-          <p class="muted small">When set, completed links are announced in the selected Discord channel.</p>
-          <div class="row">
+          <div class="row align-start">
             <button type="submit" class="accent" id="teamAuthSave">Save authentication settings</button>
+            <p id="teamAuthStatus" class="notice hidden inline-notice" role="status" aria-live="polite"></p>
           </div>
           <div class="command-roles-panel" data-command-section="auth">
             <div class="discord-section-note">
@@ -149,7 +154,6 @@
             </div>
             <p class="notice hidden" data-command-status="auth"></p>
           </div>
-        <p id="teamAuthStatus" class="notice hidden"></p>
       </form>
     </section>
       <section
@@ -193,6 +197,7 @@
           </div>
         </div>
         <form id="teamTicketingForm" class="team-discord-form" autocomplete="off">
+          <div class="discord-form-card" id="teamTicketingCard">
             <label class="checkbox">
               <input type="checkbox" id="discord-ticketing-enabled" />
               <span>Enable ticketing on the Main Bot</span>
@@ -273,10 +278,11 @@
               </label>
             </div>
             <p id="teamDiscordChannelsStatus" class="notice hidden centered-notice"></p>
-            <div class="row">
-              <button type="submit" class="accent">Save ticketing settings</button>
-            </div>
-            <p id="teamTicketingStatus" class="notice hidden"></p>
+          </div>
+          <div class="row align-start">
+            <button type="submit" class="accent">Save ticketing settings</button>
+            <p id="teamTicketingStatus" class="notice hidden inline-notice" role="status" aria-live="polite"></p>
+          </div>
         <div class="command-roles-panel" data-command-section="ticket">
           <div class="discord-section-note">
             <h5>Ticket command access</h5>

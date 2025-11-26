@@ -4,6 +4,7 @@ This bundle is ready for **Debian/Ubuntu** with **systemd**. It includes:
 - Node.js backend (Express + Socket.IO)
 - Swappable DB layer (SQLite or MySQL)
 - Players module with Steam sync
+- Optional on-device AI assistant for ticket summaries, auto replies, and server insights (powered by Ollama)
 - Sample **systemd** unit (backend)
 - Sample **nginx** config (static frontend over HTTPS)
 - **scripts/install-linux.sh** and **scripts/uninstall-linux.sh**
@@ -15,6 +16,16 @@ cd rust-control-panel
 sudo bash scripts/install-linux.sh
 # follow the prompts to configure the backend environment
 ```
+
+### Docker Compose stack
+
+Prefer containers? The bundled `docker-compose.yml` now launches three services: the Express API (`rustadmin-backend`), the Discord bot worker that keeps the Main Bot online (`rustadmin-discord-bot`), and a static nginx frontend (`rustadmin-frontend`). Bring them up together so saving Discord settings automatically boots the Main Bot:
+
+```bash
+docker compose up -d rustadmin-backend rustadmin-discord-bot rustadmin-frontend
+```
+
+Both backend services share the `./backend/data` volume for SQLite storage and read the same environment variables, so the Discord worker can see new bot settings without extra steps. Inspect the worker logs with `docker compose logs -f rustadmin-discord-bot` whenever you need to confirm it connected to Discord.
 
 ### HTTPS and TLS certificates
 
@@ -68,6 +79,17 @@ MYSQL_DATABASE=rustadmin
 Set `STEAM_API_KEY=...` for Steam enrichment.
 Set `RUSTMAPS_API_KEY=...` to provide a fallback RustMaps key (optional). Each panel user can store their own key from **Settings → Personal settings** — required for the live map module (see https://api.rustmaps.com for keys).
 Set `PANEL_PUBLIC_URL=https://your-panel.example.com` so ticket preview links shared over Discord resolve to the correct public hostname.
+
+### AI assistants (optional)
+
+Ticket summaries, suggested replies, server insights, and the lookup assistant stay disabled until you point the backend at a local model. Configure these environment variables to enable the on-device workflow (Ollama recommended):
+
+```
+AI_MODEL_NAME=llama3.2:1b
+AI_API_URL=http://127.0.0.1:11434
+```
+
+Once set, restart both the backend and the Discord bot worker so `/api/ai/*` routes can call your Ollama instance. Leave `AI_MODEL_NAME` blank to keep AI features hidden.
 
 ### Two-factor authentication and passkeys
 

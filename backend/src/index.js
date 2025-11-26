@@ -65,6 +65,14 @@ import {
   filterStatusMapByPermission,
   describeRoleTemplates
 } from './permissions.js';
+import {
+  isAiEnabled,
+  generateTicketSummary,
+  generateTicketReply,
+  generateServerInsight,
+  generateDashboardInsight,
+  generatePlayerInsight
+} from './ai-service.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1101,6 +1109,19 @@ async function assembleTicketDialog(row) {
   }
   entries.sort((a, b) => entryTimestamp(a) - entryTimestamp(b));
   return entries;
+}
+
+async function loadServerTicketDetail(serverId, ticketId) {
+  if (typeof db?.getDiscordTicketById !== 'function') return null;
+  const row = await db.getDiscordTicketById(serverId, ticketId);
+  if (!row) return null;
+  const ticket = projectDiscordTicket(row);
+  const dialog = await assembleTicketDialog(row);
+  const previewUrl = buildTicketPreviewUrl(
+    ticket?.teamId ?? row.team_id,
+    ticket ?? { id: row.id, previewToken: row.preview_token ?? row.previewToken }
+  );
+  return { ticket, dialog, previewUrl };
 }
 
 const ROLE_KEY_PATTERN = /^[a-z0-9_\-]{3,32}$/i;
@@ -6104,6 +6125,14 @@ function describeDiscordStatus(serverId) {
   };
 }
 
+function ensureAiReady(res) {
+  if (isAiEnabled()) return true;
+  if (res && !res.headersSent) {
+    res.status(503).json({ error: 'ai_disabled' });
+  }
+  return false;
+}
+
 async function recordAuditEvent(entry = {}) {
   if (typeof db?.insertAuditLog !== 'function') return;
   try {
@@ -8627,18 +8656,12 @@ app.get('/api/servers/:id/aq-tickets/:ticketId', auth, async (req, res) => {
     return;
   }
   try {
-    const row = await db.getDiscordTicketById(id, ticketId);
-    if (!row) {
+    const detail = await loadServerTicketDetail(id, ticketId);
+    if (!detail) {
       res.status(404).json({ error: 'not_found' });
       return;
     }
-    const ticket = projectDiscordTicket(row);
-    const dialog = await assembleTicketDialog(row);
-    const previewUrl = buildTicketPreviewUrl(
-      ticket?.teamId ?? row.team_id,
-      ticket ?? { id: row.id, previewToken: row.preview_token ?? row.previewToken }
-    );
-    res.json({ ticket, dialog, previewUrl });
+    res.json(detail);
   } catch (err) {
     console.error('failed to load aq ticket', err);
     res.status(500).json({ error: 'db_error' });
@@ -8735,6 +8758,67 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
     return;
   }
   res.json({ ok: true });
+});
+
+app.post('/api/servers/:id/aq-tickets/:ticketId/ai', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  if (!ensureAiReady(res)) return;
+  const ticketId = Number(req.params?.ticketId);
+  if (!Number.isFinite(ticketId)) {
+    res.status(400).json({ error: 'invalid_ticket' });
+    return;
+  }
+  const actionRaw = typeof req.body?.action === 'string' ? req.body.action.trim().toLowerCase() : 'summary';
+  const action = actionRaw === 'reply' ? 'reply' : 'summary';
+  try {
+    const detail = await loadServerTicketDetail(id, ticketId);
+    if (!detail) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const payload = {
+      ticket: detail.ticket,
+      dialog: detail.dialog
+    };
+    const text = action === 'reply'
+      ? await generateTicketReply(payload)
+      : await generateTicketSummary(payload);
+    res.json({ result: text });
+  } catch (err) {
+    if (err?.code === 'ai_disabled') {
+      res.status(503).json({ error: 'ai_disabled' });
+      return;
+    }
+    console.error(`failed to generate ticket ${action} for ${id}/${ticketId}`, err);
+    res.status(502).json({ error: 'ai_error' });
+  }
+});
+
+app.get('/api/ai/dashboard', auth, async (req, res) => {
+  if (!ensureAiReady(res)) return;
+  if (typeof db.listServers !== 'function') {
+    res.status(503).json({ error: 'not_supported' });
+    return;
+  }
+  try {
+    const allServers = await db.listServers();
+    const allowed = filterServersByPermission(req.authUser, Array.isArray(allServers) ? allServers : []);
+    const payload = allowed.map((server) => ({
+      id: server?.id,
+      name: server?.name,
+      status: describeDiscordStatus(server?.id)
+    }));
+    const insight = await generateDashboardInsight({ servers: payload });
+    res.json({ insight });
+  } catch (err) {
+    if (err?.code === 'ai_disabled') {
+      res.status(503).json({ error: 'ai_disabled' });
+      return;
+    }
+    console.error('failed to generate dashboard insight', err);
+    res.status(502).json({ error: 'ai_error' });
+  }
 });
 
 app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (req, res) => {
@@ -8912,6 +8996,33 @@ app.get('/api/servers/:id/discord/audit', auth, async (req, res) => {
   } catch (err) {
     console.error('failed to load server discord audit logs', err);
     res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/ai-insights', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'view');
+  if (id == null) return;
+  if (!ensureAiReady(res)) return;
+  if (typeof db.getServer !== 'function') {
+    res.status(503).json({ error: 'not_supported' });
+    return;
+  }
+  try {
+    const server = await db.getServer(id);
+    if (!server) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const status = statusMap.get(id);
+    const insight = await generateServerInsight({ server, status });
+    res.json({ insight });
+  } catch (err) {
+    if (err?.code === 'ai_disabled') {
+      res.status(503).json({ error: 'ai_disabled' });
+      return;
+    }
+    console.error(`failed to generate server insight for ${id}`, err);
+    res.status(502).json({ error: 'ai_error' });
   }
 });
 
@@ -10036,6 +10147,39 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
   } catch (err) {
     console.error('listServerPlayers failed', err);
     res.status(500).json({ error: 'db_error' });
+  }
+});
+
+app.get('/api/servers/:id/players/:steamId/ai-summary', auth, async (req, res) => {
+  const id = ensureServerCapability(req, res, 'players');
+  if (id == null) return;
+  if (!ensureAiReady(res)) return;
+  const steamId = sanitizeSteamId(req.params?.steamId);
+  if (!steamId) {
+    res.status(400).json({ error: 'invalid_player' });
+    return;
+  }
+  try {
+    let player = null;
+    if (typeof db.getServerPlayer === 'function') {
+      player = await db.getServerPlayer(id, steamId);
+    }
+    if (!player && typeof db.getPlayer === 'function') {
+      player = await db.getPlayer(steamId);
+    }
+    if (!player) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const summary = await generatePlayerInsight({ player });
+    res.json({ summary });
+  } catch (err) {
+    if (err?.code === 'ai_disabled') {
+      res.status(503).json({ error: 'ai_disabled' });
+      return;
+    }
+    console.error(`failed to generate player summary for ${steamId}`, err);
+    res.status(502).json({ error: 'ai_error' });
   }
 });
 

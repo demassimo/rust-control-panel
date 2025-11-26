@@ -31,6 +31,28 @@
               </div>
               <div class="module-body" data-module-slot="players-graph"></div>
             </div>
+            <div class="card ai-card">
+              <div class="ai-card-head">
+                <div>
+                  <h3>Lookup assistant</h3>
+                  <p class="muted small">Paste a SteamID64 to get a quick moderation summary.</p>
+                </div>
+                <button type="button" class="ghost small" id="btnPlayerAiInsight">Summarize</button>
+              </div>
+              <form id="playerAiForm" class="ai-form" autocomplete="off">
+                <label class="sr-only" for="playerAiInput">SteamID64</label>
+                <input
+                  id="playerAiInput"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  placeholder="Enter SteamID64 (e.g., 7656119…)"
+                />
+              </form>
+              <p id="playerAiOutput" class="ai-output muted small">
+                Select a server and enter a SteamID64 to request a summary.
+              </p>
+            </div>
 
             <div class="card players-card" data-module-card="live-players">
               <div class="card-header">
@@ -451,6 +473,35 @@
                         </div>
                       </form>
                     </div>
+                    <div class="aq-ticket-ai">
+                      <article class="ai-card">
+                        <div class="ai-card-head">
+                          <div>
+                            <h5>AI summary</h5>
+                            <p class="muted tiny">Generate a quick recap for staff.</p>
+                          </div>
+                          <button type="button" class="ghost small" id="btnGenerateTicketSummary">Summarize</button>
+                        </div>
+                        <p id="aqTicketSummaryText" class="ai-output muted small">
+                          Select a ticket and choose “Summarize” to generate a recap.
+                        </p>
+                      </article>
+                      <article class="ai-card">
+                        <div class="ai-card-head">
+                          <div>
+                            <h5>Suggested reply</h5>
+                            <p class="muted tiny">Draft a short response for the player.</p>
+                          </div>
+                          <div class="ai-card-actions">
+                            <button type="button" class="ghost small" id="btnSuggestTicketReply">Suggest reply</button>
+                            <button type="button" class="ghost small" id="btnUseSuggestedReply">Use suggestion</button>
+                          </div>
+                        </div>
+                        <p id="aqTicketReplySuggestion" class="ai-output muted small">
+                          Ask for a suggestion after selecting an open ticket.
+                        </p>
+                      </article>
+                    </div>
                   </div>
                 </section>
               </div>
@@ -572,6 +623,18 @@
                   <span class="value" id="workspaceInfoSaveCreatedTime">—</span>
                 </div>
               </div>
+            </div>
+            <div class="card ai-card">
+              <div class="ai-card-head">
+                <div>
+                  <h3>AI insight</h3>
+                  <p class="muted small">Summarize the current health of this workspace.</p>
+                </div>
+                <button type="button" class="ghost small" id="btnServerAiInsight">Generate insight</button>
+              </div>
+              <p id="serverAiInsightText" class="ai-output muted small">
+                Select a server to generate an AI insight.
+              </p>
             </div>
           </section>
         </div>

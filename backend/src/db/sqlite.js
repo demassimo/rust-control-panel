@@ -875,6 +875,12 @@ function createApi(dbh, dialect) {
         config: parseTeamDiscordConfig(row?.discord_config_json ?? null)
       };
     },
+    async listTeamsWithDiscordToken(){
+      const rows = await dbh.all(
+        "SELECT id, discord_token, discord_guild_id, discord_config_json FROM teams WHERE discord_token IS NOT NULL AND discord_token != ''"
+      );
+      return rows || [];
+    },
     async getTeamAuthSettings(teamId){
       const numeric = Number(teamId);
       if (!Number.isFinite(numeric)) {

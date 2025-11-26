@@ -750,6 +750,12 @@ function createApi(pool, dialect) {
         config: parseTeamDiscordConfig(row?.discord_config_json ?? null)
       };
     },
+    async listTeamsWithDiscordToken(){
+      const rows = await exec(
+        "SELECT id, discord_token, discord_guild_id, discord_config_json FROM teams WHERE discord_token IS NOT NULL AND discord_token <> ''"
+      );
+      return rows || [];
+    },
     async getTeamAuthSettings(teamId){
       const rows = await exec(
         `SELECT discord_auth_enabled, discord_auth_role_id, discord_auth_log_channel_id, discord_token, discord_guild_id

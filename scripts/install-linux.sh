@@ -72,6 +72,22 @@ install_nginx() {
   fi
 }
 
+install_ollama() {
+  if command -v ollama >/dev/null 2>&1; then
+    log "Ollama already installed"
+    systemctl enable --now ollama >/dev/null 2>&1 || true
+    return 0
+  fi
+  log "Installing Ollama runtime"
+  ensure_packages curl ca-certificates
+  if curl -fsSL https://ollama.com/install.sh | sh; then
+    systemctl enable --now ollama >/dev/null 2>&1 || true
+    return 0
+  fi
+  warn "Ollama installation failed. Install it manually before using the AI assistant."
+  return 1
+}
+
 prompt_with_default() {
   local prompt="$1"
   local default="$2"
@@ -237,6 +253,13 @@ configure_backend_env() {
   local steam_api_key
   steam_api_key="$(prompt_with_default "Steam API key (leave blank to disable sync)" "")"
 
+  local ai_model_name
+  ai_model_name="$(prompt_with_default "Local AI model name for Ollama (leave blank to disable AI assistant)" "")"
+  local ai_api_url=""
+  if [[ -n "$ai_model_name" ]]; then
+    ai_api_url="$(prompt_with_default "Local AI HTTP endpoint" "http://127.0.0.1:11434")"
+  fi
+
   {
     printf 'DB_CLIENT=%s\n' "$db_client"
     if [[ "$db_client" == "sqlite" ]]; then
@@ -264,7 +287,24 @@ configure_backend_env() {
     if [[ -n "$steam_api_key" ]]; then
       printf 'STEAM_API_KEY=%s\n' "$steam_api_key"
     fi
+    if [[ -n "$ai_model_name" ]]; then
+      printf 'AI_MODEL_NAME=%s\n' "$ai_model_name"
+      if [[ -n "$ai_api_url" ]]; then
+        printf 'AI_API_URL=%s\n' "$ai_api_url"
+      fi
+    fi
   } >"$env_file"
+
+  if [[ -n "$ai_model_name" ]]; then
+    install_ollama || true
+    if command -v ollama >/dev/null 2>&1; then
+      local ollama_host="${ai_api_url:-http://127.0.0.1:11434}"
+      log "Pulling Ollama model ${ai_model_name} (this may take a few minutes)"
+      if ! OLLAMA_HOST="$ollama_host" ollama pull "$ai_model_name"; then
+        warn "Failed to pull Ollama model '${ai_model_name}'. Run 'OLLAMA_HOST=\"$ollama_host\" ollama pull \"$ai_model_name\"' manually later."
+      fi
+    fi
+  fi
 }
 
 run_backend_migrations() {
