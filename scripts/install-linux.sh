@@ -13,6 +13,8 @@ NGINX_LINK=/etc/nginx/sites-enabled/rustadmin.conf
 NGINX_SSL_DIR=/etc/nginx/ssl
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR=""
+LIBRETRANSLATE_CONTAINER=rustadmin-libretranslate
+LIBRETRANSLATE_IMAGE=libretranslate/libretranslate:latest
 
 log() {
   echo "[*] $*"
@@ -86,6 +88,34 @@ install_ollama() {
   fi
   warn "Ollama installation failed. Install it manually before using the AI assistant."
   return 1
+}
+
+install_docker() {
+  if command -v docker >/dev/null 2>&1; then
+    systemctl enable --now docker >/dev/null 2>&1 || true
+    return
+  fi
+  log "Installing Docker engine (docker.io)"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
+  systemctl enable --now docker
+}
+
+install_libretranslate_container() {
+  local host_port="${1:-5000}"
+  install_docker
+  if docker ps -a --format '{{.Names}}' | grep -q "^${LIBRETRANSLATE_CONTAINER}$"; then
+    log "Stopping existing LibreTranslate container"
+    docker rm -f "$LIBRETRANSLATE_CONTAINER" >/dev/null 2>&1 || true
+  fi
+  log "Pulling ${LIBRETRANSLATE_IMAGE}"
+  docker pull "$LIBRETRANSLATE_IMAGE"
+  log "Starting LibreTranslate on port ${host_port}"
+  docker run -d \
+    --name "$LIBRETRANSLATE_CONTAINER" \
+    --restart unless-stopped \
+    -p "${host_port}:5000" \
+    "$LIBRETRANSLATE_IMAGE" >/dev/null
 }
 
 prompt_with_default() {
@@ -260,6 +290,27 @@ configure_backend_env() {
     ai_api_url="$(prompt_with_default "Local AI HTTP endpoint" "http://127.0.0.1:11434")"
   fi
 
+  local enable_chat_translation="n"
+  local chat_translate_target="en"
+  local chat_translate_source="auto"
+  local chat_translate_url=""
+  local chat_translate_api_key=""
+  local install_local_translator="n"
+  local chat_translate_port="5000"
+  if prompt_confirm "Enable chat translation via LibreTranslate?" "n"; then
+    enable_chat_translation="y"
+    chat_translate_target="$(prompt_with_default "Target language code (e.g., en, ru, de)" "$chat_translate_target")"
+    chat_translate_source="$(prompt_with_default "Source language (auto for detection)" "$chat_translate_source")"
+    if prompt_confirm "Install a local LibreTranslate Docker container?" "y"; then
+      install_local_translator="y"
+      chat_translate_port="$(prompt_with_default "Host port for LibreTranslate" "$chat_translate_port")"
+      chat_translate_url="http://127.0.0.1:${chat_translate_port}"
+    else
+      chat_translate_url="$(prompt_with_default "LibreTranslate base URL" "http://127.0.0.1:5000")"
+    fi
+    chat_translate_api_key="$(prompt_with_default "LibreTranslate API key (leave blank if none)" "")"
+  fi
+
   {
     printf 'DB_CLIENT=%s\n' "$db_client"
     if [[ "$db_client" == "sqlite" ]]; then
@@ -293,6 +344,18 @@ configure_backend_env() {
         printf 'AI_API_URL=%s\n' "$ai_api_url"
       fi
     fi
+    if [[ "$enable_chat_translation" == "y" ]]; then
+      printf 'CHAT_TRANSLATE_TARGET_LANG=%s\n' "$chat_translate_target"
+      if [[ -n "$chat_translate_source" && "$chat_translate_source" != "auto" ]]; then
+        printf 'CHAT_TRANSLATE_SOURCE_LANG=%s\n' "$chat_translate_source"
+      fi
+      if [[ -n "$chat_translate_url" ]]; then
+        printf 'CHAT_TRANSLATE_URL=%s\n' "$chat_translate_url"
+      fi
+      if [[ -n "$chat_translate_api_key" ]]; then
+        printf 'CHAT_TRANSLATE_API_KEY=%s\n' "$chat_translate_api_key"
+      fi
+    fi
   } >"$env_file"
 
   if [[ -n "$ai_model_name" ]]; then
@@ -304,6 +367,10 @@ configure_backend_env() {
         warn "Failed to pull Ollama model '${ai_model_name}'. Run 'OLLAMA_HOST=\"$ollama_host\" ollama pull \"$ai_model_name\"' manually later."
       fi
     fi
+  fi
+
+  if [[ "$install_local_translator" == "y" ]]; then
+    install_libretranslate_container "$chat_translate_port"
   fi
 }
 
@@ -430,6 +497,7 @@ main() {
   ensure_packages ca-certificates gnupg openssl
   install_node
   install_nginx
+  install_docker
   prepare_user
   copy_sources
   setup_backend

@@ -24,7 +24,8 @@ This document summarizes the purpose of the key files and directories that make 
 - `src/rcon.js` – Robust WebRCON client that maintains persistent connections, queues commands, handles keepalive traffic, and emits structured events for the rest of the app.【F:backend/src/rcon.js†L1-L120】
 - `src/rustmaps.js` – Utilities for querying the RustMaps API, orchestrating map generation requests, caching results, and downloading map imagery for the live map module.【F:backend/src/rustmaps.js†L1-L80】
 - `src/discord-bot-service.js` – Optional background worker that syncs server status to Discord, exposes team-wide status commands, and now provisions a configurable ticketing workflow with a dedicated command token and persistent ticket panel via slash commands.【F:backend/src/discord-bot-service.js†L1-L200】【F:backend/src/discord-bot-service.js†L840-L1508】
-- `src/ai-service.js` – Thin wrapper around the local Ollama HTTP API used to generate ticket summaries, reply drafts, server insights, and lookup assistance on demand.【F:backend/src/ai-service.js†L1-L190】
+- `src/insight-service.js` – Shared heuristics that turn ticket history into short recaps for Discord logs, replacing the previous AI-powered summaries.【F:backend/src/insight-service.js†L1-L60】
+- `src/chat-translation.js` – LibreTranslate integration that normalises Rust chat into a configured language before storing/broadcasting it, exposing helpers used by the main HTTP server when chat translation is enabled.【F:backend/src/chat-translation.js†L1-L60】
 
 ## Frontend assets (`frontend/`)
 - `index.html` – Base HTML shell that loads the compiled assets and hosts the control panel UI, now populated by modular templates for each route-friendly view.【F:frontend/index.html†L1-L23】
@@ -47,6 +48,7 @@ This document summarizes the purpose of the key files and directories that make 
 ## Documentation (`docs/`)
 - `module-architecture-guide.md` – Guidelines describing how backend and frontend modules should be organised, when to create shared helpers, and where new features belong so the repository stays consistent.【F:docs/module-architecture-guide.md†L1-L120】
 - `module-usage-report.md` – Inventory linking each major source file to its responsibilities, helping maintainers spot unused assets or stale modules quickly.【F:docs/module-usage-report.md†L1-L120】
+- `api-error-codes.md` – Reference of the error codes returned by the Discord workflow APIs so the UI can surface actionable troubleshooting hints.
 - `live-map-icon-gallery.md` – Reference gallery that showcases the available live-map icons and explains when each should be used for in-game events.【F:docs/live-map-icon-gallery.md†L1-L120】
 - `team-auth-oauth.md` – Step-by-step instructions for configuring Discord and Steam OAuth so the `/request.html` team-auth flow can complete successfully, including environment variables and troubleshooting guidance.【F:docs/team-auth-oauth.md†L1-L68】
 - `tutorials.md` – Tutorial section with end-to-end setup guidance, OAuth configuration steps, server connection tips, and walkthroughs for common moderation flows like banning players.【F:docs/tutorials.md†L1-L74】

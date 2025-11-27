@@ -31,26 +31,26 @@
               </div>
               <div class="module-body" data-module-slot="players-graph"></div>
             </div>
-            <div class="card ai-card">
-              <div class="ai-card-head">
+            <div class="card insight-card" id="playerLookupCard">
+              <div class="insight-card-head">
                 <div>
-                  <h3>Lookup assistant</h3>
-                  <p class="muted small">Paste a SteamID64 to get a quick moderation summary.</p>
+                  <h3>Player lookup</h3>
+                  <p class="muted small">Pull ban history, playtime, and notes for any SteamID64.</p>
                 </div>
-                <button type="button" class="ghost small" id="btnPlayerAiInsight">Summarize</button>
+                <button type="button" class="ghost small" id="btnPlayerLookup">Lookup</button>
               </div>
-              <form id="playerAiForm" class="ai-form" autocomplete="off">
-                <label class="sr-only" for="playerAiInput">SteamID64</label>
+              <form id="playerLookupForm" class="insight-form" autocomplete="off">
+                <label class="sr-only" for="playerLookupInput">SteamID64</label>
                 <input
-                  id="playerAiInput"
+                  id="playerLookupInput"
                   type="text"
                   inputmode="numeric"
                   autocomplete="off"
                   placeholder="Enter SteamID64 (e.g., 7656119…)"
                 />
               </form>
-              <p id="playerAiOutput" class="ai-output muted small">
-                Select a server and enter a SteamID64 to request a summary.
+              <p id="playerLookupOutput" class="insight-output muted small">
+                Enter a SteamID64 to load the global record.
               </p>
             </div>
 
@@ -473,33 +473,18 @@
                         </div>
                       </form>
                     </div>
-                    <div class="aq-ticket-ai">
-                      <article class="ai-card">
-                        <div class="ai-card-head">
+                    <div class="ticket-insights" id="ticketInsightCard">
+                      <article class="insight-card">
+                        <div class="insight-card-head">
                           <div>
-                            <h5>AI summary</h5>
-                            <p class="muted tiny">Generate a quick recap for staff.</p>
-                          </div>
-                          <button type="button" class="ghost small" id="btnGenerateTicketSummary">Summarize</button>
-                        </div>
-                        <p id="aqTicketSummaryText" class="ai-output muted small">
-                          Select a ticket and choose “Summarize” to generate a recap.
-                        </p>
-                      </article>
-                      <article class="ai-card">
-                        <div class="ai-card-head">
-                          <div>
-                            <h5>Suggested reply</h5>
-                            <p class="muted tiny">Draft a short response for the player.</p>
-                          </div>
-                          <div class="ai-card-actions">
-                            <button type="button" class="ghost small" id="btnSuggestTicketReply">Suggest reply</button>
-                            <button type="button" class="ghost small" id="btnUseSuggestedReply">Use suggestion</button>
+                            <h5>Ticket activity</h5>
+                            <p class="muted tiny">Message counts, requester info, and last update.</p>
                           </div>
                         </div>
-                        <p id="aqTicketReplySuggestion" class="ai-output muted small">
-                          Ask for a suggestion after selecting an open ticket.
+                        <p id="ticketInsightEmpty" class="insight-output muted small">
+                          Select a ticket to see activity.
                         </p>
+                        <ul id="ticketInsightList" class="insight-list tiny muted hidden"></ul>
                       </article>
                     </div>
                   </div>
@@ -624,17 +609,18 @@
                 </div>
               </div>
             </div>
-            <div class="card ai-card">
-              <div class="ai-card-head">
+            <div class="card insight-card" id="serverHealthCard">
+              <div class="insight-card-head">
                 <div>
-                  <h3>AI insight</h3>
-                  <p class="muted small">Summarize the current health of this workspace.</p>
+                  <h3>Server health</h3>
+                  <p class="muted small">Highlights based on the latest status poll.</p>
                 </div>
-                <button type="button" class="ghost small" id="btnServerAiInsight">Generate insight</button>
+                <button type="button" class="ghost small" id="btnRefreshServerHealth">Refresh</button>
               </div>
-              <p id="serverAiInsightText" class="ai-output muted small">
-                Select a server to generate an AI insight.
+              <p id="serverHealthSummary" class="insight-output muted small">
+                Select a server to see health metrics.
               </p>
+              <ul id="serverHealthList" class="insight-list muted small hidden"></ul>
             </div>
           </section>
         </div>

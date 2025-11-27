@@ -86,7 +86,8 @@ export async function generateTicketSummary({ ticket, dialog } = {}) {
   const conversation = formatTicketConversation(dialog, { maxEntries: 14 });
   const prompt = [
     'You are an assistant that summarizes support tickets for a Rust server staff team.',
-    'Write 3-4 concise bullet points covering the player issue, steps taken, and next actions.',
+    'Write 2-5 concise sentences (each on its own line) covering the player issue, actions taken, and next steps.',
+    'Do not use bullet characters or numbering; just plain sentences separated by newline characters.',
     'Avoid inventing details. Reference actual conversation facts only.',
     '',
     '# Ticket metadata',
@@ -95,30 +96,9 @@ export async function generateTicketSummary({ ticket, dialog } = {}) {
     '# Conversation history',
     conversation,
     '',
-    'Summary (use bullet points):'
+    'Summary (2-5 lines):'
   ].join('\n');
   return requestCompletion(prompt, { temperature: 0.25 });
-}
-
-export async function generateTicketReply({ ticket, dialog } = {}) {
-  const subject = ticket?.subject || 'support ticket';
-  const requester = ticket?.createdByTag || ticket?.createdBy || 'player';
-  const conversation = formatTicketConversation(dialog, { maxEntries: 14 });
-  const prompt = [
-    'You draft short, friendly replies for Rust server support tickets.',
-    'Tone should be professional, helpful, and aligned with community guidelines.',
-    'If more info is required, ask concise follow-up questions.',
-    'Do NOT mention you are an AI.',
-    '',
-    `Ticket subject: ${subject}`,
-    `Requester: ${requester}`,
-    '',
-    '# Recent conversation',
-    conversation,
-    '',
-    'Draft a brief reply (2-4 sentences):'
-  ].join('\n');
-  return requestCompletion(prompt, { temperature: 0.4 });
 }
 
 function compactNumber(value, fallback = 'unknown') {

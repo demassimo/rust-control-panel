@@ -31,18 +31,19 @@
       </div>
     </div>
   </section>
-  <section class="ai-overview">
-    <div class="card ai-card">
-      <div class="ai-card-head">
+  <section class="fleet-overview">
+    <div class="card insight-card" id="fleetOverviewCard">
+      <div class="insight-card-head">
         <div>
-          <h3>AI overview</h3>
-          <p class="muted small">Generate a fleet-wide summary of connected servers.</p>
+          <h3>Fleet overview</h3>
+          <p class="muted small">Realtime health snapshot across every connected server.</p>
         </div>
-        <button type="button" class="ghost small" id="btnDashboardAiInsight">Generate insight</button>
+        <button type="button" class="ghost small" id="btnRefreshFleetOverview">Refresh</button>
       </div>
-      <p id="dashboardAiInsightText" class="ai-output muted small">
-        Start the assistant to highlight player trends or outages.
+      <p id="fleetOverviewSummary" class="insight-output muted small">
+        Add a server to see fleet health.
       </p>
+      <ul id="fleetOverviewList" class="insight-list muted small hidden"></ul>
     </div>
   </section>
 </main>

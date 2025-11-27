@@ -65,15 +65,6 @@ import {
   filterStatusMapByPermission,
   describeRoleTemplates
 } from './permissions.js';
-import {
-  isAiEnabled,
-  generateTicketSummary,
-  generateTicketReply,
-  generateServerInsight,
-  generateDashboardInsight,
-  generatePlayerInsight
-} from './ai-service.js';
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,6 +89,10 @@ import {
   stripRconTimestampPrefix,
   parseF7ReportLine
 } from './rcon-parsers.js';
+import {
+  isChatTranslationEnabled,
+  translateChatMessage
+} from './chat-translation.js';
 
 const mapImageUpload = multer({
   storage: multer.memoryStorage(),
@@ -129,7 +124,8 @@ const WORLD_ENTITY_CACHE_TTL_MS = 15000;
 const ENTITY_SEARCH_TIMEOUT_MS = 4500;
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const MAX_DISCORD_MESSAGE_LENGTH = 2000;
-const MAX_DISCORD_TICKET_MESSAGES = 50;
+const DISCORD_TICKET_PAGE_SIZE = 100;
+const MAX_DISCORD_TICKET_HISTORY = 1000;
 const TEAM_AUTH_COOKIE_NAME = process.env.TEAM_AUTH_COOKIE_NAME || 'team_auth_session';
 const BACKUP_CODE_COUNT = 8;
 const BACKUP_CODE_LENGTH = 12;
@@ -1039,38 +1035,54 @@ async function fetchDiscordTicketMessages(row) {
   if (!channelId) return [];
   const token = await getDiscordTokenForTicket(row);
   if (!token) return [];
-  const url = `${DISCORD_API_BASE}/channels/${channelId}/messages?limit=${MAX_DISCORD_TICKET_MESSAGES}`;
-  let response;
-  try {
-    response = await fetch(url, {
-      headers: {
-        Authorization: `Bot ${token}`
-      }
-    });
-  } catch (err) {
-    console.error(`failed to fetch discord messages for channel ${channelId}`, err);
-    return [];
-  }
-  if (!response.ok) {
-    if (response.status !== 403 && response.status !== 404) {
-      console.error(`discord api returned ${response.status} for channel ${channelId}`);
-    }
-    return [];
-  }
-  let data;
-  try {
-    data = await response.json();
-  } catch (err) {
-    console.error(`failed to parse discord messages for channel ${channelId}`, err);
-    return [];
-  }
-  if (!Array.isArray(data)) return [];
   const requesterId = row.created_by ?? row.createdBy ?? null;
   const entries = [];
-  data.reverse();
-  for (const message of data) {
-    const entry = mapDiscordMessageToDialogEntry(message, { requesterId });
-    if (entry) entries.push(entry);
+  let before = null;
+  while (entries.length < MAX_DISCORD_TICKET_HISTORY) {
+    const params = new URLSearchParams({ limit: String(DISCORD_TICKET_PAGE_SIZE) });
+    if (before) params.set('before', before);
+    const url = `${DISCORD_API_BASE}/channels/${channelId}/messages?${params.toString()}`;
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          Authorization: `Bot ${token}`
+        }
+      });
+    } catch (err) {
+      console.error(`failed to fetch discord messages for channel ${channelId}`, err);
+      break;
+    }
+    if (!response.ok) {
+      if (response.status !== 403 && response.status !== 404) {
+        console.error(`discord api returned ${response.status} for channel ${channelId}`);
+      }
+      break;
+    }
+    let data;
+    try {
+      data = await response.json();
+    } catch (err) {
+      console.error(`failed to parse discord messages for channel ${channelId}`, err);
+      break;
+    }
+    if (!Array.isArray(data) || data.length === 0) {
+      break;
+    }
+    data.reverse();
+    for (const message of data) {
+      if (entries.length >= MAX_DISCORD_TICKET_HISTORY) break;
+      const entry = mapDiscordMessageToDialogEntry(message, { requesterId });
+      if (entry) entries.push(entry);
+    }
+    if (data.length < DISCORD_TICKET_PAGE_SIZE) {
+      break;
+    }
+    const oldest = data[0];
+    if (!oldest?.id || oldest.id === before) {
+      break;
+    }
+    before = oldest.id;
   }
   return entries;
 }
@@ -1722,6 +1734,20 @@ async function handleChatMessage(serverId, line, payload) {
     created_at: parsed.timestamp || null
   };
 
+  let translationMeta = null;
+  const originalMessage = record.message;
+  if (isChatTranslationEnabled()) {
+    try {
+      const translated = await translateChatMessage(record.message);
+      if (translated?.text) {
+        translationMeta = translated;
+        record.message = translated.text;
+      }
+    } catch (err) {
+      console.warn('chat translation failed', err);
+    }
+  }
+
   let stored = null;
   if (typeof db?.recordChatMessage === 'function') {
     try {
@@ -1741,7 +1767,15 @@ async function handleChatMessage(serverId, line, payload) {
     message: stored?.message || record.message,
     createdAt,
     raw: stored?.raw || record.raw || null,
-    color: stored?.color || record.color || null
+    color: stored?.color || record.color || null,
+    originalMessage: translationMeta ? originalMessage : null,
+    translation: translationMeta
+      ? {
+          provider: translationMeta.provider,
+          targetLanguage: translationMeta.targetLanguage,
+          detectedLanguage: translationMeta.detectedLanguage || null
+        }
+      : null
   };
 
   io.to(`srv:${key}`).emit('chat', { serverId: key, message: eventPayload });
@@ -6125,14 +6159,6 @@ function describeDiscordStatus(serverId) {
   };
 }
 
-function ensureAiReady(res) {
-  if (isAiEnabled()) return true;
-  if (res && !res.headersSent) {
-    res.status(503).json({ error: 'ai_disabled' });
-  }
-  return false;
-}
-
 async function recordAuditEvent(entry = {}) {
   if (typeof db?.insertAuditLog !== 'function') return;
   try {
@@ -7141,6 +7167,7 @@ app.post('/api/team/discord', auth, async (req, res) => {
     console.error('failed to save team discord token', err);
     res.status(500).json({ error: 'db_error' });
   }
+  await notifyDiscordService({ type: 'team', teamId });
 });
 
 app.delete('/api/team/discord', auth, async (req, res) => {
@@ -7260,6 +7287,7 @@ app.delete('/api/team/discord', auth, async (req, res) => {
     console.error('failed to clear team discord token', err);
     res.status(500).json({ error: 'db_error' });
   }
+  await notifyDiscordService({ type: 'team', teamId, action: 'removed' });
 });
 
 app.get('/api/team/auth/settings', auth, async (req, res) => {
@@ -8760,67 +8788,6 @@ app.post('/api/servers/:id/aq-tickets/:ticketId/reply', auth, async (req, res) =
   res.json({ ok: true });
 });
 
-app.post('/api/servers/:id/aq-tickets/:ticketId/ai', auth, async (req, res) => {
-  const id = ensureServerCapability(req, res, 'view');
-  if (id == null) return;
-  if (!ensureAiReady(res)) return;
-  const ticketId = Number(req.params?.ticketId);
-  if (!Number.isFinite(ticketId)) {
-    res.status(400).json({ error: 'invalid_ticket' });
-    return;
-  }
-  const actionRaw = typeof req.body?.action === 'string' ? req.body.action.trim().toLowerCase() : 'summary';
-  const action = actionRaw === 'reply' ? 'reply' : 'summary';
-  try {
-    const detail = await loadServerTicketDetail(id, ticketId);
-    if (!detail) {
-      res.status(404).json({ error: 'not_found' });
-      return;
-    }
-    const payload = {
-      ticket: detail.ticket,
-      dialog: detail.dialog
-    };
-    const text = action === 'reply'
-      ? await generateTicketReply(payload)
-      : await generateTicketSummary(payload);
-    res.json({ result: text });
-  } catch (err) {
-    if (err?.code === 'ai_disabled') {
-      res.status(503).json({ error: 'ai_disabled' });
-      return;
-    }
-    console.error(`failed to generate ticket ${action} for ${id}/${ticketId}`, err);
-    res.status(502).json({ error: 'ai_error' });
-  }
-});
-
-app.get('/api/ai/dashboard', auth, async (req, res) => {
-  if (!ensureAiReady(res)) return;
-  if (typeof db.listServers !== 'function') {
-    res.status(503).json({ error: 'not_supported' });
-    return;
-  }
-  try {
-    const allServers = await db.listServers();
-    const allowed = filterServersByPermission(req.authUser, Array.isArray(allServers) ? allServers : []);
-    const payload = allowed.map((server) => ({
-      id: server?.id,
-      name: server?.name,
-      status: describeDiscordStatus(server?.id)
-    }));
-    const insight = await generateDashboardInsight({ servers: payload });
-    res.json({ insight });
-  } catch (err) {
-    if (err?.code === 'ai_disabled') {
-      res.status(503).json({ error: 'ai_disabled' });
-      return;
-    }
-    console.error('failed to generate dashboard insight', err);
-    res.status(502).json({ error: 'ai_error' });
-  }
-});
-
 app.get('/api/teams/:teamId/discord/tickets/:ticketToken/discord-login', async (req, res) => {
   if (!DISCORD_OAUTH_CLIENT_ID || !DISCORD_OAUTH_CLIENT_SECRET) {
     return res.status(503).json({ error: 'discord_unavailable' });
@@ -8999,33 +8966,6 @@ app.get('/api/servers/:id/discord/audit', auth, async (req, res) => {
   }
 });
 
-app.get('/api/servers/:id/ai-insights', auth, async (req, res) => {
-  const id = ensureServerCapability(req, res, 'view');
-  if (id == null) return;
-  if (!ensureAiReady(res)) return;
-  if (typeof db.getServer !== 'function') {
-    res.status(503).json({ error: 'not_supported' });
-    return;
-  }
-  try {
-    const server = await db.getServer(id);
-    if (!server) {
-      res.status(404).json({ error: 'not_found' });
-      return;
-    }
-    const status = statusMap.get(id);
-    const insight = await generateServerInsight({ server, status });
-    res.json({ insight });
-  } catch (err) {
-    if (err?.code === 'ai_disabled') {
-      res.status(503).json({ error: 'ai_disabled' });
-      return;
-    }
-    console.error(`failed to generate server insight for ${id}`, err);
-    res.status(502).json({ error: 'ai_error' });
-  }
-});
-
 app.post('/api/servers/:id/discord', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'discord');
   if (id == null) return;
@@ -9115,6 +9055,7 @@ app.post('/api/servers/:id/discord', auth, async (req, res) => {
     console.error('failed to save discord integration', err);
     res.status(500).json({ error: 'db_error' });
   }
+  await notifyDiscordService({ type: 'server', serverId: id });
 });
 
 app.delete('/api/servers/:id/discord', auth, async (req, res) => {
@@ -9147,6 +9088,7 @@ app.delete('/api/servers/:id/discord', auth, async (req, res) => {
     console.error('failed to delete discord integration', err);
     res.status(500).json({ error: 'db_error' });
   }
+  await notifyDiscordService({ type: 'server', serverId: id, action: 'removed' });
 });
 
 app.post('/api/servers', auth, requireGlobalPermissionMiddleware('manageServers'), async (req, res) => {
@@ -10150,39 +10092,6 @@ app.get('/api/servers/:id/players', auth, async (req, res) => {
   }
 });
 
-app.get('/api/servers/:id/players/:steamId/ai-summary', auth, async (req, res) => {
-  const id = ensureServerCapability(req, res, 'players');
-  if (id == null) return;
-  if (!ensureAiReady(res)) return;
-  const steamId = sanitizeSteamId(req.params?.steamId);
-  if (!steamId) {
-    res.status(400).json({ error: 'invalid_player' });
-    return;
-  }
-  try {
-    let player = null;
-    if (typeof db.getServerPlayer === 'function') {
-      player = await db.getServerPlayer(id, steamId);
-    }
-    if (!player && typeof db.getPlayer === 'function') {
-      player = await db.getPlayer(steamId);
-    }
-    if (!player) {
-      res.status(404).json({ error: 'not_found' });
-      return;
-    }
-    const summary = await generatePlayerInsight({ player });
-    res.json({ summary });
-  } catch (err) {
-    if (err?.code === 'ai_disabled') {
-      res.status(503).json({ error: 'ai_disabled' });
-      return;
-    }
-    console.error(`failed to generate player summary for ${steamId}`, err);
-    res.status(502).json({ error: 'ai_error' });
-  }
-});
-
 app.get('/api/servers/:id/chat', auth, async (req, res) => {
   const id = ensureServerCapability(req, res, 'console');
   if (id == null) return;
@@ -10580,3 +10489,30 @@ io.on('connection', (socket) => {
 server.listen(PORT, BIND, () => {
   console.log(`API on http://${BIND}:${PORT}`);
 });
+const DISCORD_NOTIFY_FILE = path.join(DATA_DIR, 'discord-notify.json');
+let notifyWrite = Promise.resolve();
+
+async function notifyDiscordService(update) {
+  if (!update) return;
+  notifyWrite = notifyWrite.then(async () => {
+    try {
+      await fs.mkdir(path.dirname(DISCORD_NOTIFY_FILE), { recursive: true });
+      let payload = { timestamp: Date.now(), updates: [] };
+      try {
+        const existing = await fs.readFile(DISCORD_NOTIFY_FILE, 'utf8');
+        const parsed = JSON.parse(existing);
+        if (Array.isArray(parsed?.updates)) {
+          payload.updates = parsed.updates.slice(-50);
+        }
+      } catch {
+        // ignore read errors
+      }
+      payload.updates.push({ ...update, ts: Date.now() });
+      payload.timestamp = Date.now();
+      await fs.writeFile(DISCORD_NOTIFY_FILE, JSON.stringify(payload));
+    } catch (err) {
+      console.warn('failed to write discord notify file', err);
+    }
+  });
+  return notifyWrite;
+}

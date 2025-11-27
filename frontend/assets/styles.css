@@ -641,7 +641,7 @@ label.inline input[type="checkbox"]:focus-visible,
   backdrop-filter: blur(16px);
 }
 
-.ai-overview {
+.fleet-overview {
   background: var(--panel);
   border-radius: var(--radius-lg);
   border: 1px solid var(--card-border);
@@ -1004,7 +1004,7 @@ label.inline input[type="checkbox"]:focus-visible,
 .discord-card h4,
 .discord-card h5 { margin: 0; }
 
-.ai-card {
+.insight-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 20px;
@@ -1014,32 +1014,32 @@ label.inline input[type="checkbox"]:focus-visible,
   gap: 14px;
 }
 
-.ai-card-head {
+.insight-card-head {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
 }
 
-.ai-card-head h3,
-.ai-card-head h5 {
+.insight-card-head h3,
+.insight-card-head h5 {
   margin: 0;
 }
 
-.ai-card-actions {
+.insight-card-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
-.ai-output {
+.insight-output {
   white-space: pre-wrap;
   line-height: 1.5;
   min-height: 48px;
 }
 
-.ai-form input {
+.insight-form input {
   width: 100%;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
@@ -1048,14 +1048,47 @@ label.inline input[type="checkbox"]:focus-visible,
   color: var(--text);
 }
 
-.aq-ticket-ai {
+.insight-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.insight-list li {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.insight-list li.insight-critical {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: var(--danger);
+}
+
+.insight-list li.insight-warning {
+  border-color: rgba(255, 193, 7, 0.35);
+  color: #fcd34d;
+}
+
+.insight-list li.insight-info {
+  border-color: rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+
+.ticket-insights {
   display: grid;
   gap: 18px;
   margin-top: 16px;
 }
 
 @media (min-width: 960px) {
-  .aq-ticket-ai {
+  .ticket-insights {
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   }
 }

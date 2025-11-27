@@ -4,7 +4,7 @@ This bundle is ready for **Debian/Ubuntu** with **systemd**. It includes:
 - Node.js backend (Express + Socket.IO)
 - Swappable DB layer (SQLite or MySQL)
 - Players module with Steam sync
-- Optional on-device AI assistant for ticket summaries, auto replies, and server insights (powered by Ollama)
+- Fleet overview surfaces offline servers, stale data, and crowded queues without external services
 - Sample **systemd** unit (backend)
 - Sample **nginx** config (static frontend over HTTPS)
 - **scripts/install-linux.sh** and **scripts/uninstall-linux.sh**
@@ -79,17 +79,26 @@ MYSQL_DATABASE=rustadmin
 Set `STEAM_API_KEY=...` for Steam enrichment.
 Set `RUSTMAPS_API_KEY=...` to provide a fallback RustMaps key (optional). Each panel user can store their own key from **Settings → Personal settings** — required for the live map module (see https://api.rustmaps.com for keys).
 Set `PANEL_PUBLIC_URL=https://your-panel.example.com` so ticket preview links shared over Discord resolve to the correct public hostname.
+Set `CHAT_TRANSLATE_TARGET_LANG=en` (plus optional `CHAT_TRANSLATE_URL` / `CHAT_TRANSLATE_API_KEY`) to force Rust chat into a single language via LibreTranslate.
 
-### AI assistants (optional)
+### Fleet health summaries
 
-Ticket summaries, suggested replies, server insights, and the lookup assistant stay disabled until you point the backend at a local model. Configure these environment variables to enable the on-device workflow (Ollama recommended):
+The dashboard now keeps an eye on every server without calling external AI models. Offline nodes, stale monitor data, near-capacity populations, and long queues are highlighted automatically in both the fleet overview and the per-server health card inside the workspace. Use the refresh buttons to re-poll `/servers/status` on demand—no additional environment variables required.
+
+### Chat translation (LibreTranslate)
+
+If your staff prefers to review chat logs in a single language, point the backend at a LibreTranslate instance and set the target locale:
 
 ```
-AI_MODEL_NAME=llama3.2:1b
-AI_API_URL=http://127.0.0.1:11434
+CHAT_TRANSLATE_TARGET_LANG=en
+CHAT_TRANSLATE_URL=https://libretranslate.example.com   # optional, defaults to https://libretranslate.com
+CHAT_TRANSLATE_API_KEY=                                   # optional API key
+CHAT_TRANSLATE_SOURCE_LANG=auto                           # optional override, defaults to auto-detect
 ```
 
-Once set, restart both the backend and the Discord bot worker so `/api/ai/*` routes can call your Ollama instance. Leave `AI_MODEL_NAME` blank to keep AI features hidden.
+When `CHAT_TRANSLATE_TARGET_LANG` is populated, every inbound Rust chat line is translated before it is stored or broadcast to clients, ensuring the UI displays consistent text. The raw/original message remains available for auditing through the `raw` payload and the database row.
+
+The Linux installer will prompt for these values and can optionally pull a self-hosted LibreTranslate Docker container for you (default port `5000`).
 
 ### Two-factor authentication and passkeys
 

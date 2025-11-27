@@ -39,6 +39,20 @@ docker-compose up -d
 
 - Main settings file: `/opt/rustadmin/backend/.env`
 
+### Optional: chat translation
+
+To force all Rust chat into a single language, point the backend at LibreTranslate:
+
+```
+CHAT_TRANSLATE_TARGET_LANG=en
+CHAT_TRANSLATE_URL=https://libretranslate.example.com   # optional
+CHAT_TRANSLATE_API_KEY=                                 # optional
+```
+
+Restart the backend after editing `.env` so the translator is enabled.
+
+During the Linux installer, answer “yes” to the chat translation prompt to have it pull and run a local LibreTranslate Docker container automatically (defaults to `http://127.0.0.1:5000`).
+
 ### Start & check services
 
 ```
@@ -261,4 +275,3 @@ sudo systemctl restart rustadmin-discord-bot
 ## Verify
 
 Open the panel → log in → check servers + bot.
-

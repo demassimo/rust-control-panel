@@ -310,11 +310,11 @@
       selectedUserId: null,
       loading: false
     },
-    ai: {
-      server: { serverId: null, insight: '', loading: false, error: null },
-      dashboard: { insight: '', loading: false, error: null },
-      ticket: { ticketId: null, summary: null, reply: null, loading: null },
-      player: { lastQuery: '', summary: '', loading: false, error: null }
+    insights: {
+      fleet: { summary: '', highlights: [] },
+      server: { serverId: null, summary: '', highlights: [] },
+      player: { lastQuery: '', summary: '', loading: false, error: null },
+      ticket: { ticketId: null, highlights: [], summary: '' }
     },
     superuserUi
   };
@@ -413,8 +413,9 @@
   const passkeyStatus = $('#passkeyStatus');
   const serversEmpty = $('#serversEmpty');
   const addServerCard = $('#addServerCard');
-  const dashboardAiInsightText = $('#dashboardAiInsightText');
-  const btnDashboardAiInsight = $('#btnDashboardAiInsight');
+  const fleetOverviewSummary = $('#fleetOverviewSummary');
+  const fleetOverviewList = $('#fleetOverviewList');
+  const btnRefreshFleetOverview = $('#btnRefreshFleetOverview');
   const welcomeName = $('#welcomeName');
   const profileMenuTrigger = $('#profileMenuTrigger');
   const brandAccount = $('.brand-account');
@@ -435,8 +436,9 @@
   const workspaceInfoNetworkIn = $('#workspaceInfoNetworkIn');
   const workspaceInfoNetworkOut = $('#workspaceInfoNetworkOut');
   const workspaceInfoSaveCreatedTime = $('#workspaceInfoSaveCreatedTime');
-  const serverAiInsightText = $('#serverAiInsightText');
-  const btnServerAiInsight = $('#btnServerAiInsight');
+  const serverHealthSummary = $('#serverHealthSummary');
+  const serverHealthList = $('#serverHealthList');
+  const btnRefreshServerHealth = $('#btnRefreshServerHealth');
   const workspaceChatBody = $('#workspaceChatBody');
   const workspaceChatList = $('#workspaceChatList');
   const workspaceChatEmpty = $('#workspaceChatEmpty');
@@ -521,11 +523,6 @@
   const aqTicketReplySubmit = $('#aqTicketReplySubmit');
   const aqTicketReplyError = $('#aqTicketReplyError');
   const aqTicketReplyNotice = $('#aqTicketReplyNotice');
-  const aqTicketSummaryText = $('#aqTicketSummaryText');
-  const aqTicketReplySuggestion = $('#aqTicketReplySuggestion');
-  const btnGenerateTicketSummary = $('#btnGenerateTicketSummary');
-  const btnSuggestTicketReply = $('#btnSuggestTicketReply');
-  const btnUseSuggestedReply = $('#btnUseSuggestedReply');
   const f7ReportsList = $('#f7ReportsList');
   const f7ReportsLoading = $('#f7ReportsLoading');
   const f7ReportsEmpty = $('#f7ReportsEmpty');
@@ -579,14 +576,15 @@
   const profileUsername = $('#profileUsername');
   const profileRole = $('#profileRole');
   const moduleFallback = $('#moduleFallback');
-  const playerAiForm = $('#playerAiForm');
-  const playerAiInput = $('#playerAiInput');
-  const playerAiOutput = $('#playerAiOutput');
-  const btnPlayerAiInsight = $('#btnPlayerAiInsight');
-  renderTicketAiUi();
-  renderServerAiInsight();
-  renderDashboardAiInsight();
-  renderPlayerAiSummary();
+  const playerLookupForm = $('#playerLookupForm');
+  const playerLookupInput = $('#playerLookupInput');
+  const playerLookupOutput = $('#playerLookupOutput');
+  const btnPlayerLookup = $('#btnPlayerLookup');
+  const serverHealthCard = $('#serverHealthCard');
+  const fleetOverviewCard = $('#fleetOverviewCard');
+  const ticketInsightCard = $('#ticketInsightCard');
+  const ticketInsightList = $('#ticketInsightList');
+  const ticketInsightEmpty = $('#ticketInsightEmpty');
   const userDetailsOverlay = $('#userDetailsOverlay');
   const userDetailsPanel = $('#userDetailsPanel');
   const userDetailsClose = $('#userDetailsClose');
@@ -618,6 +616,8 @@
   const workspaceViewButtons = workspaceMenu ? Array.from(workspaceMenu.querySelectorAll('.menu-tab')) : [];
   const chatFilterButtons = Array.from(document.querySelectorAll('.chat-filter-btn'));
   const CHAT_REFRESH_INTERVAL_MS = 5000;
+  const AQ_TICKETS_REFRESH_INTERVAL_MS = 60000;
+  const AQ_TICKET_DETAIL_REFRESH_MS = 8000;
   const KILL_FEED_REFRESH_INTERVAL_MS = 30000;
   const KILL_FEED_RETENTION_MS = 24 * 60 * 60 * 1000;
   const DEFAULT_TEAM_CHAT_COLOR = '#3b82f6';
@@ -643,6 +643,24 @@
     error: null
   };
   let killFeedRefreshTimer = null;
+  let socket = null;
+  let chatRefreshTimer = null;
+  let aqTicketsRefreshTimer = null;
+  let aqTicketDetailRefreshTimer = null;
+  let addServerPinned = false;
+  let activeUserDetails = null;
+  let lastUserDetailsTrigger = null;
+  let activeRoleEditKey = null;
+  let roleServersSelection = [];
+  let roleServersPreviousSelection = [];
+  let roleEditorLocked = false;
+  const HEALTH_THRESHOLDS = {
+    staleMs: 2 * 60 * 1000,
+    queueWarn: 5,
+    queueCritical: 15,
+    capacityWarn: 0.85,
+    capacityCritical: 0.95
+  };
 
   function setCardVariant(card, variant) {
     if (!card) return;
@@ -739,6 +757,11 @@
     replying: false,
     replyError: null
   };
+
+  renderFleetOverview();
+  renderServerHealth();
+  renderPlayerLookup();
+  renderTicketInsight();
 
   function emitWorkspaceEvent(name, detail) {
     if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
@@ -3664,232 +3687,429 @@
     }
   }
 
-  function renderTicketAiUi() {
-    if (!aqTicketSummaryText || !aqTicketReplySuggestion) return;
-    const selectedId = Number(aqState.selectedId);
-    const aiTicket = state.ai.ticket;
-    const isCurrent = Number.isFinite(selectedId) && aiTicket.ticketId === selectedId;
-    const summary = isCurrent ? aiTicket.summary : null;
-    const reply = isCurrent ? aiTicket.reply : null;
-    const loading = isCurrent ? aiTicket.loading : null;
-    if (!Number.isFinite(selectedId)) {
-      aqTicketSummaryText.textContent = 'Select a ticket to generate a summary.';
-      aqTicketReplySuggestion.textContent = 'Select a ticket to request a suggested reply.';
-    } else {
-      if (loading === 'summary') {
-        aqTicketSummaryText.textContent = 'Generating summary…';
-      } else if (summary) {
-        aqTicketSummaryText.textContent = summary;
-      } else {
-        aqTicketSummaryText.textContent = 'Click “Summarize” for a quick recap.';
-      }
-      if (loading === 'reply') {
-        aqTicketReplySuggestion.textContent = 'Generating reply suggestion…';
-      } else if (reply) {
-        aqTicketReplySuggestion.textContent = reply;
-      } else {
-        aqTicketReplySuggestion.textContent = 'Use “Suggest reply” to draft a quick response.';
-      }
+  function renderInsightList(listEl, highlights = []) {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const items = Array.isArray(highlights) ? highlights.filter((item) => item && item.text) : [];
+    if (!items.length) {
+      listEl.classList.add('hidden');
+      return;
     }
-    if (btnGenerateTicketSummary) {
-      btnGenerateTicketSummary.disabled = !Number.isFinite(selectedId) || loading === 'summary';
-    }
-    if (btnSuggestTicketReply) {
-      btnSuggestTicketReply.disabled = !Number.isFinite(selectedId) || loading === 'reply';
-    }
-    if (btnUseSuggestedReply) {
-      btnUseSuggestedReply.disabled = !reply || loading === 'reply' || !Number.isFinite(selectedId);
-    }
+    listEl.classList.remove('hidden');
+    items.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = item.text;
+      if (item.level) li.classList.add(`insight-${item.level}`);
+      listEl.appendChild(li);
+    });
   }
 
-  async function runTicketAi(action) {
-    const serverId = Number(aqState.serverId);
-    const ticketId = Number(aqState.selectedId);
-    if (!Number.isFinite(serverId) || !Number.isFinite(ticketId)) return;
-    if (state.ai.ticket.loading) return;
-    state.ai.ticket.ticketId = ticketId;
-    state.ai.ticket.loading = action;
-    if (action === 'summary') state.ai.ticket.summary = null;
-    if (action === 'reply') state.ai.ticket.reply = null;
-    renderTicketAiUi();
-    try {
-      const data = await api(`/servers/${serverId}/aq-tickets/${ticketId}/ai`, { action }, 'POST');
-      if (state.ai.ticket.ticketId !== ticketId) return;
-      if (action === 'summary') {
-        state.ai.ticket.summary = data?.result || 'No summary returned.';
-      } else {
-        state.ai.ticket.reply = data?.result || 'No reply suggestion returned.';
-      }
-      state.ai.ticket.loading = null;
-    } catch (err) {
-      if (state.ai.ticket.ticketId === ticketId) {
-        const message = describeError(err);
-        if (action === 'summary') {
-          state.ai.ticket.summary = `Unable to summarize: ${message}`;
+  function describeServerSnapshot(entry) {
+    if (!entry) return null;
+    const status = entry.status || null;
+    const data = entry.data || {};
+    const players = pickNumber(status?.details?.players?.online, status?.players?.current);
+    const maxPlayers = pickNumber(status?.details?.players?.max, status?.players?.max);
+    const queue = pickNumber(status?.details?.queued, status?.joining, status?.details?.joining);
+    const joining = pickNumber(status?.details?.joining, status?.joining);
+    const latency = pickNumber(status?.latency);
+    const lastCheck = status?.lastCheck || null;
+    const lastCheckDate = lastCheck ? Date.parse(lastCheck) : null;
+    const stale = lastCheckDate != null ? Date.now() - lastCheckDate > HEALTH_THRESHOLDS.staleMs : true;
+    const name = data.name || `Server #${data.id || data.serverId || '?'}`;
+    const online = Boolean(status?.ok);
+    const capacity = players != null && maxPlayers ? players / maxPlayers : null;
+    return {
+      id: data.id,
+      name,
+      online,
+      players,
+      maxPlayers,
+      queue,
+      joining,
+      latency,
+      lastCheck,
+      stale,
+      capacity
+    };
+  }
+
+  function summarizeServerHealth(snapshot) {
+    if (!snapshot) {
+      return {
+        summary: [
+          'Status: No telemetry received yet.',
+          'Action: Wait for the next monitor poll or trigger a manual refresh.'
+        ].join('\n'),
+        highlights: [{ level: 'info', text: 'Waiting for the first monitor poll.' }]
+      };
+    }
+    const highlights = [];
+    const sentences = [];
+    const formatPlayers = () => snapshot.maxPlayers
+      ? `${snapshot.players ?? 0} / ${snapshot.maxPlayers}`
+      : `${snapshot.players ?? 0}`;
+    const latencyLabel = snapshot.latency != null ? `${snapshot.latency} ms` : null;
+    const lastCheckLabel = snapshot.lastCheck ? formatRelativeTime(snapshot.lastCheck) || formatDateTime(snapshot.lastCheck) : 'recently';
+
+    if (!snapshot.online) {
+      highlights.push({ level: 'critical', text: 'Server is offline or unreachable.' });
+      sentences.push(`${snapshot.name}: OFFLINE — last heartbeat ${lastCheckLabel}.`);
+      sentences.push('Ping: no response; queues and population unavailable.');
+    } else {
+      sentences.push(`${snapshot.name}: ONLINE with ${formatPlayers()} players.`);
+      if (snapshot.capacity != null && snapshot.maxPlayers) {
+        if (snapshot.capacity >= HEALTH_THRESHOLDS.capacityCritical) {
+          highlights.push({ level: 'warning', text: `Population ${snapshot.players}/${snapshot.maxPlayers} — near capacity.` });
+          sentences.push('Capacity: critical — player cap nearly saturated.');
+        } else if (snapshot.capacity >= HEALTH_THRESHOLDS.capacityWarn) {
+          highlights.push({ level: 'info', text: `Population ${snapshot.players}/${snapshot.maxPlayers} — running hot.` });
+          sentences.push('Capacity: elevated — expect longer load times during peak hours.');
         } else {
-          state.ai.ticket.reply = `Unable to suggest a reply: ${message}`;
+          sentences.push('Capacity: healthy headroom available.');
         }
-        state.ai.ticket.loading = null;
+      } else {
+        sentences.push('Capacity: player cap unknown.');
       }
-    } finally {
-      if (state.ai.ticket.ticketId === ticketId) {
-        renderTicketAiUi();
+      if (snapshot.queue != null && snapshot.queue >= HEALTH_THRESHOLDS.queueCritical) {
+        highlights.push({ level: 'warning', text: `Queue spiking at ${snapshot.queue} players.` });
+        sentences.push(`Queues: ${snapshot.queue} players waiting — consider opening a secondary shard.`);
+      } else if (snapshot.queue != null && snapshot.queue >= HEALTH_THRESHOLDS.queueWarn) {
+        highlights.push({ level: 'info', text: `Queue holding steady at ${snapshot.queue}.` });
+        sentences.push(`Queues: ${snapshot.queue} players waiting — still manageable.`);
+      } else {
+        sentences.push('Queues: empty.');
       }
-    }
-  }
-
-  function renderServerAiInsight() {
-    if (!serverAiInsightText) return;
-    const serverId = Number(state.currentServerId);
-    const aiServer = state.ai.server;
-    const matches = Number.isFinite(serverId) && aiServer.serverId === serverId;
-    if (!Number.isFinite(serverId)) {
-      serverAiInsightText.textContent = 'Select a server to generate an AI insight.';
-      if (btnServerAiInsight) btnServerAiInsight.disabled = true;
-      return;
-    }
-    if (btnServerAiInsight) {
-      btnServerAiInsight.disabled = Boolean(aiServer.loading);
-    }
-    if (!matches) {
-      serverAiInsightText.textContent = 'Generate an insight to review this server’s health.';
-    } else if (aiServer.loading) {
-      serverAiInsightText.textContent = 'Generating insight…';
-    } else if (aiServer.error) {
-      serverAiInsightText.textContent = aiServer.error;
-    } else if (aiServer.insight) {
-      serverAiInsightText.textContent = aiServer.insight;
-    } else {
-      serverAiInsightText.textContent = 'Generate an insight to review this server’s health.';
-    }
-  }
-
-  async function refreshServerAiInsight({ force = false } = {}) {
-    if (!serverAiInsightText) return;
-    const serverId = Number(state.currentServerId);
-    if (!Number.isFinite(serverId)) {
-      renderServerAiInsight();
-      return;
-    }
-    const aiServer = state.ai.server;
-    if (!force && aiServer.serverId === serverId && aiServer.insight && !aiServer.error) {
-      renderServerAiInsight();
-      return;
-    }
-    if (aiServer.loading) return;
-    aiServer.serverId = serverId;
-    aiServer.loading = true;
-    aiServer.error = null;
-    renderServerAiInsight();
-    try {
-      const data = await api(`/servers/${serverId}/ai-insights`);
-      if (aiServer.serverId !== serverId) return;
-      aiServer.insight = data?.insight || 'No insight returned.';
-      aiServer.error = null;
-    } catch (err) {
-      if (aiServer.serverId !== serverId) return;
-      aiServer.error = describeError(err);
-      aiServer.insight = '';
-    } finally {
-      if (aiServer.serverId === serverId) {
-        aiServer.loading = false;
-        renderServerAiInsight();
+      if (snapshot.joining != null && snapshot.joining > 0) {
+        highlights.push({ level: 'info', text: `${snapshot.joining} players currently joining.` });
+        sentences.push(`Joining: ${snapshot.joining} connection(s) in-progress.`);
+      } else {
+        sentences.push('Joining: idle.');
+      }
+      if (snapshot.stale) {
+        const label = snapshot.lastCheck ? formatRelativeTime(snapshot.lastCheck) || formatDateTime(snapshot.lastCheck) : 'recently';
+        highlights.push({ level: 'warning', text: `Status data is stale (last check ${label}).` });
+        sentences.push(`Telemetry: stale — last packet ${label}.`);
+      } else {
+        sentences.push(`Telemetry: fresh — last packet ${lastCheckLabel}.`);
+      }
+      if (snapshot.latency != null) {
+        highlights.push({ level: 'info', text: `RCON latency ${snapshot.latency} ms.` });
+        sentences.push(`Ping: ${latencyLabel}.`);
+      } else {
+        sentences.push('Ping: not recorded.');
       }
     }
+    if (snapshot.online && !snapshot.stale) {
+      sentences.push(`Last refresh: ${lastCheckLabel}.`);
+    }
+    return { summary: sentences.join('\n'), highlights };
   }
 
-  function renderDashboardAiInsight() {
-    if (!dashboardAiInsightText) return;
-    const aiDashboard = state.ai.dashboard;
-    if (btnDashboardAiInsight) {
-      btnDashboardAiInsight.disabled = Boolean(aiDashboard.loading);
+  function summarizeFleetSnapshots(snapshots) {
+    if (!snapshots.length) {
+      return {
+        summary: [
+          'Fleet status: no servers are connected.',
+          'Action: add a server to start tracking availability and latency.'
+        ].join('\n'),
+        highlights: []
+      };
     }
-    if (aiDashboard.loading) {
-      dashboardAiInsightText.textContent = 'Generating insight…';
-    } else if (aiDashboard.error) {
-      dashboardAiInsightText.textContent = aiDashboard.error;
-    } else if (aiDashboard.insight) {
-      dashboardAiInsightText.textContent = aiDashboard.insight;
+    const offlineCount = snapshots.filter((snap) => !snap.online).length;
+    const staleCount = snapshots.filter((snap) => snap.online && snap.stale).length;
+    const hotCount = snapshots.filter((snap) => snap.online && snap.capacity != null && snap.capacity >= HEALTH_THRESHOLDS.capacityWarn).length;
+    const onlineSnapshots = snapshots.filter((snap) => snap.online);
+    const avgLatency = onlineSnapshots.length
+      ? Math.round(onlineSnapshots.reduce((sum, snap) => sum + (snap.latency ?? 0), 0) / onlineSnapshots.length)
+      : null;
+    const fastest = onlineSnapshots
+      .filter((snap) => snap.latency != null)
+      .sort((a, b) => a.latency - b.latency)[0];
+    const slowest = onlineSnapshots
+      .filter((snap) => snap.latency != null)
+      .sort((a, b) => b.latency - a.latency)[0];
+    const sentences = [];
+    sentences.push(`Fleet status: ${snapshots.length} tracked (${onlineSnapshots.length} online, ${offlineCount} offline).`);
+    if (offlineCount) {
+      sentences.push(`Alert: ${offlineCount} server(s) unreachable — investigate immediately.`);
+    } else if (staleCount) {
+      sentences.push(`${staleCount} server(s) have stale telemetry — refresh recommended.`);
     } else {
-      dashboardAiInsightText.textContent = 'Generate an overview to highlight population shifts or outages.';
+      sentences.push('All monitored servers responding to pings.');
+    }
+    if (hotCount) {
+      sentences.push(`${hotCount} server(s) nearing capacity — prepare additional slots.`);
+    } else {
+      sentences.push('Population: balanced across the fleet.');
+    }
+    if (avgLatency != null && Number.isFinite(avgLatency)) {
+      sentences.push(`Average RCON latency: ${avgLatency} ms${fastest ? ` (fastest: ${fastest.name} ${fastest.latency} ms)` : ''}${slowest ? `, slowest: ${slowest.name} ${slowest.latency} ms` : ''}.`);
+    } else {
+      sentences.push('Latency metrics not available for this poll.');
+    }
+    const highlights = [];
+    snapshots.forEach((snap) => {
+      if (!snap.online) {
+        highlights.push({ level: 'critical', text: `${snap.name} is offline.` });
+        return;
+      }
+      if (snap.stale) {
+        const label = snap.lastCheck ? formatRelativeTime(snap.lastCheck) || formatDateTime(snap.lastCheck) : 'recently';
+        highlights.push({ level: 'warning', text: `${snap.name} status stale (checked ${label}).` });
+      }
+      if (snap.capacity != null && snap.maxPlayers) {
+        if (snap.capacity >= HEALTH_THRESHOLDS.capacityCritical) {
+          highlights.push({ level: 'warning', text: `${snap.name} at ${snap.players}/${snap.maxPlayers} players.` });
+        } else if (snap.capacity >= HEALTH_THRESHOLDS.capacityWarn) {
+          highlights.push({ level: 'info', text: `${snap.name} nearing capacity (${snap.players}/${snap.maxPlayers}).` });
+        }
+      }
+      if (snap.queue != null && snap.queue >= HEALTH_THRESHOLDS.queueWarn) {
+        const level = snap.queue >= HEALTH_THRESHOLDS.queueCritical ? 'warning' : 'info';
+        highlights.push({ level, text: `${snap.name} queue at ${snap.queue}.` });
+      }
+    });
+    return { summary: sentences.join('\n'), highlights };
+  }
+
+  function updateFleetOverview() {
+    const snapshots = [];
+    state.serverItems.forEach((entry) => {
+      const snapshot = describeServerSnapshot(entry);
+      if (snapshot) snapshots.push(snapshot);
+    });
+    const result = summarizeFleetSnapshots(snapshots);
+    state.insights.fleet.summary = result.summary;
+    state.insights.fleet.highlights = result.highlights;
+    renderFleetOverview();
+  }
+
+  function renderFleetOverview() {
+    if (!fleetOverviewSummary) return;
+    fleetOverviewSummary.textContent = state.insights.fleet.summary || 'Add a server to see fleet health.';
+    if (fleetOverviewList) {
+      renderInsightList(fleetOverviewList, state.insights.fleet.highlights);
+      fleetOverviewList.classList.toggle('hidden', !state.insights.fleet.highlights.length);
     }
   }
 
-  async function refreshDashboardAiInsight({ force = false } = {}) {
-    if (!dashboardAiInsightText) return;
-    const aiDashboard = state.ai.dashboard;
-    if (!force && aiDashboard.insight && !aiDashboard.error) {
-      renderDashboardAiInsight();
-      return;
-    }
-    if (aiDashboard.loading) return;
-    aiDashboard.loading = true;
-    aiDashboard.error = null;
-    renderDashboardAiInsight();
-    try {
-      const data = await api('/ai/dashboard');
-      aiDashboard.insight = data?.insight || 'No insight returned.';
-      aiDashboard.error = null;
-    } catch (err) {
-      aiDashboard.error = describeError(err);
-      aiDashboard.insight = '';
-    } finally {
-      aiDashboard.loading = false;
-      renderDashboardAiInsight();
-    }
-  }
-
-  function renderPlayerAiSummary() {
-    if (!playerAiOutput) return;
+  function updateServerHealth() {
     const serverId = Number(state.currentServerId);
-    const aiPlayer = state.ai.player;
     if (!Number.isFinite(serverId)) {
-      playerAiOutput.textContent = 'Select a server and enter a SteamID64 to request a summary.';
-      if (btnPlayerAiInsight) btnPlayerAiInsight.disabled = true;
+      state.insights.server.serverId = null;
+      state.insights.server.summary = 'Select a server to see health metrics.';
+      state.insights.server.highlights = [];
+      renderServerHealth();
       return;
     }
-    if (btnPlayerAiInsight) btnPlayerAiInsight.disabled = Boolean(aiPlayer.loading);
-    if (aiPlayer.loading) {
-      playerAiOutput.textContent = 'Generating summary…';
-    } else if (aiPlayer.error) {
-      playerAiOutput.textContent = aiPlayer.error;
-    } else if (aiPlayer.summary) {
-      playerAiOutput.textContent = aiPlayer.summary;
-    } else {
-      playerAiOutput.textContent = 'Enter a SteamID64 to request a summary.';
+    const entry = state.serverItems.get(String(serverId));
+    const snapshot = describeServerSnapshot(entry);
+    const result = summarizeServerHealth(snapshot);
+    state.insights.server.serverId = serverId;
+    state.insights.server.summary = result.summary;
+    state.insights.server.highlights = result.highlights;
+    renderServerHealth();
+  }
+
+  function renderServerHealth() {
+    if (!serverHealthSummary) return;
+    serverHealthSummary.textContent = state.insights.server.summary || 'Select a server to see health metrics.';
+    if (serverHealthList) {
+      renderInsightList(serverHealthList, state.insights.server.highlights);
+      serverHealthList.classList.toggle('hidden', !state.insights.server.highlights.length);
     }
   }
 
-  async function handlePlayerAiSubmit(event) {
+  function renderPlayerLookup() {
+    if (!playerLookupOutput) return;
+    const lookup = state.insights.player;
+    if (btnPlayerLookup) btnPlayerLookup.disabled = Boolean(lookup.loading);
+    if (lookup.loading) {
+      playerLookupOutput.textContent = 'Loading player record…';
+    } else if (lookup.error) {
+      playerLookupOutput.textContent = lookup.error;
+    } else if (lookup.summary) {
+      playerLookupOutput.textContent = lookup.summary;
+    } else {
+      playerLookupOutput.textContent = 'Enter a SteamID64 to load the global record.';
+    }
+  }
+
+  async function handlePlayerLookupSubmit(event) {
     event?.preventDefault();
-    if (!playerAiInput) return;
-    const steamId = playerAiInput.value.trim();
-    const serverId = Number(state.currentServerId);
-    if (!Number.isFinite(serverId)) {
-      playerAiOutput.textContent = 'Select a server before using the lookup assistant.';
-      return;
-    }
+    if (!playerLookupInput) return;
+    const steamId = playerLookupInput.value.trim();
     if (!steamId) {
-      playerAiOutput.textContent = 'Enter a SteamID64 to request a summary.';
+      playerLookupOutput.textContent = 'Enter a SteamID64 to load the global record.';
       return;
     }
-    const aiPlayer = state.ai.player;
-    if (aiPlayer.loading) return;
-    aiPlayer.loading = true;
-    aiPlayer.error = null;
-    aiPlayer.summary = '';
-    renderPlayerAiSummary();
+    const lookup = state.insights.player;
+    if (lookup.loading) return;
+    lookup.loading = true;
+    lookup.error = null;
+    lookup.summary = '';
+    renderPlayerLookup();
     try {
-      const data = await api(`/servers/${serverId}/players/${encodeURIComponent(steamId)}/ai-summary`);
-      aiPlayer.summary = data?.summary || 'No summary returned.';
-      aiPlayer.lastQuery = steamId;
-      aiPlayer.error = null;
+      const data = await api(`/players/${encodeURIComponent(steamId)}`);
+      lookup.summary = formatPlayerLookupSummary(data);
+      lookup.lastQuery = steamId;
+      lookup.error = null;
     } catch (err) {
-      aiPlayer.error = describeError(err);
-      aiPlayer.summary = '';
+      lookup.error = describeError(err);
+      lookup.summary = '';
     } finally {
-      aiPlayer.loading = false;
-      renderPlayerAiSummary();
+      lookup.loading = false;
+      renderPlayerLookup();
+    }
+  }
+
+  function formatPlayerLookupSummary(player) {
+    if (!player) return 'Player not found.';
+    const persona = player.persona || player.display_name || player.name || 'Unknown player';
+    const steamId = player.steamid || player.steamId || player.SteamID || 'N/A';
+    const lines = [`${persona} (${steamId})`];
+    if (player.last_seen || player.updated_at) {
+      const last = player.last_seen || player.updated_at;
+      const label = formatRelativeTime(last) || formatDateTime(last);
+      if (label) lines.push(`Last seen ${label}.`);
+    }
+    if (player.first_seen) {
+      const first = formatRelativeTime(player.first_seen) || formatDateTime(player.first_seen);
+      if (first) lines.push(`First seen ${first}.`);
+    }
+    const playtimeSeconds = pickNumber(player.total_playtime_seconds, player.playtime_seconds);
+    const playtimeMinutes = pickNumber(player.rust_playtime_minutes, playtimeSeconds != null ? playtimeSeconds / 60 : null);
+    if (playtimeMinutes != null) {
+      const hours = (playtimeMinutes / 60).toFixed(1);
+      lines.push(`Rust playtime: ${hours} hours.`);
+    }
+    if (player.vac_banned) {
+      lines.push('VAC banned account.');
+    }
+    const banCount = pickNumber(player.game_bans);
+    if (banCount) {
+      lines.push(`Game bans: ${banCount}.`);
+    }
+    const notes = Array.isArray(player.events)
+      ? player.events.filter((event) => event && event.event === 'note' && event.note).slice(0, 2)
+      : [];
+    if (notes.length) {
+      const detail = notes.map((note) => note.note.trim()).join(' / ');
+      lines.push(`Recent notes: ${detail}`);
+    }
+    return lines.join('\n');
+  }
+
+  function summarizeTicketHistory(ticket, dialogEntries = []) {
+    if (!ticket) {
+      return { summary: 'Select a ticket to see activity.', highlights: [] };
+    }
+    const normalizedDialog = Array.isArray(dialogEntries)
+      ? dialogEntries.map((entry) => normalizeAqDialogEntry(entry)).filter(Boolean)
+      : [];
+    const totalMessages = normalizedDialog.length;
+    const staffMessages = normalizedDialog.filter((entry) => (entry?.role || '').toLowerCase() === 'agent').length;
+    const requesterMessages = totalMessages - staffMessages;
+    const lastEntry = totalMessages ? normalizedDialog[totalMessages - 1] : null;
+    const firstReply = normalizedDialog.find((entry) => (entry?.role || '').toLowerCase() === 'agent');
+    const firstReplyLatencyMs = ticket.createdAt && firstReply?.postedAt
+      ? Math.max(0, Date.parse(firstReply.postedAt) - Date.parse(ticket.createdAt))
+      : null;
+    const status = (ticket.status || 'open').toLowerCase();
+    const opener = ticket.createdByTag || ticket.createdBy || 'Requester';
+    const openedWhen = ticket.createdAt ? formatRelativeTime(ticket.createdAt) || formatDateTime(ticket.createdAt) : null;
+    const sentences = [];
+    sentences.push(`${ticket.subject || 'Ticket'} — ${status === 'closed' ? 'CLOSED' : 'OPEN'} thread managed by ${opener}${openedWhen ? ` (${openedWhen})` : ''}.`);
+    sentences.push(`Dialogue: ${totalMessages || 'no'} message(s); ${staffMessages} staff / ${requesterMessages} requester.`);
+    if (firstReplyLatencyMs != null && Number.isFinite(firstReplyLatencyMs)) {
+      const responseLabel = describeLatencyMs(firstReplyLatencyMs);
+      if (responseLabel) {
+        sentences.push(`First staff response landed in ${responseLabel}.`);
+      }
+    }
+    if (lastEntry) {
+      const when = lastEntry.postedAt ? formatRelativeTime(lastEntry.postedAt) || formatDateTime(lastEntry.postedAt) : 'recently';
+      const author = lastEntry.authorTag || lastEntry.author_id || lastEntry.authorId || 'user';
+      const snippet = (lastEntry.content || '').trim().replace(/\s+/g, ' ');
+      const trimmed = snippet.length > 160 ? `${snippet.slice(0, 157)}…` : snippet;
+      sentences.push(`Last activity ${when} by ${author}${trimmed ? ` — ${trimmed}` : ''}.`);
+    } else if (ticket.details) {
+      const snippet = ticket.details.trim();
+      if (snippet) {
+        sentences.push(`Original detail: ${snippet.length > 200 ? `${snippet.slice(0, 197)}…` : snippet}`);
+      }
+    }
+    const highlights = [
+      { level: status === 'closed' ? 'info' : 'warning', text: `Status: ${status}` },
+      { level: 'info', text: `Opened by ${opener}${openedWhen ? ` ${openedWhen}` : ''}.` }
+    ];
+    if (totalMessages) {
+      highlights.push({ level: 'info', text: `Messages: ${totalMessages} total (${staffMessages} staff).` });
+    }
+    if (lastEntry) {
+      const when = lastEntry.postedAt ? formatRelativeTime(lastEntry.postedAt) || formatDateTime(lastEntry.postedAt) : 'recently';
+      const author = lastEntry.authorTag || lastEntry.author_id || lastEntry.authorId || 'user';
+      const snippet = (lastEntry.content || '').trim().replace(/\s+/g, ' ');
+      const text = snippet ? `${author}: ${snippet.length > 140 ? `${snippet.slice(0, 137)}…` : snippet}` : `Last update by ${author}`;
+      highlights.push({ level: 'info', text: `Last update ${when} — ${text}` });
+    }
+    return { summary: sentences.join('\n'), highlights };
+  }
+
+  function describeLatencyMs(value) {
+    if (!Number.isFinite(value)) return null;
+    if (value < 1000) return `${value}ms`;
+    const seconds = value / 1000;
+    if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, '')}s`;
+    const minutes = seconds / 60;
+    if (minutes < 60) return `${minutes.toFixed(1).replace(/\.0$/, '')}m`;
+    const hours = minutes / 60;
+    return `${hours.toFixed(1).replace(/\.0$/, '')}h`;
+  }
+
+  function updateTicketInsight(detail) {
+    if (!detail || !detail.ticket) {
+      state.insights.ticket.ticketId = null;
+      state.insights.ticket.summary = 'Select a ticket to see activity.';
+      state.insights.ticket.highlights = [];
+      renderTicketInsight();
+      return;
+    }
+    const ticket = detail.ticket;
+    const result = summarizeTicketHistory(ticket, Array.isArray(detail.dialog) ? detail.dialog : []);
+    state.insights.ticket.ticketId = ticket.id ?? null;
+    state.insights.ticket.summary = result.summary;
+    state.insights.ticket.highlights = result.highlights;
+    renderTicketInsight();
+  }
+
+  function renderTicketInsight() {
+    if (ticketInsightEmpty) {
+      ticketInsightEmpty.textContent = state.insights.ticket.summary || 'Select a ticket to see activity.';
+      ticketInsightEmpty.classList.toggle('hidden', state.insights.ticket.highlights.length > 0);
+    }
+    if (ticketInsightList) {
+      renderInsightList(ticketInsightList, state.insights.ticket.highlights);
+      ticketInsightList.classList.toggle('hidden', !state.insights.ticket.highlights.length);
+    }
+  }
+
+  async function handleServerHealthRefresh() {
+    if (btnRefreshServerHealth) btnRefreshServerHealth.disabled = true;
+    try {
+      await refreshServerStatuses();
+    } finally {
+      if (btnRefreshServerHealth) btnRefreshServerHealth.disabled = false;
+    }
+  }
+
+  async function handleFleetOverviewRefresh() {
+    if (btnRefreshFleetOverview) btnRefreshFleetOverview.disabled = true;
+    try {
+      await refreshServerStatuses();
+    } finally {
+      if (btnRefreshFleetOverview) btnRefreshFleetOverview.disabled = false;
     }
   }
 
@@ -3932,11 +4152,7 @@
       if (aqTicketDialogEmpty) aqTicketDialogEmpty.classList.add('hidden');
       if (aqTicketDialog) aqTicketDialog.innerHTML = '';
       renderAqTicketReply(null);
-      state.ai.ticket.ticketId = null;
-      state.ai.ticket.loading = null;
-      state.ai.ticket.summary = null;
-      state.ai.ticket.reply = null;
-      renderTicketAiUi();
+      updateTicketInsight(null);
       return;
     }
 
@@ -3947,13 +4163,7 @@
     }
 
     const ticket = normalizeAqTicket(activeDetail.ticket);
-    if (ticket?.id != null && ticket.id !== state.ai.ticket.ticketId) {
-      state.ai.ticket.ticketId = ticket.id;
-      state.ai.ticket.summary = null;
-      state.ai.ticket.reply = null;
-      state.ai.ticket.loading = null;
-    }
-    renderTicketAiUi();
+    updateTicketInsight({ ticket, dialog: activeDetail.dialog });
     if (aqTicketSubject) {
       aqTicketSubject.textContent = ticket?.subject || 'No subject provided';
     }
@@ -4172,6 +4382,48 @@
     }
   }
 
+  function clearAqListRefreshTimer() {
+    if (aqTicketsRefreshTimer) {
+      clearInterval(aqTicketsRefreshTimer);
+      aqTicketsRefreshTimer = null;
+    }
+  }
+
+  function clearAqDetailRefreshTimer() {
+    if (aqTicketDetailRefreshTimer) {
+      clearInterval(aqTicketDetailRefreshTimer);
+      aqTicketDetailRefreshTimer = null;
+    }
+  }
+
+  function stopAqAutoRefresh() {
+    clearAqListRefreshTimer();
+    clearAqDetailRefreshTimer();
+  }
+
+  function startAqAutoRefresh(serverId) {
+    const numeric = Number(serverId);
+    if (!Number.isFinite(numeric) || !hasServerCapability('view')) return;
+    stopAqAutoRefresh();
+    aqTicketsRefreshTimer = setInterval(() => {
+      if (Number(aqState.serverId) !== numeric || !hasServerCapability('view')) {
+        clearAqListRefreshTimer();
+        return;
+      }
+      refreshAqTickets().catch(() => {});
+    }, AQ_TICKETS_REFRESH_INTERVAL_MS);
+    aqTicketDetailRefreshTimer = setInterval(() => {
+      if (Number(aqState.serverId) !== numeric || !hasServerCapability('view')) {
+        clearAqDetailRefreshTimer();
+        return;
+      }
+      const ticketId = Number(aqState.selectedId);
+      if (!Number.isFinite(ticketId)) return;
+      if (aqState.detailRequests.has(ticketId)) return;
+      loadAqTicketDetail(ticketId, { force: true }).catch(() => {});
+    }, AQ_TICKET_DETAIL_REFRESH_MS);
+  }
+
   function setAqSelectedTicket(ticketId, { force = false } = {}) {
     const numericId = Number(ticketId);
     if (!Number.isFinite(numericId)) {
@@ -4206,6 +4458,7 @@
   }
 
   function prepareAqTicketsForServer(serverId) {
+    stopAqAutoRefresh();
     const numeric = Number(serverId);
     aqState.serverId = Number.isFinite(numeric) ? numeric : null;
     aqState.list = [];
@@ -4224,10 +4477,12 @@
     if (!Number.isFinite(numeric) || !hasServerCapability('view')) {
       return;
     }
+    startAqAutoRefresh(numeric);
     refreshAqTickets({ force: true }).catch(() => {});
   }
 
   function resetAqTickets() {
+    stopAqAutoRefresh();
     aqState.serverId = null;
     aqState.list = [];
     aqState.listError = null;
@@ -4322,6 +4577,7 @@
       if (Number(aqState.serverId) === id) {
         if (event?.detail?.repeat) {
           refreshAqTickets({ force: true }).catch(() => {});
+          startAqAutoRefresh(id);
         }
         return;
       }
@@ -4453,16 +4709,6 @@
       description: 'Create, edit, and delete roles or adjust their permissions.'
     }
   };
-
-  let socket = null;
-  let chatRefreshTimer = null;
-  let addServerPinned = false;
-  let activeUserDetails = null;
-  let lastUserDetailsTrigger = null;
-  let activeRoleEditKey = null;
-  let roleServersSelection = [];
-  let roleServersPreviousSelection = [];
-  let roleEditorLocked = false;
 
   function currentUserPermissions() {
     return state.currentUser?.permissions || {};
@@ -5551,7 +5797,7 @@
     navLinked?.classList.toggle('active', isLinked);
     navAdmin?.classList.toggle('active', isAdmin);
     if (isDashboard) {
-      refreshDashboardAiInsight({ force: false }).catch(() => {});
+      updateFleetOverview();
     }
 
     if (!isSettings) {
@@ -5645,10 +5891,6 @@
     cannot_delete_self: 'You cannot remove your own account.',
     no_active_team: 'Select or create a team before performing this action.',
     invalid_team: 'The selected team is not available to you.',
-    ai_disabled: 'Configure a local AI model in the backend .env before using this feature.',
-    ai_error: 'The AI assistant is unavailable right now. Try again in a moment.',
-    ai_request_failed: 'The AI service did not respond. Verify the Ollama process and try again.',
-    ai_empty_response: 'The AI service returned an empty response.',
     user_not_found: 'No account exists with that username.',
     already_member: 'That user is already part of this team.',
     rustmaps_api_key_missing: 'Add your RustMaps API key in Settings to enable the live map.',
@@ -6085,6 +6327,7 @@
     killFeedState.loading = false;
     killFeedState.error = null;
     state.currentServerId = null;
+    updateServerHealth();
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = null;
     emitWorkspaceEvent('workspace:server-cleared', { reason });
     resetF7Reports();
@@ -7421,6 +7664,10 @@
       details.title = status?.details?.raw || status?.error || '';
     }
     updateWorkspaceDisplay(entry);
+    if (Number(id) === state.currentServerId) {
+      updateServerHealth();
+    }
+    updateFleetOverview();
     moduleBus.emit('server:status', { serverId: Number(id), status });
   }
 
@@ -7445,6 +7692,8 @@
   async function refreshServerStatuses() {
     const statuses = await fetchServerStatuses();
     applyStatusMap(statuses);
+    updateFleetOverview();
+    updateServerHealth();
   }
 
   function renderServer(server, status) {
@@ -7784,7 +8033,8 @@
       }
       highlightSelectedServer();
       moduleBus.emit('servers:updated', { servers: list });
-      refreshDashboardAiInsight({ force: true }).catch(() => {});
+      updateFleetOverview();
+      updateServerHealth();
     } catch (err) {
       if (errorCode(err) === 'unauthorized') {
         handleUnauthorized();
@@ -7816,9 +8066,9 @@
       refreshKillFeedForServer(numericId).catch(() => {});
       scheduleKillFeedRefresh(numericId);
       refreshAqTickets({ force: true }).catch(() => {});
-      renderServerAiInsight();
-      refreshServerAiInsight().catch(() => {});
-      renderPlayerAiSummary();
+      startAqAutoRefresh(numericId);
+      updateServerHealth();
+      renderPlayerLookup();
       return;
     }
     if (previous != null && previous !== numericId) {
@@ -7833,13 +8083,12 @@
     state.currentServerId = numericId;
     prepareF7ForServer(numericId);
     prepareAqTicketsForServer(numericId);
-    state.ai.player.summary = '';
-    state.ai.player.error = null;
-    state.ai.player.lastQuery = '';
-    state.ai.player.loading = false;
-    renderServerAiInsight();
-    refreshServerAiInsight({ force: true }).catch(() => {});
-    renderPlayerAiSummary();
+    state.insights.player.summary = '';
+    state.insights.player.error = null;
+    state.insights.player.lastQuery = '';
+    state.insights.player.loading = false;
+    renderPlayerLookup();
+    updateServerHealth();
     if (typeof window !== 'undefined') window.__workspaceSelectedServer = numericId;
     emitWorkspaceEvent('workspace:server-selected', { serverId: numericId });
     highlightSelectedServer();
@@ -8094,12 +8343,16 @@
       configLoaded: false
     };
     state.teamAuth = { loading: false, enabled: false, roleId: null, logChannelId: null, loaded: false, loadedTeamId: null };
-    state.ai = {
-      server: { serverId: null, insight: '', loading: false, error: null },
-      dashboard: { insight: '', loading: false, error: null },
-      ticket: { ticketId: null, summary: null, reply: null, loading: null },
-      player: { lastQuery: '', summary: '', loading: false, error: null }
+    state.insights = {
+      fleet: { summary: '', highlights: [] },
+      server: { serverId: null, summary: '', highlights: [] },
+      player: { lastQuery: '', summary: '', loading: false, error: null },
+      ticket: { ticketId: null, highlights: [], summary: '' }
     };
+    renderFleetOverview();
+    renderServerHealth();
+    renderPlayerLookup();
+    renderTicketInsight();
     activeRoleEditKey = null;
     updateRoleOptions();
     updateRoleManagerVisibility(false);
@@ -8144,10 +8397,6 @@
     killFeedState.loading = false;
     killFeedState.error = null;
     renderKillFeed();
-    renderServerAiInsight();
-    renderDashboardAiInsight();
-    renderPlayerAiSummary();
-    renderTicketAiUi();
     ui.showLogin();
     loadPublicConfig();
     moduleBus.emit('auth:logout');
@@ -11457,23 +11706,12 @@
     btnRefreshTeamDiscordChannels?.addEventListener('click', () => {
       loadTeamDiscordChannels({ force: true, showStatus: true }).catch(() => {});
     });
-    btnServerAiInsight?.addEventListener('click', () => {
-      refreshServerAiInsight({ force: true }).catch(() => {});
+    btnRefreshServerHealth?.addEventListener('click', handleServerHealthRefresh);
+    btnRefreshFleetOverview?.addEventListener('click', handleFleetOverviewRefresh);
+    playerLookupForm?.addEventListener('submit', handlePlayerLookupSubmit);
+    btnPlayerLookup?.addEventListener('click', () => {
+      if (playerLookupForm) playerLookupForm.requestSubmit();
     });
-    btnDashboardAiInsight?.addEventListener('click', () => {
-      refreshDashboardAiInsight({ force: true }).catch(() => {});
-    });
-    btnGenerateTicketSummary?.addEventListener('click', () => runTicketAi('summary'));
-    btnSuggestTicketReply?.addEventListener('click', () => runTicketAi('reply'));
-    btnUseSuggestedReply?.addEventListener('click', () => {
-      const suggestion = state.ai.ticket.reply;
-      if (!suggestion || !aqTicketReplyInput || aqTicketReplyInput.disabled) return;
-      aqTicketReplyInput.value = suggestion;
-      aqTicketReplyInput.focus();
-      aqTicketReplyInput.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    playerAiForm?.addEventListener('submit', handlePlayerAiSubmit);
-    btnPlayerAiInsight?.addEventListener('click', handlePlayerAiSubmit);
     teamAuthForm?.addEventListener('submit', handleTeamAuthSubmit);
     teamAuthEnabledInput?.addEventListener('change', () => {
       state.teamAuth.enabled = !!teamAuthEnabledInput.checked;

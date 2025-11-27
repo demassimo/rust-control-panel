@@ -3,6 +3,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { once } from 'node:events';
 import process from 'node:process';
 import { randomUUID, randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import path from 'node:path';
 import {
   Client,
   GatewayIntentBits,
@@ -39,7 +42,7 @@ import {
   parseColorString,
   normalizeCommandPermissions
 } from './discord-config.js';
-import { isAiEnabled, generateTicketSummary } from './ai-service.js';
+import { summarizeTicketActivity } from './insight-service.js';
 
 const MIN_REFRESH_MS = 10000;
 const DEFAULT_REFRESH_MS = 60000;
@@ -56,6 +59,9 @@ const staleThreshold = Math.max(
 
 const bots = new Map();
 let shuttingDown = false;
+
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.resolve(process.cwd(), 'data');
+const DISCORD_NOTIFY_FILE = path.join(DATA_DIR, 'discord-notify.json');
 
 const TICKET_PANEL_BUTTON_ID = 'ticket:panel:open';
 const TICKET_MODAL_PREFIX = 'ticket:modal:';
@@ -80,6 +86,10 @@ const pendingTicketRequests = new Map();
 const teamBots = new Map();
 // Ensure slash commands stay guild-scoped by clearing any global registrations once per client.
 const clientsWithClearedGlobalCommands = new WeakSet();
+const pendingServerRefresh = new Set();
+const pendingTeamRefresh = new Set();
+let refreshTimer = null;
+let notifyTimer = null;
 
 function cleanupExpiredRequests() {
   const now = Date.now();
@@ -426,6 +436,107 @@ async function loadStandaloneTeamBots() {
         });
       }
     }
+  }
+}
+
+function setupNotificationWatcher() {
+  fsPromises.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
+  try {
+    fs.watch(DATA_DIR, (eventType, filename) => {
+      if (!filename) return;
+      if (path.basename(filename) === path.basename(DISCORD_NOTIFY_FILE)) {
+        queueNotificationRead();
+      }
+    });
+  } catch (err) {
+    console.warn('failed to watch discord notify file', err);
+  }
+  queueNotificationRead();
+}
+
+function queueNotificationRead() {
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null;
+    readNotificationFile().catch((err) => {
+      if (err?.code !== 'ENOENT') {
+        console.error('failed to process discord notify file', err);
+      }
+    });
+  }, 100);
+}
+
+async function readNotificationFile() {
+  try {
+    const raw = await fsPromises.readFile(DISCORD_NOTIFY_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.updates)) {
+      for (const update of parsed.updates) {
+        if (update?.type === 'server' && Number.isFinite(Number(update.serverId))) {
+          pendingServerRefresh.add(Number(update.serverId));
+        } else if (update?.type === 'team' && Number.isFinite(Number(update.teamId))) {
+          pendingTeamRefresh.add(Number(update.teamId));
+        }
+      }
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  scheduleRefreshProcessing();
+}
+
+function scheduleRefreshProcessing() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    processPendingRefresh().catch((err) => {
+      console.error('failed to process discord refresh queue', err);
+    });
+  }, 100);
+}
+
+async function processPendingRefresh() {
+  const serverIds = Array.from(pendingServerRefresh);
+  const teamIds = Array.from(pendingTeamRefresh);
+  pendingServerRefresh.clear();
+  pendingTeamRefresh.clear();
+  for (const serverId of serverIds) {
+    await reloadServerIntegration(serverId);
+  }
+  for (const teamId of teamIds) {
+    await reloadTeamDiscord(teamId);
+  }
+}
+
+async function reloadServerIntegration(serverId) {
+  if (typeof db.getServerDiscordIntegration !== 'function') return;
+  try {
+    const integration = await db.getServerDiscordIntegration(serverId);
+    if (integration) {
+      const state = await ensureBot(integration);
+      if (state?.statusReady) {
+        await updateBot(state, integration);
+      }
+    } else {
+      await shutdownBot(serverId);
+    }
+  } catch (err) {
+    console.error(`failed to reload discord integration for server ${serverId}`, err);
+  }
+}
+
+async function reloadTeamDiscord(teamId) {
+  if (typeof db.getTeamDiscordSettings !== 'function') return;
+  try {
+    const settings = await db.getTeamDiscordSettings(teamId);
+    if (!settings?.token) return;
+    await ensureTeamBot(teamId, {
+      token: settings.token,
+      guildId: settings.guildId,
+      teamConfig: settings.config ?? null
+    });
+  } catch (err) {
+    console.error(`failed to reload team discord settings for team ${teamId}`, err);
   }
 }
 
@@ -1354,21 +1465,24 @@ async function handleTeamInteraction(teamState, interaction) {
   }
   const { state, requiresExplicitSelection } = selectTeamServerState(teamState, interaction);
   if (!state) {
-    if (requiresExplicitSelection && typeof interaction.isChatInputCommand === 'function' && interaction.isChatInputCommand()) {
-      const canReply = typeof interaction.isRepliable === 'function'
-        ? interaction.isRepliable()
-        : Boolean(interaction.repliable);
-      if (canReply) {
-        const message = 'Multiple Rust servers are linked to this team in this guild. Please specify a server when using this command.';
-        try {
-          if (interaction.deferred || interaction.replied) {
-            await interaction.editReply(message);
-          } else {
-            await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
-          }
-        } catch (err) {
-          console.error('failed to notify user about ambiguous team interaction', err);
+    const canReply = typeof interaction.isRepliable === 'function'
+      ? interaction.isRepliable()
+      : Boolean(interaction.repliable);
+    if (canReply) {
+      let message = 'No workspace server is linked to this Discord guild yet. Update the server settings so its guild ID matches this channel.';
+      if (requiresExplicitSelection && typeof interaction.isChatInputCommand === 'function' && interaction.isChatInputCommand()) {
+        message = 'Multiple Rust servers are linked to this guild. Please include the `server` option when running this command.';
+      } else if (teamState.serverStates.size === 0) {
+        message = 'No Rust servers are attached to this team yet. Add a server in the panel before using this command.';
+      }
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(message);
+        } else {
+          await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
         }
+      } catch (err) {
+        console.error('failed to reply when no team server state was available', err);
       }
     }
     return;
@@ -1667,7 +1781,7 @@ async function ensureBot(integration) {
     }
   }
   state.teamToken = teamToken;
-  state.teamGuildId = teamGuildId;
+  state.teamGuildId = teamGuildId || state.guildId || null;
   setTeamConfig(state, teamConfig);
 
   const usingTeamCommand = Boolean(teamToken);
@@ -1725,8 +1839,10 @@ async function ensureBot(integration) {
     detachStateFromTeamBot(state);
   }
 
+  const effectiveTeamGuildId = state.guildId || state.teamGuildId || null;
+
   if (usingTeamCommand) {
-    const teamState = await ensureTeamBot(state.teamId, { token: teamToken, guildId: teamGuildId, state });
+    const teamState = await ensureTeamBot(state.teamId, { token: teamToken, guildId: effectiveTeamGuildId, state });
     if (teamState?.client) {
       state.commandClient = teamState.client;
       state.commandReady = Boolean(teamState.ready);
@@ -1865,10 +1981,20 @@ async function ensureChannel(state) {
       state.channel = null;
       return null;
     }
-    if (channel.guildId && state.guildId && channel.guildId !== state.guildId) {
-      console.error(`discord channel ${state.channelId} guild mismatch for server ${state.serverId}`);
-      state.channel = null;
-      return null;
+    const channelGuildId = sanitizeId(channel.guildId);
+    let updatedGuild = false;
+    if (channelGuildId && state.guildId && channelGuildId !== state.guildId) {
+      console.warn(
+        `discord channel ${state.channelId} belongs to guild ${channelGuildId}, updating server ${state.serverId} integration`
+      );
+      state.guildId = channelGuildId;
+      updatedGuild = true;
+    } else if (channelGuildId && !state.guildId) {
+      state.guildId = channelGuildId;
+      updatedGuild = true;
+    }
+    if (updatedGuild) {
+      await persistIntegration(state);
     }
     state.channel = channel;
     return channel;
@@ -3052,7 +3178,7 @@ function getServerDisplay(state, serverId) {
 async function createTicketForInteraction(state, interaction, { subject, details, requestedServerId }) {
   const config = getTicketConfig(state);
   if (!config.enabled) {
-    return { ok: false, message: 'The ticket system is currently disabled.' };
+    return { ok: false, error: 'ticketing_disabled', message: 'The ticket system is currently disabled.' };
   }
 
   try {
@@ -3063,16 +3189,20 @@ async function createTicketForInteraction(state, interaction, { subject, details
 
   const guild = interaction.guild ?? (state.commandClient ? await state.commandClient.guilds.fetch(state.guildId) : null);
   if (!guild) {
-    return { ok: false, message: 'This command can only be used in a guild channel.' };
+    return { ok: false, error: 'guild_unavailable', message: 'This command can only be used in a guild channel.' };
   }
 
   if (!config.categoryId) {
-    return { ok: false, message: 'No ticket category is configured yet. Ask a server manager to run `/ticket config setcategory`.' };
+    return {
+      ok: false,
+      error: 'missing_ticket_category',
+      message: 'No ticket category is configured yet. Ask a server manager to run `/ticket config setcategory`.'
+    };
   }
 
   const desiredServerId = requestedServerId != null ? resolveTicketServerId(state, requestedServerId) : state.serverId;
   if (requestedServerId != null && desiredServerId == null) {
-    return { ok: false, message: 'That server is not assigned to this team.' };
+    return { ok: false, error: 'invalid_server', message: 'That server is not assigned to this team.' };
   }
 
   const targetServerId = desiredServerId ?? state.serverId;
@@ -3085,7 +3215,7 @@ async function createTicketForInteraction(state, interaction, { subject, details
     console.error(`failed to fetch ticket category ${config.categoryId}`, err);
   }
   if (!category || category.type !== ChannelType.GuildCategory) {
-    return { ok: false, message: 'The configured ticket category no longer exists.' };
+    return { ok: false, error: 'missing_ticket_category', message: 'The configured ticket category no longer exists.' };
   }
 
   let ticketNumber = null;
@@ -3171,7 +3301,11 @@ async function createTicketForInteraction(state, interaction, { subject, details
     });
   } catch (err) {
     console.error(`failed to create ticket channel for server ${state.serverId}`, err);
-    return { ok: false, message: 'Failed to create the ticket channel. Please contact a server manager.' };
+    return {
+      ok: false,
+      error: 'channel_creation_failed',
+      message: 'Failed to create the ticket channel. Please contact a server manager.'
+    };
   }
 
   const now = new Date();
@@ -3268,6 +3402,7 @@ async function createTicketForInteraction(state, interaction, { subject, details
   const ticketNumberDisplay = ticketRecord?.ticket_number ?? ticketNumber;
   return {
     ok: true,
+    error: null,
     ticketChannelId: ticketChannel.id,
     ticketNumber: ticketNumberDisplay,
     serverId: targetServerId,
@@ -3326,7 +3461,8 @@ async function handleTicketOpenCommand(state, interaction) {
   });
 
   if (!result.ok) {
-    await interaction.editReply(result.message);
+    const suffix = result.error ? ` (code: ${result.error})` : '';
+    await interaction.editReply(`${result.message}${suffix}`);
     return;
   }
 
@@ -3602,8 +3738,9 @@ async function handleTicketServerSelect(state, interaction) {
   deletePendingTicketRequest(requestId);
 
   if (!result.ok) {
+    const suffix = result.error ? ` (code: ${result.error})` : '';
     await interaction.followUp({
-      content: result.message,
+      content: `${result.message}${suffix}`,
       flags: MessageFlags.Ephemeral
     });
     return true;
@@ -3948,24 +4085,23 @@ async function handleTicketCloseCommand(state, interaction) {
     }
   }
 
-  let aiSummary = null;
-  if (isAiEnabled()) {
-    try {
-      const limitedEntries = transcriptEntries.slice(-14);
-      aiSummary = await generateTicketSummary({
-        ticket: {
-          subject: ticketRecord.subject,
-          details: ticketRecord.details ?? '',
-          status: ticketRecord.status ?? 'closed',
-          createdBy: ticketRecord.created_by,
-          createdByTag: ticketRecord.created_by_tag,
-          ticketNumber: ticketRecord.ticket_number ?? ticketRecord.ticketNumber
-        },
-        dialog: limitedEntries
-      });
-    } catch (err) {
-      console.error(`failed to generate ai ticket summary for ${targetChannel.id}`, err);
-    }
+  let ticketSummary = null;
+  try {
+    ticketSummary = summarizeTicketActivity(
+      {
+        subject: ticketRecord.subject,
+        details: ticketRecord.details ?? '',
+        status: ticketRecord.status ?? 'closed',
+        createdBy: ticketRecord.created_by,
+        createdByTag: ticketRecord.created_by_tag,
+        createdAt: ticketRecord.created_at ?? ticketRecord.createdAt,
+        closedAt: ticketRecord.closed_at ?? ticketRecord.closedAt,
+        ticketNumber: ticketRecord.ticket_number ?? ticketRecord.ticketNumber
+      },
+      Array.isArray(transcriptEntries) ? transcriptEntries.slice(-20) : []
+    );
+  } catch (err) {
+    console.error(`failed to summarize ticket activity for ${targetChannel.id}`, err);
   }
 
   let dmSuccess = false;
@@ -4032,8 +4168,8 @@ async function handleTicketCloseCommand(state, interaction) {
         if (previewUrl) {
           logEmbed.addFields({ name: 'Transcript preview', value: escapeMarkdown(previewUrl).slice(0, 200), inline: false });
         }
-        if (aiSummary) {
-          logEmbed.addFields({ name: 'AI summary', value: escapeMarkdown(aiSummary).slice(0, 1000), inline: false });
+        if (ticketSummary) {
+          logEmbed.addFields({ name: 'Ticket recap', value: escapeMarkdown(ticketSummary).slice(0, 1000), inline: false });
         }
 
         const payload = { embeds: [logEmbed] };
@@ -4408,6 +4544,8 @@ async function tick() {
 async function main() {
   await initDb();
   console.log('discord bot service starting');
+  setupNotificationWatcher();
+  await loadStandaloneTeamBots();
 
   while (!shuttingDown) {
     try {
