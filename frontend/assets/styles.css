@@ -3176,6 +3176,87 @@ button.menu-tab.active {
   line-height: 1.45;
 }
 
+.chat-entry-translation {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-translation-summary {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgba(59, 130, 246, 0.9);
+  font-weight: 600;
+}
+
+.chat-translation-text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-translation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.chat-translation-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.chat-translation-form.hidden {
+  display: none;
+}
+
+.chat-translation-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.chat-translation-form select,
+.chat-translation-form input {
+  min-width: 160px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  padding: 6px 10px;
+  background: rgba(15, 23, 42, 0.4);
+  color: var(--text);
+}
+
+.chat-translation-form input::placeholder {
+  color: rgba(148, 163, 184, 0.6);
+}
+
+.chat-translation-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #f87171;
+}
+
+.chat-translation-pending {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(148, 163, 184, 0.9);
+  font-style: italic;
+}
+
 .chat-entry.team {
   border-left: 3px solid rgba(59, 130, 246, 0.45);
   padding-left: calc(10px + 3px);

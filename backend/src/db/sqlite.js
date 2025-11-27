@@ -53,11 +53,20 @@ function createDriver(file) {
 }
 
 function createApi(dbh, dialect) {
+  const LANGUAGE_CODE_REGEX = /^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/i;
   const escapeLike = (value) => String(value).replace(/[\\%_]/g, (match) => `\\${match}`);
   const trimOrNull = (value) => {
     if (value == null) return null;
     const text = String(value).trim();
     return text || null;
+  };
+  const sanitizeLanguageCode = (value, { allowAuto = false } = {}) => {
+    const text = trimOrNull(value);
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    if (allowAuto && lower === 'auto') return 'auto';
+    if (!LANGUAGE_CODE_REGEX.test(lower)) return null;
+    return lower.slice(0, 16);
   };
   const normaliseIso = (value) => {
     if (value == null) return null;
@@ -285,8 +294,14 @@ function createApi(dbh, dialect) {
         steamid TEXT,
         username TEXT,
         message TEXT NOT NULL,
+        original_message TEXT,
+        translated_message TEXT,
         raw TEXT,
         color TEXT,
+        translation_detected_language TEXT,
+        translation_target_language TEXT,
+        translation_source_language TEXT,
+        translation_provider TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
       );
@@ -525,9 +540,25 @@ function createApi(dbh, dialect) {
         CREATE INDEX IF NOT EXISTS idx_backup_codes_user ON user_backup_codes(user_id);
       `);
       const chatCols = await dbh.all("PRAGMA table_info('chat_messages')");
-      if (!chatCols.some((c) => c.name === 'color')) {
-        await dbh.run("ALTER TABLE chat_messages ADD COLUMN color TEXT");
-      }
+      const ensureChatColumn = async (name, definition) => {
+        if (!chatCols.some((c) => c.name === name)) {
+          await dbh.run(`ALTER TABLE chat_messages ADD COLUMN ${definition}`);
+        }
+      };
+      await ensureChatColumn('color', 'color TEXT');
+      await ensureChatColumn('original_message', 'original_message TEXT');
+      await ensureChatColumn('translated_message', 'translated_message TEXT');
+      await ensureChatColumn('translation_detected_language', 'translation_detected_language TEXT');
+      await ensureChatColumn('translation_target_language', 'translation_target_language TEXT');
+      await ensureChatColumn('translation_source_language', 'translation_source_language TEXT');
+      await ensureChatColumn('translation_provider', 'translation_provider TEXT');
+      await dbh.run(`
+        UPDATE chat_messages
+        SET translated_message = COALESCE(translated_message, message),
+            message = COALESCE(original_message, message),
+            original_message = NULL
+        WHERE original_message IS NOT NULL AND original_message != ''
+      `);
       await dbh.exec(`
         CREATE TABLE IF NOT EXISTS f7_reports(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1631,6 +1662,8 @@ function createApi(dbh, dialect) {
       const messageText = trimOrNull(entry?.message);
       if (!messageText) return null;
       const truncated = messageText.length > 4000 ? messageText.slice(0, 4000) : messageText;
+      const translatedRaw = trimOrNull(entry?.translated_message ?? entry?.translatedMessage);
+      const translatedMessage = translatedRaw ? translatedRaw.slice(0, 4000) : null;
       const channel = normaliseChannelForStore(entry?.channel);
       const steamId = trimOrNull(entry?.steamid ?? entry?.steamId);
       const usernameRaw = trimOrNull(entry?.username ?? entry?.name);
@@ -1638,10 +1671,47 @@ function createApi(dbh, dialect) {
       const raw = trimOrNull(entry?.raw);
       const colorRaw = trimOrNull(entry?.color);
       const color = colorRaw ? colorRaw.slice(0, 32) : null;
+      const detectedLanguage = sanitizeLanguageCode(
+        entry?.translation_detected_language
+        ?? entry?.translationDetectedLanguage
+        ?? entry?.translation?.detectedLanguage,
+        { allowAuto: true }
+      );
+      const targetLanguage = sanitizeLanguageCode(
+        entry?.translation_target_language
+        ?? entry?.translationTargetLanguage
+        ?? entry?.translation?.targetLanguage
+      );
+      const sourceLanguage = sanitizeLanguageCode(
+        entry?.translation_source_language
+        ?? entry?.translationSourceLanguage
+        ?? entry?.translation?.sourceLanguage,
+        { allowAuto: true }
+      );
+      const providerRaw = trimOrNull(
+        entry?.translation_provider
+        ?? entry?.translationProvider
+        ?? entry?.translation?.provider
+      );
+      const provider = providerRaw ? providerRaw.slice(0, 64) : null;
       const createdAt = normaliseIso(entry?.created_at) || new Date().toISOString();
       const result = await dbh.run(
-        'INSERT INTO chat_messages(server_id, channel, steamid, username, message, raw, color, created_at) VALUES(?,?,?,?,?,?,?,?)',
-        [serverIdNum, channel, steamId || null, username, truncated, raw, color, createdAt]
+        'INSERT INTO chat_messages(server_id, channel, steamid, username, message, translated_message, raw, color, translation_detected_language, translation_target_language, translation_source_language, translation_provider, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          serverIdNum,
+          channel,
+          steamId || null,
+          username,
+          truncated,
+          translatedMessage,
+          raw,
+          color,
+          detectedLanguage,
+          targetLanguage,
+          sourceLanguage,
+          provider,
+          createdAt
+        ]
       );
       return {
         id: result.lastID,
@@ -1650,8 +1720,13 @@ function createApi(dbh, dialect) {
         steamid: steamId || null,
         username,
         message: truncated,
+        translated_message: translatedMessage || null,
         raw,
         color,
+        translation_detected_language: detectedLanguage || null,
+        translation_target_language: targetLanguage || null,
+        translation_source_language: sourceLanguage || null,
+        translation_provider: provider || null,
         created_at: createdAt
       };
     },
@@ -1666,7 +1741,9 @@ function createApi(dbh, dialect) {
         params.push(channelFilter);
       }
       let sql = `
-        SELECT id, server_id, channel, steamid, username, message, raw, color, created_at
+        SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+               translation_detected_language, translation_target_language, translation_source_language,
+               translation_provider, created_at
         FROM chat_messages
         WHERE ${conditions.join(' AND ')}
         ORDER BY created_at ASC
@@ -1690,6 +1767,61 @@ function createApi(dbh, dialect) {
       }
       const result = await dbh.run(sql, params);
       return result.changes || 0;
+    },
+    async getChatMessage(serverId, messageId) {
+      const serverIdNum = Number(serverId);
+      const messageIdNum = Number(messageId);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(messageIdNum)) return null;
+      return await dbh.get(
+        `SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+                translation_detected_language, translation_target_language, translation_source_language,
+                translation_provider, created_at
+         FROM chat_messages
+         WHERE server_id=? AND id=?`,
+        [serverIdNum, messageIdNum]
+      );
+    },
+    async updateChatMessageTranslation(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      const messageIdNum = Number(entry?.id ?? entry?.message_id ?? entry?.messageId);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(messageIdNum)) return null;
+      const translatedRaw = trimOrNull(entry?.translated_message ?? entry?.translatedMessage ?? entry?.translation?.text);
+      if (!translatedRaw) return null;
+      const translatedMessage = translatedRaw.length > 4000 ? translatedRaw.slice(0, 4000) : translatedRaw;
+      const detectedLanguage = sanitizeLanguageCode(
+        entry?.translation_detected_language ?? entry?.translationDetectedLanguage ?? entry?.translation?.detectedLanguage,
+        { allowAuto: true }
+      );
+      const targetLanguage = sanitizeLanguageCode(entry?.translation_target_language ?? entry?.translationTargetLanguage);
+      const sourceLanguage = sanitizeLanguageCode(
+        entry?.translation_source_language ?? entry?.translationSourceLanguage ?? entry?.translation?.sourceLanguage,
+        { allowAuto: true }
+      );
+      const providerRaw = trimOrNull(entry?.translation_provider ?? entry?.translationProvider ?? entry?.translation?.provider);
+      const provider = providerRaw ? providerRaw.slice(0, 64) : null;
+      await dbh.run(
+        `UPDATE chat_messages
+         SET translated_message=?, translation_detected_language=?, translation_target_language=?,
+             translation_source_language=?, translation_provider=?
+         WHERE id=? AND server_id=?`,
+        [
+          translatedMessage,
+          detectedLanguage,
+          targetLanguage,
+          sourceLanguage,
+          provider,
+          messageIdNum,
+          serverIdNum
+        ]
+      );
+      return await dbh.get(
+        `SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+                translation_detected_language, translation_target_language, translation_source_language,
+                translation_provider, created_at
+         FROM chat_messages
+         WHERE server_id=? AND id=?`,
+        [serverIdNum, messageIdNum]
+      );
     },
     async recordF7Report(entry = {}) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);

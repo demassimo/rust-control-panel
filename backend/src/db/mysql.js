@@ -67,6 +67,15 @@ function createApi(pool, dialect) {
     const lower = text.toLowerCase();
     return lower === 'team' || lower === 'global' ? lower : null;
   };
+  const LANGUAGE_CODE_REGEX = /^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/i;
+  const sanitizeLanguageCode = (value, { allowAuto = false } = {}) => {
+    const text = trimOrNull(value);
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    if (allowAuto && lower === 'auto') return 'auto';
+    if (!LANGUAGE_CODE_REGEX.test(lower)) return null;
+    return lower.slice(0, 16);
+  };
   const sanitizeAuditScope = (value) => {
     const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
     return text ? text.slice(0, 32) : 'general';
@@ -256,6 +265,19 @@ function createApi(pool, dialect) {
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN online TINYINT DEFAULT 1');
       await ensureColumn('ALTER TABLE server_player_counts ADD COLUMN fps FLOAT NULL');
       await ensureColumn('ALTER TABLE chat_messages ADD COLUMN color VARCHAR(32) NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN original_message TEXT NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN translated_message TEXT NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN translation_detected_language VARCHAR(32) NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN translation_target_language VARCHAR(32) NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN translation_source_language VARCHAR(32) NULL');
+      await ensureColumn('ALTER TABLE chat_messages ADD COLUMN translation_provider VARCHAR(64) NULL');
+      await exec(`
+        UPDATE chat_messages
+        SET translated_message = IFNULL(translated_message, message),
+            message = COALESCE(original_message, message),
+            original_message = NULL
+        WHERE original_message IS NOT NULL AND original_message <> ''
+      `);
       await ensureColumn('ALTER TABLE users ADD COLUMN mfa_secret TEXT NULL');
       await ensureColumn('ALTER TABLE users ADD COLUMN mfa_enabled TINYINT(1) NOT NULL DEFAULT 0');
         await exec(`CREATE TABLE IF NOT EXISTS user_passkeys(
@@ -331,8 +353,14 @@ function createApi(pool, dialect) {
         steamid VARCHAR(32) NULL,
         username VARCHAR(190) NULL,
         message TEXT NOT NULL,
+        original_message TEXT NULL,
+        translated_message TEXT NULL,
         raw TEXT NULL,
         color VARCHAR(32) NULL,
+        translation_detected_language VARCHAR(32) NULL,
+        translation_target_language VARCHAR(32) NULL,
+        translation_source_language VARCHAR(32) NULL,
+        translation_provider VARCHAR(64) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_chat_server_time (server_id, created_at),
         INDEX idx_chat_server_channel (server_id, channel),
@@ -1490,6 +1518,8 @@ function createApi(pool, dialect) {
       const messageText = trimOrNull(entry?.message);
       if (!messageText) return null;
       const truncated = messageText.length > 4000 ? messageText.slice(0, 4000) : messageText;
+      const translatedRaw = trimOrNull(entry?.translated_message ?? entry?.translatedMessage);
+      const translatedMessage = translatedRaw ? translatedRaw.slice(0, 4000) : null;
       const channel = normaliseChannelForStore(entry?.channel);
       const steamId = trimOrNull(entry?.steamid ?? entry?.steamId);
       const usernameRaw = trimOrNull(entry?.username ?? entry?.name);
@@ -1497,9 +1527,58 @@ function createApi(pool, dialect) {
       const raw = trimOrNull(entry?.raw);
       const colorRaw = trimOrNull(entry?.color);
       const color = colorRaw ? colorRaw.slice(0, 32) : null;
+      const detectedLanguage = sanitizeLanguageCode(
+        entry?.translation_detected_language
+        ?? entry?.translationDetectedLanguage
+        ?? entry?.translation?.detectedLanguage,
+        { allowAuto: true }
+      );
+      const targetLanguage = sanitizeLanguageCode(
+        entry?.translation_target_language
+        ?? entry?.translationTargetLanguage
+        ?? entry?.translation?.targetLanguage
+      );
+      const sourceLanguage = sanitizeLanguageCode(
+        entry?.translation_source_language
+        ?? entry?.translationSourceLanguage
+        ?? entry?.translation?.sourceLanguage,
+        { allowAuto: true }
+      );
+      const providerRaw = trimOrNull(
+        entry?.translation_provider
+        ?? entry?.translationProvider
+        ?? entry?.translation?.provider
+      );
+      const provider = providerRaw ? providerRaw.slice(0, 64) : null;
       const createdAt = normaliseDateTime(entry?.created_at);
-      const columns = ['server_id', 'channel', 'steamid', 'username', 'message', 'raw', 'color'];
-      const params = [serverIdNum, channel, steamId || null, username, truncated, raw, color];
+      const columns = [
+        'server_id',
+        'channel',
+        'steamid',
+        'username',
+        'message',
+        'translated_message',
+        'raw',
+        'color',
+        'translation_detected_language',
+        'translation_target_language',
+        'translation_source_language',
+        'translation_provider'
+      ];
+      const params = [
+        serverIdNum,
+        channel,
+        steamId || null,
+        username,
+        truncated,
+        translatedMessage,
+        raw,
+        color,
+        detectedLanguage,
+        targetLanguage,
+        sourceLanguage,
+        provider
+      ];
       if (createdAt) {
         columns.push('created_at');
         params.push(createdAt);
@@ -1509,7 +1588,14 @@ function createApi(pool, dialect) {
       const result = await exec(sql, params);
       const insertedId = result.insertId || null;
       if (insertedId) {
-        const rows = await exec('SELECT id, server_id, channel, steamid, username, message, raw, color, created_at FROM chat_messages WHERE id=?', [insertedId]);
+        const rows = await exec(
+          `SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+                  translation_detected_language, translation_target_language, translation_source_language,
+                  translation_provider, created_at
+           FROM chat_messages
+           WHERE id=?`,
+          [insertedId]
+        );
         if (rows && rows.length) return rows[0];
       }
       return {
@@ -1519,8 +1605,13 @@ function createApi(pool, dialect) {
         steamid: steamId || null,
         username,
         message: truncated,
+        translated_message: translatedMessage || null,
         raw,
         color,
+        translation_detected_language: detectedLanguage || null,
+        translation_target_language: targetLanguage || null,
+        translation_source_language: sourceLanguage || null,
+        translation_provider: provider || null,
         created_at: createdAt || null
       };
     },
@@ -1534,7 +1625,10 @@ function createApi(pool, dialect) {
         conditions.push('channel=?');
         params.push(channelFilter);
       }
-      let sql = `SELECT id, server_id, channel, steamid, username, message, raw, color, created_at FROM chat_messages WHERE ${conditions.join(' AND ')} ORDER BY created_at ASC`;
+      let sql = `SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+        translation_detected_language, translation_target_language, translation_source_language,
+        translation_provider, created_at
+        FROM chat_messages WHERE ${conditions.join(' AND ')} ORDER BY created_at ASC`;
       const limitNum = Number(limit);
       if (Number.isFinite(limitNum) && limitNum > 0) {
         sql += ' LIMIT ?';
@@ -1554,6 +1648,65 @@ function createApi(pool, dialect) {
       }
       const result = await exec(sql, params);
       return result.affectedRows || 0;
+    },
+    async getChatMessage(serverId, messageId) {
+      const serverIdNum = Number(serverId);
+      const messageIdNum = Number(messageId);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(messageIdNum)) return null;
+      const rows = await exec(
+        `SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+                translation_detected_language, translation_target_language, translation_source_language,
+                translation_provider, created_at
+         FROM chat_messages
+         WHERE server_id=? AND id=?
+         LIMIT 1`,
+        [serverIdNum, messageIdNum]
+      );
+      return rows?.[0] || null;
+    },
+    async updateChatMessageTranslation(entry = {}) {
+      const serverIdNum = Number(entry?.server_id ?? entry?.serverId);
+      const messageIdNum = Number(entry?.id ?? entry?.message_id ?? entry?.messageId);
+      if (!Number.isFinite(serverIdNum) || !Number.isFinite(messageIdNum)) return null;
+      const translatedRaw = trimOrNull(entry?.translated_message ?? entry?.translatedMessage ?? entry?.translation?.text);
+      if (!translatedRaw) return null;
+      const translatedMessage = translatedRaw.length > 4000 ? translatedRaw.slice(0, 4000) : translatedRaw;
+      const detectedLanguage = sanitizeLanguageCode(
+        entry?.translation_detected_language ?? entry?.translationDetectedLanguage ?? entry?.translation?.detectedLanguage,
+        { allowAuto: true }
+      );
+      const targetLanguage = sanitizeLanguageCode(entry?.translation_target_language ?? entry?.translationTargetLanguage);
+      const sourceLanguage = sanitizeLanguageCode(
+        entry?.translation_source_language ?? entry?.translationSourceLanguage ?? entry?.translation?.sourceLanguage,
+        { allowAuto: true }
+      );
+      const providerRaw = trimOrNull(entry?.translation_provider ?? entry?.translationProvider ?? entry?.translation?.provider);
+      const provider = providerRaw ? providerRaw.slice(0, 64) : null;
+      await exec(
+        `UPDATE chat_messages
+         SET translated_message=?, translation_detected_language=?, translation_target_language=?,
+             translation_source_language=?, translation_provider=?
+         WHERE id=? AND server_id=?`,
+        [
+          translatedMessage,
+          detectedLanguage,
+          targetLanguage,
+          sourceLanguage,
+          provider,
+          messageIdNum,
+          serverIdNum
+        ]
+      );
+      const rows = await exec(
+        `SELECT id, server_id, channel, steamid, username, message, translated_message, raw, color,
+                translation_detected_language, translation_target_language, translation_source_language,
+                translation_provider, created_at
+         FROM chat_messages
+         WHERE server_id=? AND id=?
+         LIMIT 1`,
+        [serverIdNum, messageIdNum]
+      );
+      return rows?.[0] || null;
     },
     async recordF7Report(entry = {}) {
       const serverIdNum = Number(entry?.server_id ?? entry?.serverId);

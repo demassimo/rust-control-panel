@@ -567,7 +567,31 @@
   const regionDisplay = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
     ? new Intl.DisplayNames(['en'], { type: 'region' })
     : null;
+  const languageDisplay = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+    ? new Intl.DisplayNames(['en'], { type: 'language' })
+    : null;
   const COUNTRY_FALLBACKS = { UK: 'United Kingdom', EU: 'European Union' };
+  const LANGUAGE_CODE_REGEX = /^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/i;
+  const CHAT_LANGUAGE_CHOICES = [
+    { code: 'auto', label: 'Auto detect' },
+    { code: 'en', label: 'English' },
+    { code: 'es', label: 'Spanish' },
+    { code: 'fr', label: 'French' },
+    { code: 'de', label: 'German' },
+    { code: 'ru', label: 'Russian' },
+    { code: 'pl', label: 'Polish' },
+    { code: 'pt', label: 'Portuguese' },
+    { code: 'tr', label: 'Turkish' },
+    { code: 'sv', label: 'Swedish' },
+    { code: 'cs', label: 'Czech' },
+    { code: 'nl', label: 'Dutch' },
+    { code: 'zh', label: 'Chinese' },
+    { code: 'zh-hans', label: 'Chinese (Simplified)' },
+    { code: 'zh-hant', label: 'Chinese (Traditional)' },
+    { code: 'ja', label: 'Japanese' },
+    { code: 'ko', label: 'Korean' },
+    { code: 'ar', label: 'Arabic' }
+  ];
   const killFeedList = $('#killFeedList');
   const killFeedEmpty = $('#killFeedEmpty');
   const killFeedLoading = $('#killFeedLoading');
@@ -633,7 +657,10 @@
     profileRequests: new Map(),
     teamColors: new Map(),
     teamPalettes: new Map(),
-    playerTeams: new Map()
+    playerTeams: new Map(),
+    translationPending: new Set(),
+    translationErrors: new Map(),
+    translationFormsOpen: new Set()
   };
   const killFeedState = {
     cache: new Map(),
@@ -661,6 +688,31 @@
     capacityWarn: 0.85,
     capacityCritical: 0.95
   };
+
+  function normalizeLanguageCode(value, { allowAuto = false } = {}) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const lower = trimmed.toLowerCase();
+    if (allowAuto && lower === 'auto') return 'auto';
+    if (!LANGUAGE_CODE_REGEX.test(lower)) return null;
+    return lower.slice(0, 16);
+  }
+
+  function describeLanguageLabel(code) {
+    const normalized = normalizeLanguageCode(code, { allowAuto: true });
+    if (!normalized) return null;
+    if (normalized === 'auto') return 'Auto detect';
+    if (languageDisplay) {
+      try {
+        const label = languageDisplay.of(normalized);
+        if (label) return label;
+      } catch { /* ignore */ }
+    }
+    const preset = CHAT_LANGUAGE_CHOICES.find((entry) => entry.code === normalized);
+    if (preset) return preset.label;
+    return normalized.toUpperCase();
+  }
 
   function setCardVariant(card, variant) {
     if (!card) return;
@@ -1231,6 +1283,50 @@
     renderChatMessages();
   }
 
+  function normalizeChatTranslationPayload(payload) {
+    if (!payload) return null;
+    const translation = payload.translation ?? payload.Translation ?? {};
+    const translationText = pickString(
+      translation.text,
+      translation.Text,
+      payload.translatedMessage,
+      payload.translated_message,
+      payload.translationText
+    );
+    const detected = pickString(
+      translation.detectedLanguage,
+      translation.detected_language,
+      payload.translationDetectedLanguage,
+      payload.translation_detected_language
+    );
+    const target = pickString(
+      translation.targetLanguage,
+      translation.target_language,
+      payload.translationTargetLanguage,
+      payload.translation_target_language
+    );
+    const source = pickString(
+      translation.sourceLanguage,
+      translation.source_language,
+      payload.translationSourceLanguage,
+      payload.translation_source_language
+    );
+    const provider = pickString(
+      translation.provider,
+      translation.Provider,
+      payload.translationProvider,
+      payload.translation_provider
+    );
+    if (!translationText && !detected && !target && !source && !provider) return null;
+    return {
+      text: translationText || null,
+      provider: provider || null,
+      detectedLanguage: detected || null,
+      targetLanguage: target || null,
+      sourceLanguage: source || null
+    };
+  }
+
   function normalizeChatMessage(payload, fallbackServerId) {
     if (!payload) return null;
     const serverId = Number(payload?.serverId ?? payload?.server_id ?? fallbackServerId);
@@ -1308,6 +1404,15 @@
     );
     const raw = pickString(payload?.raw, payload?.Raw);
     const color = normalizeChatColor(pickString(payload?.color, payload?.Color));
+    const translation = normalizeChatTranslationPayload(payload);
+    const translatedMessage = pickString(
+      payload?.translatedMessage,
+      payload?.translated_message,
+      translation?.text
+    );
+    if (translation && !translation.text && translatedMessage) {
+      translation.text = translatedMessage;
+    }
     return {
       id,
       serverId,
@@ -1317,8 +1422,30 @@
       message: trimmedMessage.length > 4000 ? trimmedMessage.slice(0, 4000) : trimmedMessage,
       createdAt,
       raw: raw || null,
-      color: color || null
+      color: color || null,
+      translatedMessage: translatedMessage || null,
+      translation
     };
+  }
+
+  function setChatTranslationError(messageId, message) {
+    if (messageId == null) return;
+    if (message) {
+      chatState.translationErrors.set(messageId, message);
+    } else {
+      chatState.translationErrors.delete(messageId);
+    }
+  }
+
+  function isChatTranslationPending(messageId) {
+    if (messageId == null) return false;
+    return chatState.translationPending.has(messageId);
+  }
+
+  function setTranslationFormOpen(messageId, open) {
+    if (messageId == null) return;
+    if (open) chatState.translationFormsOpen.add(messageId);
+    else chatState.translationFormsOpen.delete(messageId);
   }
 
   function normalizeChatProfile(profile, steamId, fallbackName = null) {
@@ -1427,14 +1554,34 @@
     if (replace) {
       chatState.teamColors.delete(key);
     }
-    const seen = new Set(list.map((item) => messageSignature(item)));
+    const idLookup = new Map();
+    const signatureSet = new Set();
+    list.forEach((item, index) => {
+      if (item?.id != null) {
+        idLookup.set(item.id, index);
+      } else {
+        signatureSet.add(messageSignature(item));
+      }
+    });
     for (const raw of Array.isArray(entries) ? entries : []) {
       const normalized = normalizeChatMessage(raw, key);
       if (!normalized) continue;
-      const signature = messageSignature(normalized);
-      if (seen.has(signature)) continue;
-      list.push(normalized);
-      seen.add(signature);
+      if (normalized.id != null) {
+        if (idLookup.has(normalized.id)) {
+          const idx = idLookup.get(normalized.id);
+          list[idx] = { ...list[idx], ...normalized };
+        } else {
+          idLookup.set(normalized.id, list.length);
+          list.push(normalized);
+        }
+        setChatTranslationError(normalized.id, null);
+        chatState.translationPending.delete(normalized.id);
+      } else {
+        const signature = messageSignature(normalized);
+        if (signatureSet.has(signature)) continue;
+        signatureSet.add(signature);
+        list.push(normalized);
+      }
       if (normalized.steamId) {
         queueChatProfileFetch(normalized.steamId, { username: normalized.username });
       }
@@ -1452,6 +1599,20 @@
       chatState.teamColors.delete(key);
     }
     chatState.cache.set(key, list);
+    const presentIds = new Set(
+      list
+        .map((item) => item?.id)
+        .filter((id) => id != null)
+    );
+    for (const id of Array.from(chatState.translationFormsOpen)) {
+      if (!presentIds.has(id)) chatState.translationFormsOpen.delete(id);
+    }
+    for (const id of Array.from(chatState.translationPending)) {
+      if (!presentIds.has(id)) chatState.translationPending.delete(id);
+    }
+    for (const [id] of Array.from(chatState.translationErrors.entries())) {
+      if (!presentIds.has(id)) chatState.translationErrors.delete(id);
+    }
     chatState.lastFetched.set(key, Date.now());
     if (key === state.currentServerId) renderChatMessages();
   }
@@ -1595,9 +1756,163 @@
       messageEl.textContent = entry.message;
 
       content.append(meta, messageEl);
+
+      const translationText = entry.translatedMessage || entry.translation?.text || '';
+      if (translationText) {
+        const translationWrap = document.createElement('div');
+        translationWrap.className = 'chat-entry-translation';
+        const summary = document.createElement('p');
+        summary.className = 'chat-translation-summary';
+        const detectedLabel = describeLanguageLabel(entry.translation?.detectedLanguage || entry.translation?.sourceLanguage || 'auto') || 'Auto detect';
+        const targetLabel = describeLanguageLabel(entry.translation?.targetLanguage) || null;
+        const providerLabel = entry.translation?.provider ? entry.translation.provider : null;
+        let summaryText = targetLabel
+          ? `Translated ${detectedLabel} → ${targetLabel}`
+          : `Translated from ${detectedLabel}`;
+        if (providerLabel) summaryText += ` via ${providerLabel}`;
+        summary.textContent = summaryText;
+        translationWrap.appendChild(summary);
+
+        const translationEl = document.createElement('p');
+        translationEl.className = 'chat-translation-text';
+        translationEl.textContent = translationText;
+        translationWrap.appendChild(translationEl);
+
+        if (entry.id != null) {
+          const controls = document.createElement('div');
+          controls.className = 'chat-translation-controls';
+          const changeBtn = document.createElement('button');
+          changeBtn.type = 'button';
+          changeBtn.className = 'ghost tiny';
+          changeBtn.textContent = 'Change language';
+          changeBtn.disabled = isChatTranslationPending(entry.id);
+          changeBtn.addEventListener('click', () => {
+            const currentlyOpen = chatState.translationFormsOpen.has(entry.id);
+            setTranslationFormOpen(entry.id, !currentlyOpen);
+            renderChatMessages();
+          });
+          controls.appendChild(changeBtn);
+
+          const form = document.createElement('form');
+          form.className = 'chat-translation-form';
+          if (!chatState.translationFormsOpen.has(entry.id)) {
+            form.classList.add('hidden');
+          }
+          const select = document.createElement('select');
+          CHAT_LANGUAGE_CHOICES.forEach((option) => {
+            const opt = document.createElement('option');
+            opt.value = option.code;
+            opt.textContent = option.label;
+            select.appendChild(opt);
+          });
+          const currentSource = normalizeLanguageCode(
+            entry.translation?.detectedLanguage || entry.translation?.sourceLanguage || 'auto',
+            { allowAuto: true }
+          ) || 'auto';
+          const hasPresetSource = CHAT_LANGUAGE_CHOICES.some((opt) => opt.code === currentSource);
+          select.value = hasPresetSource ? currentSource : 'auto';
+          const selectLabel = document.createElement('label');
+          selectLabel.textContent = 'Detected language';
+          selectLabel.appendChild(select);
+          form.appendChild(selectLabel);
+
+          const customInput = document.createElement('input');
+          customInput.type = 'text';
+          customInput.placeholder = 'Custom code (e.g. ru)';
+          customInput.autocomplete = 'off';
+          customInput.spellcheck = false;
+          customInput.maxLength = 16;
+          if (!hasPresetSource && currentSource && currentSource !== 'auto') {
+            customInput.value = currentSource;
+          }
+          form.appendChild(customInput);
+
+          const submitBtn = document.createElement('button');
+          submitBtn.type = 'submit';
+          submitBtn.className = 'accent tiny';
+          submitBtn.textContent = 'Re-translate';
+          form.appendChild(submitBtn);
+
+          const cancelBtn = document.createElement('button');
+          cancelBtn.type = 'button';
+          cancelBtn.className = 'ghost tiny';
+          cancelBtn.textContent = 'Cancel';
+          cancelBtn.addEventListener('click', () => {
+            setTranslationFormOpen(entry.id, false);
+            renderChatMessages();
+          });
+          form.appendChild(cancelBtn);
+
+          form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            if (entry.id == null || isChatTranslationPending(entry.id)) return;
+            const manual = customInput.value.trim();
+            const choice = manual || select.value || 'auto';
+            const normalized = normalizeLanguageCode(choice, { allowAuto: true });
+            if (!normalized) {
+              setChatTranslationError(entry.id, 'Enter a valid language code (e.g. en, ru, fr)');
+              renderChatMessages();
+              return;
+            }
+            setTranslationFormOpen(entry.id, false);
+            setChatTranslationError(entry.id, null);
+            requestChatRetranslate(entry, normalized);
+          });
+
+          controls.appendChild(form);
+          translationWrap.appendChild(controls);
+
+          if (isChatTranslationPending(entry.id)) {
+            const pendingEl = document.createElement('p');
+            pendingEl.className = 'chat-translation-pending';
+            pendingEl.textContent = 'Retranslating…';
+            translationWrap.appendChild(pendingEl);
+          }
+          const translationError = chatState.translationErrors.get(entry.id);
+          if (translationError) {
+            const errorEl = document.createElement('p');
+            errorEl.className = 'chat-translation-error';
+            errorEl.textContent = translationError;
+            translationWrap.appendChild(errorEl);
+          }
+        }
+
+        content.appendChild(translationWrap);
+      }
       li.append(avatar, content);
       workspaceChatList.appendChild(li);
     });
+  }
+
+  async function requestChatRetranslate(entry, sourceLanguage) {
+    if (!entry || entry.id == null) return;
+    const serverId = Number(entry.serverId ?? state.currentServerId);
+    if (!Number.isFinite(serverId)) return;
+    const payload = {};
+    if (typeof sourceLanguage === 'string' && sourceLanguage.trim()) {
+      payload.sourceLanguage = sourceLanguage.trim();
+    }
+    chatState.translationPending.add(entry.id);
+    setChatTranslationError(entry.id, null);
+    renderChatMessages();
+    try {
+      const data = await api(`/servers/${serverId}/chat/${entry.id}/translation`, payload, 'POST');
+      if (data?.message) {
+        storeChatMessages(serverId, [data.message]);
+      } else if (data) {
+        storeChatMessages(serverId, [data]);
+      }
+    } catch (err) {
+      const code = errorCode(err);
+      if (code === 'unauthorized') {
+        handleUnauthorized();
+      } else {
+        setChatTranslationError(entry.id, describeError(err) || 'Translation failed');
+      }
+    } finally {
+      chatState.translationPending.delete(entry.id);
+      renderChatMessages();
+    }
   }
 
   async function refreshChatForServer(serverId, { force = false } = {}) {
@@ -7464,6 +7779,10 @@
     const entry = state.serverItems.get(String(id));
     if (!entry) return;
     dashboardPanel?.classList.add('hidden');
+    linkedAccountsPanel?.classList.add('hidden');
+    teamPanel?.classList.add('hidden');
+    adminPanel?.classList.add('hidden');
+    discordPanel?.classList.add('hidden');
     settingsPanel?.classList.add('hidden');
     workspacePanel?.classList.remove('hidden');
     setWorkspaceView(workspaceViewDefault);

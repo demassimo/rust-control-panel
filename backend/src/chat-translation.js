@@ -3,13 +3,16 @@ const CHAT_TRANSLATE_TARGET = (process.env.CHAT_TRANSLATE_TARGET_LANG || process
 const CHAT_TRANSLATE_SOURCE = (process.env.CHAT_TRANSLATE_SOURCE_LANG || '').trim() || 'auto';
 const CHAT_TRANSLATE_API_KEY = (process.env.CHAT_TRANSLATE_API_KEY || '').trim();
 const CHAT_TRANSLATE_TIMEOUT_MS = Math.max(2500, Number(process.env.CHAT_TRANSLATE_TIMEOUT_MS) || 5000);
+const LANGUAGE_CODE_REGEX = /^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/i;
+const DEFAULT_TRANSLATE_TARGET = normalizeLanguageCode(CHAT_TRANSLATE_TARGET) || null;
+const DEFAULT_TRANSLATE_SOURCE = normalizeLanguageCode(CHAT_TRANSLATE_SOURCE, { allowAuto: true }) || 'auto';
 
 function getTranslateUrl() {
   return DEFAULT_TRANSLATE_BASE || 'https://libretranslate.com';
 }
 
 export function isChatTranslationEnabled() {
-  return Boolean(CHAT_TRANSLATE_TARGET);
+  return Boolean(DEFAULT_TRANSLATE_TARGET);
 }
 
 function buildTimeoutSignal(timeoutMs) {
@@ -19,15 +22,39 @@ function buildTimeoutSignal(timeoutMs) {
   return controller;
 }
 
-export async function translateChatMessage(text) {
-  if (!isChatTranslationEnabled()) return null;
+export function normalizeLanguageCode(value, { allowAuto = false } = {}) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (allowAuto && lower === 'auto') return 'auto';
+  if (!LANGUAGE_CODE_REGEX.test(lower)) return null;
+  return lower.slice(0, 16);
+}
+
+function resolveTargetLanguage(override) {
+  const normalized = normalizeLanguageCode(override);
+  if (normalized) return normalized;
+  return DEFAULT_TRANSLATE_TARGET;
+}
+
+function resolveSourceLanguage(override) {
+  const normalized = normalizeLanguageCode(override, { allowAuto: true });
+  if (normalized) return normalized;
+  return DEFAULT_TRANSLATE_SOURCE || 'auto';
+}
+
+export async function translateChatMessage(text, options = {}) {
   if (!text || typeof text !== 'string') return null;
   const trimmed = text.trim();
   if (!trimmed) return null;
+  const targetLanguage = resolveTargetLanguage(options?.targetLanguage);
+  if (!targetLanguage) return null;
+  const sourceLanguage = resolveSourceLanguage(options?.sourceLanguage);
   const params = new URLSearchParams();
   params.append('q', trimmed);
-  params.append('source', CHAT_TRANSLATE_SOURCE || 'auto');
-  params.append('target', CHAT_TRANSLATE_TARGET);
+  params.append('source', sourceLanguage);
+  params.append('target', targetLanguage);
   params.append('format', 'text');
   if (CHAT_TRANSLATE_API_KEY) params.append('api_key', CHAT_TRANSLATE_API_KEY);
 
@@ -67,7 +94,8 @@ export async function translateChatMessage(text) {
   return {
     text: translated,
     provider: 'libretranslate',
-    targetLanguage: CHAT_TRANSLATE_TARGET,
-    detectedLanguage: detectedLanguage || null
+    targetLanguage,
+    detectedLanguage: detectedLanguage || null,
+    sourceLanguage
   };
 }

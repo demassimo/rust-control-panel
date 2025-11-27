@@ -91,7 +91,8 @@ import {
 } from './rcon-parsers.js';
 import {
   isChatTranslationEnabled,
-  translateChatMessage
+  translateChatMessage,
+  normalizeLanguageCode as normalizeChatLanguageCode
 } from './chat-translation.js';
 
 const mapImageUpload = multer({
@@ -641,6 +642,77 @@ function projectF7Report(row, fallback = {}) {
     raw: source.raw ?? base.raw ?? null,
     createdAt,
     updatedAt
+  };
+}
+
+function projectChatMessage(row, fallback = {}) {
+  const source = row || {};
+  const base = fallback || {};
+  const idCandidate = Number(source.id ?? source.message_id ?? base.id);
+  const serverIdCandidate = Number(source.server_id ?? source.serverId ?? base.serverId);
+  const channel = (source.channel ?? base.channel ?? 'global') || 'global';
+  const steamId = source.steamid ?? source.steamId ?? base.steamId ?? null;
+  const username = source.username ?? base.username ?? null;
+  const raw = source.raw ?? base.raw ?? null;
+  const color = source.color ?? base.color ?? null;
+  const createdAt = source.created_at ?? source.createdAt ?? base.createdAt ?? new Date().toISOString();
+  const messageValue = source.message ?? base.message ?? '';
+  const message = typeof messageValue === 'string'
+    ? messageValue
+    : (messageValue == null ? '' : String(messageValue));
+  if (!message.trim()) return null;
+  const translatedMessageValue = source.translated_message ?? base.translated_message ?? null;
+  const translatedMessage = typeof translatedMessageValue === 'string'
+    ? translatedMessageValue
+    : (translatedMessageValue == null ? null : String(translatedMessageValue));
+  const detectedLanguage = source.translation_detected_language
+    ?? source.translationDetectedLanguage
+    ?? base.translation_detected_language
+    ?? base.translationDetectedLanguage
+    ?? null;
+  const targetLanguage = source.translation_target_language
+    ?? source.translationTargetLanguage
+    ?? base.translation_target_language
+    ?? base.translationTargetLanguage
+    ?? null;
+  const sourceLanguage = source.translation_source_language
+    ?? source.translationSourceLanguage
+    ?? base.translation_source_language
+    ?? base.translationSourceLanguage
+    ?? null;
+  const provider = source.translation_provider
+    ?? source.translationProvider
+    ?? base.translation_provider
+    ?? base.translationProvider
+    ?? null;
+  const translation = (() => {
+    if (!translatedMessage && !detectedLanguage && !targetLanguage && !provider && !sourceLanguage) {
+      return null;
+    }
+    return {
+      provider: provider || null,
+      detectedLanguage: detectedLanguage || null,
+      targetLanguage: targetLanguage || null,
+      sourceLanguage: sourceLanguage || null,
+      text: translatedMessage || null
+    };
+  })();
+  const numericId = Number(idCandidate);
+  const resolvedId = Number.isFinite(numericId) ? numericId : (typeof idCandidate === 'string' ? idCandidate : null);
+  const resolvedServerId = Number.isFinite(serverIdCandidate) ? serverIdCandidate : null;
+  return {
+    id: resolvedId,
+    serverId: resolvedServerId,
+    channel,
+    steamId: steamId || null,
+    username: username || null,
+    message,
+    createdAt,
+    raw: raw || null,
+    color: color || null,
+    originalMessage: translation ? (message || null) : null,
+    translatedMessage,
+    translation
   };
 }
 
@@ -1729,19 +1801,23 @@ async function handleChatMessage(serverId, line, payload) {
     steamid: parsed.steamId || null,
     username: parsed.username || null,
     message: parsed.message,
+    translated_message: null,
     raw: parsed.raw || (typeof rawInput === 'string' ? rawInput : null),
     color: parsed.color || null,
     created_at: parsed.timestamp || null
   };
 
   let translationMeta = null;
-  const originalMessage = record.message;
   if (isChatTranslationEnabled()) {
     try {
       const translated = await translateChatMessage(record.message);
       if (translated?.text) {
         translationMeta = translated;
-        record.message = translated.text;
+        record.translated_message = translated.text;
+        record.translation_detected_language = translated.detectedLanguage || null;
+        record.translation_target_language = translated.targetLanguage || null;
+        record.translation_source_language = translated.sourceLanguage || null;
+        record.translation_provider = translated.provider || null;
       }
     } catch (err) {
       console.warn('chat translation failed', err);
@@ -1757,26 +1833,28 @@ async function handleChatMessage(serverId, line, payload) {
     }
   }
 
-  const createdAt = stored?.created_at || parsed.timestamp || new Date().toISOString();
-  const eventPayload = {
-    id: stored?.id ?? null,
-    serverId: key,
-    channel: stored?.channel || record.channel,
-    steamId: stored?.steamid || record.steamid || null,
-    username: stored?.username || record.username || null,
-    message: stored?.message || record.message,
-    createdAt,
-    raw: stored?.raw || record.raw || null,
-    color: stored?.color || record.color || null,
-    originalMessage: translationMeta ? originalMessage : null,
-    translation: translationMeta
-      ? {
-          provider: translationMeta.provider,
-          targetLanguage: translationMeta.targetLanguage,
-          detectedLanguage: translationMeta.detectedLanguage || null
-        }
-      : null
+  const fallbackRow = {
+    server_id: key,
+    channel: record.channel,
+    steamid: record.steamid,
+    username: record.username,
+    message: record.message,
+    translated_message: record.translated_message ?? translationMeta?.text ?? null,
+    raw: record.raw,
+    color: record.color,
+    translation_detected_language: record.translation_detected_language ?? translationMeta?.detectedLanguage ?? null,
+    translation_target_language: record.translation_target_language ?? translationMeta?.targetLanguage ?? null,
+    translation_source_language: record.translation_source_language ?? translationMeta?.sourceLanguage ?? null,
+    translation_provider: record.translation_provider ?? translationMeta?.provider ?? null,
+    created_at: parsed.timestamp || new Date().toISOString()
   };
+  const projected = stored ?? {
+    ...fallbackRow,
+    id: null
+  };
+  if (stored?.id != null) projected.id = stored.id;
+  const eventPayload = projectChatMessage(projected, fallbackRow);
+  if (!eventPayload) return;
 
   io.to(`srv:${key}`).emit('chat', { serverId: key, message: eventPayload });
   maybeCleanupChatHistory(key);
@@ -10103,21 +10181,87 @@ app.get('/api/servers/:id/chat', auth, async (req, res) => {
     const rows = typeof db.listChatMessages === 'function'
       ? await db.listChatMessages(id, { limit, channel })
       : [];
-    const messages = (rows || []).map((row) => ({
-      id: row?.id ?? null,
-      serverId: row?.server_id ?? id,
-      channel: row?.channel || (channel || 'global'),
-      steamId: row?.steamid || null,
-      username: row?.username || null,
-      message: row?.message || '',
-      createdAt: row?.created_at || null,
-      raw: row?.raw || null,
-      color: row?.color || null
-    })).filter((entry) => entry.message);
+    const messages = (rows || [])
+      .map((row) => projectChatMessage(row, { serverId: id }))
+      .filter(Boolean);
     res.json({ messages });
   } catch (err) {
     console.error('chat history fetch failed', err);
     res.status(500).json({ error: 'chat_history_failed' });
+  }
+});
+
+app.post('/api/servers/:serverId/chat/:messageId/translation', auth, async (req, res) => {
+  const serverId = ensureServerCapability(req, res, 'console');
+  if (serverId == null) return;
+  if (typeof db?.getChatMessage !== 'function' || typeof db?.updateChatMessageTranslation !== 'function') {
+    return res.status(503).json({ error: 'translation_unavailable' });
+  }
+  const messageId = Number(req.params.messageId);
+  if (!Number.isFinite(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'invalid_message' });
+  }
+  const rawSource = req.body?.sourceLanguage ?? req.body?.source_language ?? null;
+  const rawTarget = req.body?.targetLanguage ?? req.body?.target_language ?? null;
+  const sourceLanguage = typeof rawSource === 'string'
+    ? normalizeChatLanguageCode(rawSource, { allowAuto: true })
+    : null;
+  if (rawSource && !sourceLanguage) {
+    return res.status(400).json({ error: 'invalid_source_language' });
+  }
+  const targetLanguage = typeof rawTarget === 'string'
+    ? normalizeChatLanguageCode(rawTarget)
+    : null;
+  if (rawTarget && !targetLanguage) {
+    return res.status(400).json({ error: 'invalid_target_language' });
+  }
+  if (!isChatTranslationEnabled() && !targetLanguage) {
+    return res.status(400).json({ error: 'chat_translation_disabled' });
+  }
+  try {
+    const row = await db.getChatMessage(serverId, messageId);
+    if (!row) return res.status(404).json({ error: 'message_not_found' });
+    const baseText = typeof row.message === 'string'
+      ? row.message
+      : (typeof row.original_message === 'string' ? row.original_message : '');
+    const trimmed = baseText.trim();
+    if (!trimmed) return res.status(400).json({ error: 'original_unavailable' });
+    const translation = await translateChatMessage(trimmed, {
+      sourceLanguage: sourceLanguage || row.translation_source_language || undefined,
+      targetLanguage: targetLanguage || row.translation_target_language || undefined
+    });
+    if (!translation?.text) {
+      return res.status(502).json({ error: 'translation_failed' });
+    }
+    const payload = {
+      id: row.id,
+      server_id: row.server_id,
+      translated_message: translation.text,
+      translation_detected_language: translation.detectedLanguage
+        || sourceLanguage
+        || row.translation_detected_language
+        || null,
+      translation_target_language: translation.targetLanguage
+        || targetLanguage
+        || row.translation_target_language
+        || null,
+      translation_source_language: translation.sourceLanguage
+        || sourceLanguage
+        || row.translation_source_language
+        || null,
+      translation_provider: translation.provider || row.translation_provider || null
+    };
+    const updated = await db.updateChatMessageTranslation(payload);
+    const effectiveRow = updated || { ...row, ...payload };
+    const messagePayload = projectChatMessage(effectiveRow, { serverId });
+    if (!messagePayload) {
+      return res.status(500).json({ error: 'translation_projection_failed' });
+    }
+    io.to(`srv:${serverId}`).emit('chat', { serverId, message: messagePayload });
+    res.json({ message: messagePayload });
+  } catch (err) {
+    console.error('chat message retranslation failed', err);
+    res.status(500).json({ error: 'translation_failed' });
   }
 });
 
