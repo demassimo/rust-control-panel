@@ -99,6 +99,7 @@ CHAT_TRANSLATE_SOURCE_LANG=auto                           # optional override, d
 When `CHAT_TRANSLATE_TARGET_LANG` is populated, every inbound Rust chat line is translated before it is stored or broadcast to clients, ensuring the UI displays consistent text. The raw/original message remains available for auditing through the `raw` payload and the database row.
 
 The Linux installer will prompt for these values and can optionally pull a self-hosted LibreTranslate Docker container for you (default port `5000`).
+When the installer provisions LibreTranslate it now enables `LT_UPDATE_MODELS=true` and loads the full panel language set (`LT_LOAD_ONLY=af,ar,az,bg,bn,ca,cs,da,de,el,en,eo,es,et,eu,fa,fi,fr,ga,gl,he,hi,hu,id,it,ja,ko,ky,lt,lv,ms,nb,nl,pl,pt,pt-BR,ro,ru,sk,sl,sq,sr,sv,th,tl,tr,uk,ur,vi,zh-Hans,zh-Hant`) so Afrikaans and other less-common locales work out of the box.
 
 ### Two-factor authentication and passkeys
 

@@ -574,24 +574,59 @@
   const LANGUAGE_CODE_REGEX = /^[a-z]{2,8}(?:-[a-z0-9]{2,8})?$/i;
   const CHAT_LANGUAGE_CHOICES = [
     { code: 'auto', label: 'Auto detect' },
-    { code: 'en', label: 'English' },
-    { code: 'es', label: 'Spanish' },
-    { code: 'fr', label: 'French' },
-    { code: 'de', label: 'German' },
-    { code: 'ru', label: 'Russian' },
-    { code: 'pl', label: 'Polish' },
-    { code: 'pt', label: 'Portuguese' },
-    { code: 'tr', label: 'Turkish' },
-    { code: 'sv', label: 'Swedish' },
-    { code: 'cs', label: 'Czech' },
-    { code: 'nl', label: 'Dutch' },
-    { code: 'zh', label: 'Chinese' },
+    { code: 'af', label: 'Afrikaans' },
+    { code: 'sq', label: 'Albanian' },
+    { code: 'ar', label: 'Arabic' },
+    { code: 'az', label: 'Azerbaijani' },
+    { code: 'eu', label: 'Basque' },
+    { code: 'bn', label: 'Bengali' },
+    { code: 'bg', label: 'Bulgarian' },
+    { code: 'ca', label: 'Catalan' },
     { code: 'zh-hans', label: 'Chinese (Simplified)' },
     { code: 'zh-hant', label: 'Chinese (Traditional)' },
+    { code: 'cs', label: 'Czech' },
+    { code: 'da', label: 'Danish' },
+    { code: 'nl', label: 'Dutch' },
+    { code: 'en', label: 'English' },
+    { code: 'eo', label: 'Esperanto' },
+    { code: 'et', label: 'Estonian' },
+    { code: 'fi', label: 'Finnish' },
+    { code: 'fr', label: 'French' },
+    { code: 'gl', label: 'Galician' },
+    { code: 'de', label: 'German' },
+    { code: 'el', label: 'Greek' },
+    { code: 'he', label: 'Hebrew' },
+    { code: 'hi', label: 'Hindi' },
+    { code: 'hu', label: 'Hungarian' },
+    { code: 'id', label: 'Indonesian' },
+    { code: 'ga', label: 'Irish' },
+    { code: 'it', label: 'Italian' },
     { code: 'ja', label: 'Japanese' },
     { code: 'ko', label: 'Korean' },
-    { code: 'ar', label: 'Arabic' }
+    { code: 'ky', label: 'Kyrgyz' },
+    { code: 'lv', label: 'Latvian' },
+    { code: 'lt', label: 'Lithuanian' },
+    { code: 'ms', label: 'Malay' },
+    { code: 'nb', label: 'Norwegian (Bokmål)' },
+    { code: 'fa', label: 'Persian' },
+    { code: 'pl', label: 'Polish' },
+    { code: 'pt', label: 'Portuguese' },
+    { code: 'pt-br', label: 'Portuguese (Brazil)' },
+    { code: 'ro', label: 'Romanian' },
+    { code: 'ru', label: 'Russian' },
+    { code: 'sr', label: 'Serbian' },
+    { code: 'sk', label: 'Slovak' },
+    { code: 'sl', label: 'Slovenian' },
+    { code: 'es', label: 'Spanish' },
+    { code: 'sv', label: 'Swedish' },
+    { code: 'tl', label: 'Tagalog' },
+    { code: 'th', label: 'Thai' },
+    { code: 'tr', label: 'Turkish' },
+    { code: 'uk', label: 'Ukrainian' },
+    { code: 'ur', label: 'Urdu' },
+    { code: 'vi', label: 'Vietnamese' }
   ];
+  const CHAT_TARGET_LANGUAGE_CHOICES = CHAT_LANGUAGE_CHOICES.filter((choice) => choice.code !== 'auto');
   const killFeedList = $('#killFeedList');
   const killFeedEmpty = $('#killFeedEmpty');
   const killFeedLoading = $('#killFeedLoading');
@@ -1798,34 +1833,63 @@
           if (!chatState.translationFormsOpen.has(entry.id)) {
             form.classList.add('hidden');
           }
-          const select = document.createElement('select');
+          const sourceSelect = document.createElement('select');
           CHAT_LANGUAGE_CHOICES.forEach((option) => {
             const opt = document.createElement('option');
             opt.value = option.code;
             opt.textContent = option.label;
-            select.appendChild(opt);
+            sourceSelect.appendChild(opt);
           });
           const currentSource = normalizeLanguageCode(
             entry.translation?.detectedLanguage || entry.translation?.sourceLanguage || 'auto',
             { allowAuto: true }
           ) || 'auto';
           const hasPresetSource = CHAT_LANGUAGE_CHOICES.some((opt) => opt.code === currentSource);
-          select.value = hasPresetSource ? currentSource : 'auto';
-          const selectLabel = document.createElement('label');
-          selectLabel.textContent = 'Detected language';
-          selectLabel.appendChild(select);
-          form.appendChild(selectLabel);
+          sourceSelect.value = hasPresetSource ? currentSource : 'auto';
+          const sourceSelectLabel = document.createElement('label');
+          sourceSelectLabel.textContent = 'Translate from';
+          sourceSelectLabel.appendChild(sourceSelect);
+          form.appendChild(sourceSelectLabel);
 
-          const customInput = document.createElement('input');
-          customInput.type = 'text';
-          customInput.placeholder = 'Custom code (e.g. ru)';
-          customInput.autocomplete = 'off';
-          customInput.spellcheck = false;
-          customInput.maxLength = 16;
+          const customSourceInput = document.createElement('input');
+          customSourceInput.type = 'text';
+          customSourceInput.placeholder = 'Custom source (e.g. ru)';
+          customSourceInput.autocomplete = 'off';
+          customSourceInput.spellcheck = false;
+          customSourceInput.maxLength = 16;
           if (!hasPresetSource && currentSource && currentSource !== 'auto') {
-            customInput.value = currentSource;
+            customSourceInput.value = currentSource;
           }
-          form.appendChild(customInput);
+          form.appendChild(customSourceInput);
+
+          const targetSelect = document.createElement('select');
+          CHAT_TARGET_LANGUAGE_CHOICES.forEach((option) => {
+            const opt = document.createElement('option');
+            opt.value = option.code;
+            opt.textContent = option.label;
+            targetSelect.appendChild(opt);
+          });
+          const defaultTarget = CHAT_TARGET_LANGUAGE_CHOICES.find((opt) => opt.code === 'en')?.code
+            || CHAT_TARGET_LANGUAGE_CHOICES[0]?.code
+            || 'en';
+          const currentTarget = normalizeLanguageCode(entry.translation?.targetLanguage) || defaultTarget;
+          const hasPresetTarget = CHAT_TARGET_LANGUAGE_CHOICES.some((opt) => opt.code === currentTarget);
+          targetSelect.value = hasPresetTarget ? currentTarget : defaultTarget;
+          const targetSelectLabel = document.createElement('label');
+          targetSelectLabel.textContent = 'Translate to';
+          targetSelectLabel.appendChild(targetSelect);
+          form.appendChild(targetSelectLabel);
+
+          const customTargetInput = document.createElement('input');
+          customTargetInput.type = 'text';
+          customTargetInput.placeholder = 'Custom target (e.g. en)';
+          customTargetInput.autocomplete = 'off';
+          customTargetInput.spellcheck = false;
+          customTargetInput.maxLength = 16;
+          if (!hasPresetTarget && currentTarget) {
+            customTargetInput.value = currentTarget;
+          }
+          form.appendChild(customTargetInput);
 
           const submitBtn = document.createElement('button');
           submitBtn.type = 'submit';
@@ -1846,17 +1910,28 @@
           form.addEventListener('submit', (event) => {
             event.preventDefault();
             if (entry.id == null || isChatTranslationPending(entry.id)) return;
-            const manual = customInput.value.trim();
-            const choice = manual || select.value || 'auto';
-            const normalized = normalizeLanguageCode(choice, { allowAuto: true });
-            if (!normalized) {
-              setChatTranslationError(entry.id, 'Enter a valid language code (e.g. en, ru, fr)');
+            const manualSource = customSourceInput.value.trim();
+            const choiceSource = manualSource || sourceSelect.value || 'auto';
+            const normalizedSource = normalizeLanguageCode(choiceSource, { allowAuto: true });
+            if (!normalizedSource) {
+              setChatTranslationError(entry.id, 'Enter a valid source language code (e.g. en, ru, fr)');
+              renderChatMessages();
+              return;
+            }
+            const manualTarget = customTargetInput.value.trim();
+            const choiceTarget = manualTarget || targetSelect.value || defaultTarget;
+            const normalizedTarget = normalizeLanguageCode(choiceTarget, { allowAuto: false });
+            if (!normalizedTarget) {
+              setChatTranslationError(entry.id, 'Pick a valid target language (e.g. en, ru, fr)');
               renderChatMessages();
               return;
             }
             setTranslationFormOpen(entry.id, false);
             setChatTranslationError(entry.id, null);
-            requestChatRetranslate(entry, normalized);
+            requestChatRetranslate(entry, {
+              sourceLanguage: normalizedSource,
+              targetLanguage: normalizedTarget
+            });
           });
 
           controls.appendChild(form);
@@ -1884,13 +1959,16 @@
     });
   }
 
-  async function requestChatRetranslate(entry, sourceLanguage) {
+  async function requestChatRetranslate(entry, options = {}) {
     if (!entry || entry.id == null) return;
     const serverId = Number(entry.serverId ?? state.currentServerId);
     if (!Number.isFinite(serverId)) return;
     const payload = {};
-    if (typeof sourceLanguage === 'string' && sourceLanguage.trim()) {
-      payload.sourceLanguage = sourceLanguage.trim();
+    if (typeof options.sourceLanguage === 'string' && options.sourceLanguage.trim()) {
+      payload.sourceLanguage = options.sourceLanguage.trim();
+    }
+    if (typeof options.targetLanguage === 'string' && options.targetLanguage.trim()) {
+      payload.targetLanguage = options.targetLanguage.trim();
     }
     chatState.translationPending.add(entry.id);
     setChatTranslationError(entry.id, null);
