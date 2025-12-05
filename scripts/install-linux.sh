@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR=""
 LIBRETRANSLATE_CONTAINER=rustadmin-libretranslate
 LIBRETRANSLATE_IMAGE=libretranslate/libretranslate:latest
+LIBRETRANSLATE_LANGS="af,ar,az,bg,bn,ca,cs,da,de,el,en,eo,es,et,eu,fa,fi,fr,ga,gl,he,hi,hu,id,it,ja,ko,ky,lt,lv,ms,nb,nl,pl,pt,pt-BR,ro,ru,sk,sl,sq,sr,sv,th,tl,tr,uk,ur,vi,zh-Hans,zh-Hant"
 
 log() {
   echo "[*] $*"
@@ -115,6 +116,8 @@ install_libretranslate_container() {
     --name "$LIBRETRANSLATE_CONTAINER" \
     --restart unless-stopped \
     -p "${host_port}:5000" \
+    -e "LT_LOAD_ONLY=${LIBRETRANSLATE_LANGS}" \
+    -e LT_UPDATE_MODELS=true \
     "$LIBRETRANSLATE_IMAGE" >/dev/null
 }
 

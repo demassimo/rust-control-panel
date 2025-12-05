@@ -52,6 +52,7 @@ CHAT_TRANSLATE_API_KEY=                                 # optional
 Restart the backend after editing `.env` so the translator is enabled.
 
 During the Linux installer, answer “yes” to the chat translation prompt to have it pull and run a local LibreTranslate Docker container automatically (defaults to `http://127.0.0.1:5000`).
+The installer now starts LibreTranslate with `LT_UPDATE_MODELS=true` and preloads the panel's language list via `LT_LOAD_ONLY=af,ar,az,bg,bn,ca,cs,da,de,el,en,eo,es,et,eu,fa,fi,fr,ga,gl,he,hi,hu,id,it,ja,ko,ky,lt,lv,ms,nb,nl,pl,pt,pt-BR,ro,ru,sk,sl,sq,sr,sv,th,tl,tr,uk,ur,vi,zh-Hans,zh-Hant` so languages like Afrikaans translate correctly without extra setup.
 
 ### Start & check services
 
